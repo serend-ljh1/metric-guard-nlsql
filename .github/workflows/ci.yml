@@ -1,0 +1,27 @@
+# CI：每次 push / PR 自动跑离线测试套件（无需 API Key、无需外部数据）
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest (offline suite)
+        run: pytest tests -q
+
+      - name: Smoke-check Streamlit app import
+        run: python -c "import ast; ast.parse(open('app.py', encoding='utf-8').read()); print('app.py syntax OK')"

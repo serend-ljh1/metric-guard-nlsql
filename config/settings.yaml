@@ -1,0 +1,22 @@
+# 业务/工程配置（确定性规则，与代码解耦）
+# 打分级/阈值/护栏等业务参数都在此，改规则无需改代码。
+
+eval:
+  dataset: spider                     # spider | bird
+  db_root: data/spider
+  benchmark_file: null
+  max_rows: 500                      # 沙箱单次结果集行数上限
+
+pipeline:
+  max_repair_round: 3                # 自愈最大轮次护栏
+  route_llm_fallback: true           # 路由是否启用 LLM 二次判断兜底
+  parallel_candidates: 3             # 复杂问题并行生成的候选 SQL 数
+
+security:
+  timeout_seconds: 5.0               # SQLite 查询超时
+  allow_multi_statement: false
+  forbid_keywords: []                # 额外禁用的关键字
+
+memory:
+  long_term_enabled_eval: false      # 评测模式默认关闭长时记忆（防作弊）
+  long_term_enabled_app: true        # 业务模式可开启

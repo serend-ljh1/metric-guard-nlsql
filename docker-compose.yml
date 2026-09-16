@@ -1,0 +1,23 @@
+# 一键启动：docker compose up
+#   web  -> http://localhost:8501  (Streamlit 前端)
+#   api  -> http://localhost:8000  (FastAPI 后端, /docs 有 Swagger)
+# 可选：把真实 Olist 库挂载进去覆盖样本库
+#   volumes: - ./data/olist/olist.db:/app/data/olist/olist.db:ro
+services:
+  web:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - path: .env
+        required: false
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    command: uvicorn api:app --host 0.0.0.0 --port 8000

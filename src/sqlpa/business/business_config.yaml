@@ -1,0 +1,104 @@
+# ============================================================================
+# 业务语义层配置（配置化，防 LLM 篡改业务指标公式）
+# 面向「自然语言自助取数」通用业务场景；示例底座为 Olist 真实电商数据。
+# 原则：指标的分子分母公式、JOIN、依赖表全部写在配置里；LLM 只识别"用户要哪个
+#       指标/维度/过滤"，复用这里的预定义片段，不得自行编写业务公式。
+# ============================================================================
+
+# ---------- 1) 业务词典（中文口语别名 -> 表/字段）----------
+business_alias:
+  订单: {table: orders}
+  订单明细: {table: order_items}
+  明细: {table: order_items}
+  客户: {table: customers}
+  商品: {table: products}
+  产品: {table: products}
+  品类: {table: products, col: product_category_name}
+  类别: {table: products, col: product_category_name}
+  州: {table: customers, col: customer_state}
+  省份: {table: customers, col: customer_state}
+  城市: {table: customers, col: customer_city}
+  复购客户: {table: customers, col: customer_unique_id}
+  订单状态: {table: orders, col: order_status}
+
+# ---------- 2) 业务指标配置（核心，防口径幻觉）----------
+metrics:
+  - key: gmv
+    name: GMV成交总额
+    desc: 已支付订单的商品金额总和（不含取消订单）
+    metric_expr: "SUM(oi.price)"
+    from_clause: "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+
+  - key: order_count
+    name: 订单数
+    desc: 已送达订单数量
+    metric_expr: "COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "o.order_status = 'delivered'"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+
+  - key: aov
+    name: 客单价
+    desc: GMV / 有效订单数（每笔订单平均商品金额）
+    metric_expr: "SUM(oi.price) * 1.0 / NULLIF(COUNT(DISTINCT o.order_id), 0)"
+    from_clause: "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state]
+    support_filters: [time_range, state]
+
+  - key: cancellation_rate
+    name: 取消率
+    desc: 取消订单数 / 全部已创建订单数（公开数据无退款表，用取消率近似退货率）
+    metric_expr: "COUNT(DISTINCT CASE WHEN o.order_status='canceled' THEN o.order_id END) * 1.0 / COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "1=1"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+
+  - key: late_delivery_rate
+    name: 超时送达率
+    desc: 实际送达晚于预计送达的订单占比
+    metric_expr: "COUNT(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 END) * 1.0 / NULLIF(COUNT(CASE WHEN o.order_delivered_customer_date IS NOT NULL THEN 1 END), 0)"
+    from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id"
+    where_core: "1=1"
+    support_dims: [dt, state]
+    support_filters: [time_range, state]
+
+  - key: avg_review
+    name: 平均评分
+    desc: 订单评价星级均值
+    metric_expr: "AVG(r.review_score)"
+    from_clause: "FROM orders o JOIN reviews r ON o.order_id=r.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "1=1"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+
+# ---------- 3) 维度配置（分组字段）----------
+dimensions:
+  - {key: dt, name: 时间,   sql_fragment: "DATE(o.order_purchase_timestamp)"}
+  - {key: state, name: 州,  sql_fragment: "c.customer_state"}
+  - {key: category, name: 品类, sql_fragment: "p.product_category_name"}
+
+# ---------- 4) 过滤条件模板（参数化）----------
+# 用户过滤 → SQL 片段。value 由 MetricMatcher/日期解析器给出。
+filter_templates:
+  state: "c.customer_state = {value}"
+  category: "p.product_category_name = {value}"
+  time_range: "o.order_purchase_timestamp >= {start} AND o.order_purchase_timestamp < {end}"
+
+# ---------- P1 业务护栏：角色表列权限 + 敏感字段掩码 ----------
+permissions:
+  roles:
+    analyst:            # 业务员：不能访问敏感字段
+      allowed_tables: [orders, order_items, customers, products, reviews]
+      allowed_columns:
+        customers: [customer_id, customer_unique_id, customer_city, customer_state]
+    admin:              # 管理员：全放行
+      allowed_tables: "*"
+      allowed_columns: "*"
+  sensitive_columns:
+    customers: [customer_zip_code_prefix, customer_phone]

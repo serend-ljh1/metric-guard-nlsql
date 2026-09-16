@@ -1,0 +1,31 @@
+{
+  "DISCLAIMER": "本文件为手动维护的展示用常量，无生成脚本、无逐题运行产物，不构成实测证据。注意：baseline 与 self_heal 两组对同一配置(max_repair_round=0/1, N=100, seed=42)给出互相矛盾的数值(0.86/0.88 vs 0.76/0.83)，说明至少一组不可信。请勿在 README/简历/面试中引用以下任何数字；需要真实数字请运行 run_eval.py 并提交逐题 JSON。",
+  "source": "[已弃用为证据] 早期手工记录，未经可复现流程产出",
+  "self_heal": {
+    "note": "自愈深度消融 · Spider-dev N=100 · seed=42",
+    "rows": [
+      {"label": "L0 单次直出(无自愈)", "ex": 0.76, "simple": 0.702, "simple_n": 47, "complex": 0.811, "complex_n": 53},
+      {"label": "L1 一次修复", "ex": 0.83, "simple": 0.787, "simple_n": 47, "complex": 0.868, "complex_n": 53},
+      {"label": "L3 全自愈(3轮)", "ex": 0.80, "simple": 0.745, "simple_n": 47, "complex": 0.849, "complex_n": 53}
+    ],
+    "conclusion": "自愈相对单次直出 +7pp(0.76→0.83)；但存在甜点位——L1(1轮,0.83)优于L3(3轮,0.80)，符合'LLM自纠错可能引入错误'。故 max_repair 默认调为 1。"
+  },
+  "critic": {
+    "note": "多Agent协作消融(Writer↔Critic) · Spider-dev N=50 · seed=42",
+    "rows": [
+      {"label": "单 Writer(无Critic)", "ex": 0.84, "simple": 0.7727, "simple_n": 22, "complex": 0.8929, "complex_n": 28},
+      {"label": "Writer+Critic(评审者)", "ex": 0.86, "simple": 0.7727, "simple_n": 22, "complex": 0.9286, "complex_n": 28}
+    ],
+    "conclusion": "评审者(Critic)在复杂题上 complex EX 0.893→0.929(+3.6pp)，简单题无增益(本就正确)，总体+2pp；代价是延迟+33%。说明多agent精准作用于复杂题。"
+  },
+  "baseline": {
+    "note": "基线对照 · Spider-dev N=100 · seed=42 · 同一批样本配对比较",
+    "rows": [
+      {"label": "单次直出 zero-shot(无自愈)", "ex": 0.86},
+      {"label": "完整多Agent引擎(自愈L1)", "ex": 0.88}
+    ],
+    "gain": "+2.0 pp",
+    "vs_public_baseline": {"ref": 0.65, "gain": "+23.0 pp"},
+    "conclusion": "多Agent引擎相对零样本单Agent提升 +2pp；远超Spider-dev公开基线(0.65) +23pp。自愈与评审机制在复杂题上的增益是主要来源。"
+  }
+}

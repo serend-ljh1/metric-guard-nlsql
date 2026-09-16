@@ -1,0 +1,31 @@
+# ---- 确定性核心（零外部依赖，验证用；用标准库即可运行）----
+# 无
+
+# ---- 前端 ----
+streamlit>=1.36.0
+altair
+
+# ---- API 后端 ----
+fastapi
+uvicorn
+httpx
+
+# ---- 生产版 / 真实评测所需（对齐 LangChain / LangGraph 1.x 最新版）----
+langgraph>=1.2.11
+langchain>=1.4.0
+langchain-openai>=1.6.0
+langchain-core>=1.6.1
+pydantic>=2.0
+pyyaml
+python-dotenv
+# 统计/可视化（消融实验、混淆矩阵）
+pandas
+matplotlib
+
+# ---- 测试 / CI ----
+pytest
+
+# ---- 产品化：外部数据源方言适配（按需安装，惰性导入）----
+# 业务库接 MySQL / PostgreSQL 时需要；仅用 SQLite 可不装
+pymysql
+psycopg2-binary

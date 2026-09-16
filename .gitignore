@@ -1,0 +1,42 @@
+# 虚拟环境
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ---- 密钥（绝不提交）----
+.env
+.env.local
+.env.*.local
+
+# ---- 下载的真实数据集（体量大，不进仓库）----
+data/spider/
+data/bird/
+data/olist/
+data/downloads/
+data/*.zip
+data/*.tar.gz
+
+# ---- 个人文档（不上传）----
+docs/面试准备.md
+
+# ---- 运行产物 ----
+eval_result*.json
+.pytest_tmp/
+.tmp/
+.tmppytest*/
+data/business_audit.jsonl
+data/hitl_queue.jsonl
+data/datasources.yaml
+data/olist_sample/
+data/app.db
+*.log
+
+# ---- IDE ----
+.idea/
+.vscode/
