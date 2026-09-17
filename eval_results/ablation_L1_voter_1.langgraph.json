@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 24086.1,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 3950,
+    "prompt_tokens": 398,
+    "completion_tokens": 3552,
+    "total_cost": 0.001,
+    "avg_tokens": 1975.0,
+    "avg_cost": 0.0005,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 24086.1
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 10,
+      "db_id": "voter_1",
+      "question": "How many contestants did not get voted?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(*) FROM CONTESTANTS WHERE contestant_number NOT IN (SELECT contestant_number FROM VOTES)",
+      "gold_sql": "SELECT count(*) FROM contestants WHERE contestant_number NOT IN ( SELECT contestant_number FROM votes )",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 38630.2,
+      "terminate_reason": "ok",
+      "total_tokens": 3115,
+      "prompt_tokens": 228,
+      "completion_tokens": 2887,
+      "cost": 0.0008
+    },
+    {
+      "id": 2,
+      "db_id": "voter_1",
+      "question": "List the vote ids, phone numbers and states of all votes.",
+      "route": "complex",
+      "final_sql": "SELECT vote_id, phone_number, state FROM VOTES",
+      "gold_sql": "SELECT vote_id ,  phone_number ,  state FROM votes",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 9542.0,
+      "terminate_reason": "ok",
+      "total_tokens": 835,
+      "prompt_tokens": 170,
+      "completion_tokens": 665,
+      "cost": 0.0002
+    }
+  ]
+}

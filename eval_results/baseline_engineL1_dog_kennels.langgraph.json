@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 0.5,
+    "em": 0.0,
+    "avg_attempts": 1.5,
+    "avg_repairs": 0.5,
+    "avg_latency_ms": 64627.7,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 11082,
+    "prompt_tokens": 2432,
+    "completion_tokens": 8650,
+    "total_cost": 0.0027,
+    "avg_tokens": 5541.0,
+    "avg_cost": 0.00135,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 0.5,
+        "avg_repairs": 0.5,
+        "avg_latency_ms": 64627.7
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 6,
+      "db_id": "dog_kennels",
+      "question": "Which dogs have not cost their owner more than 1000 for treatment ? List the dog names .",
+      "route": "complex",
+      "final_sql": "SELECT T1.name FROM Dogs AS T1 JOIN Treatments AS T2 ON T1.dog_id  =  T2.dog_id GROUP BY T1.dog_id HAVING sum(T2.cost_of_treatment) <= 1000",
+      "gold_sql": "select name from dogs where dog_id not in ( select dog_id from treatments group by dog_id having sum(cost_of_treatment)  >  1000 )",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 1,
+      "attempts": 2,
+      "latency_ms": 105632.5,
+      "terminate_reason": "max_retry",
+      "total_tokens": 8883,
+      "prompt_tokens": 1854,
+      "completion_tokens": 7029,
+      "cost": 0.0022
+    },
+    {
+      "id": 48,
+      "db_id": "dog_kennels",
+      "question": "How many dogs went through any treatments?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(DISTINCT d.dog_id) FROM Dogs d JOIN Treatments t ON d.dog_id = t.dog_id;",
+      "gold_sql": "SELECT count(DISTINCT dog_id) FROM Treatments",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 23622.8,
+      "terminate_reason": "ok",
+      "total_tokens": 2199,
+      "prompt_tokens": 578,
+      "completion_tokens": 1621,
+      "cost": 0.0005
+    }
+  ]
+}

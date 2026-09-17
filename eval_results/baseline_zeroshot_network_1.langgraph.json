@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 37164.2,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 5759,
+    "prompt_tokens": 298,
+    "completion_tokens": 5461,
+    "total_cost": 0.0016,
+    "avg_tokens": 2879.5,
+    "avg_cost": 0.0008,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 37164.2
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 39,
+      "db_id": "network_1",
+      "question": "What are the names of high schoolers who both have friends and are liked?",
+      "route": "complex",
+      "final_sql": "SELECT DISTINCT H.name FROM Highschooler H JOIN Friend F ON H.ID = F.student_id OR H.ID = F.friend_id JOIN Likes L ON H.ID = L.liked_id;",
+      "gold_sql": "SELECT T2.name FROM Friend AS T1 JOIN Highschooler AS T2 ON T1.student_id  =  T2.id INTERSECT SELECT T2.name FROM Likes AS T1 JOIN Highschooler AS T2 ON T1.liked_id  =  T2.id",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 45249.9,
+      "terminate_reason": "ok",
+      "total_tokens": 3486,
+      "prompt_tokens": 150,
+      "completion_tokens": 3336,
+      "cost": 0.001
+    },
+    {
+      "id": 51,
+      "db_id": "network_1",
+      "question": "Return the number of likes that the high schooler named Kyle has.",
+      "route": "complex",
+      "final_sql": "SELECT count(T1.liked_id) FROM Likes AS T1 JOIN Highschooler AS T2 ON T1.student_id = T2.ID WHERE T2.name = 'Kyle'",
+      "gold_sql": "SELECT count(*) FROM Likes AS T1 JOIN Highschooler AS T2 ON T1.student_id  =  T2.id WHERE T2.name  =  \"Kyle\"",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 29078.6,
+      "terminate_reason": "ok",
+      "total_tokens": 2273,
+      "prompt_tokens": 148,
+      "completion_tokens": 2125,
+      "cost": 0.0006
+    }
+  ]
+}

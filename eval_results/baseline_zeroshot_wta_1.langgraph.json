@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 0.6666666666666666,
+    "em": 0.3333333333333333,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 39539.2,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 9532,
+    "prompt_tokens": 1292,
+    "completion_tokens": 8240,
+    "total_cost": 0.0025,
+    "avg_tokens": 3177.3,
+    "avg_cost": 0.000833,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 0.6666666666666666,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 39539.2
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 15,
+      "db_id": "wta_1",
+      "question": "How many different loser names are there?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(DISTINCT loser_name) FROM matches;",
+      "gold_sql": "SELECT count(DISTINCT loser_name) FROM matches",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 28344.1,
+      "terminate_reason": "ok",
+      "total_tokens": 2352,
+      "prompt_tokens": 418,
+      "completion_tokens": 1934,
+      "cost": 0.0006
+    },
+    {
+      "id": 35,
+      "db_id": "wta_1",
+      "question": "What is the name of the winner who has won the most matches, and how many rank points does this player have?",
+      "route": "complex",
+      "final_sql": "SELECT T1.winner_name , T3.ranking_points FROM matches AS T1 JOIN rankings AS T3 ON T1.winner_id  =  T3.player_id GROUP BY T1.winner_id ORDER BY count(T1.match_num) DESC LIMIT 1",
+      "gold_sql": "SELECT winner_name ,  winner_rank_points FROM matches GROUP BY winner_name ORDER BY count(*) DESC LIMIT 1",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 54903.0,
+      "terminate_reason": "max_retry",
+      "total_tokens": 4227,
+      "prompt_tokens": 450,
+      "completion_tokens": 3777,
+      "cost": 0.0011
+    },
+    {
+      "id": 9,
+      "db_id": "wta_1",
+      "question": "What is the average rank for winners in all matches?",
+      "route": "complex",
+      "final_sql": "SELECT avg(winner_rank) FROM matches",
+      "gold_sql": "SELECT avg(winner_rank) FROM matches",
+      "ex": true,
+      "em": true,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 35370.4,
+      "terminate_reason": "ok",
+      "total_tokens": 2953,
+      "prompt_tokens": 424,
+      "completion_tokens": 2529,
+      "cost": 0.0008
+    }
+  ]
+}

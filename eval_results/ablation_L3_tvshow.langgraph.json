@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 22700.3,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 4052,
+    "prompt_tokens": 544,
+    "completion_tokens": 3508,
+    "total_cost": 0.001,
+    "avg_tokens": 2026.0,
+    "avg_cost": 0.0005,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 22700.3
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 26,
+      "db_id": "tvshow",
+      "question": "List the title of all  Cartoons showed on TV Channel with series name \"Sky Radio\".",
+      "route": "complex",
+      "final_sql": "SELECT T1.Title FROM Cartoon AS T1 JOIN TV_Channel AS T2 ON T1.Channel  =  T2.id WHERE T2.series_name = 'Sky Radio'",
+      "gold_sql": "SELECT T2.Title FROM TV_Channel AS T1 JOIN Cartoon AS T2 ON T1.id = T2.Channel WHERE T1.series_name = \"Sky Radio\";",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 23254.1,
+      "terminate_reason": "ok",
+      "total_tokens": 1974,
+      "prompt_tokens": 269,
+      "completion_tokens": 1705,
+      "cost": 0.0005
+    },
+    {
+      "id": 38,
+      "db_id": "tvshow",
+      "question": "What is the TV Channel of TV series with Episode \"A Love of a Lifetime\"? List the TV Channel's series name.",
+      "route": "complex",
+      "final_sql": "SELECT T2.series_name FROM TV_series AS T1 JOIN TV_Channel AS T2 ON T1.Channel = T2.id WHERE T1.Episode = 'A Love of a Lifetime'",
+      "gold_sql": "SELECT T1.series_name FROM TV_Channel AS T1 JOIN TV_series AS T2 ON T1.id = T2.Channel WHERE T2.Episode = \"A Love of a Lifetime\";",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 22146.5,
+      "terminate_reason": "ok",
+      "total_tokens": 2078,
+      "prompt_tokens": 275,
+      "completion_tokens": 1803,
+      "cost": 0.0005
+    }
+  ]
+}

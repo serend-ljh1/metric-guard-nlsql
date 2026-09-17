@@ -1,0 +1,72 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 0.5,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 36851.2,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 6498,
+    "prompt_tokens": 1220,
+    "completion_tokens": 5278,
+    "total_cost": 0.0017,
+    "avg_tokens": 3249.0,
+    "avg_cost": 0.00085,
+    "by_route": {
+      "simple": {
+        "n": 1,
+        "ex": 0.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 31294.2
+      },
+      "complex": {
+        "n": 1,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 42408.2
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 1,
+      "db_id": "real_estate_properties",
+      "question": "What is the feature type name of feature AirCon?",
+      "route": "simple",
+      "final_sql": "SELECT T1.feature_type_name FROM Other_Available_Features AS T1 JOIN Ref_Feature_Types AS T2 ON T1.feature_type_code = T2.feature_type_code WHERE T1.feature_name = 'AirCon'",
+      "gold_sql": "SELECT T2.feature_type_name FROM Other_Available_Features AS T1 JOIN Ref_Feature_Types AS T2 ON T1.feature_type_code  =  T2.feature_type_code WHERE T1.feature_name  =  \"AirCon\"",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 31294.2,
+      "terminate_reason": "max_retry",
+      "total_tokens": 2753,
+      "prompt_tokens": 603,
+      "completion_tokens": 2150,
+      "cost": 0.0007
+    },
+    {
+      "id": 2,
+      "db_id": "real_estate_properties",
+      "question": "Show the property type descriptions of properties belonging to that code.",
+      "route": "complex",
+      "final_sql": "SELECT T1.property_type_description FROM Ref_Property_Types AS T1 JOIN Properties AS T2 ON T1.property_type_code  =  T2.property_type_code",
+      "gold_sql": "SELECT T2.property_type_description FROM Properties AS T1 JOIN Ref_Property_Types AS T2 ON T1.property_type_code  =  T2.property_type_code GROUP BY T1.property_type_code",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 42408.2,
+      "terminate_reason": "ok",
+      "total_tokens": 3745,
+      "prompt_tokens": 617,
+      "completion_tokens": 3128,
+      "cost": 0.001
+    }
+  ]
+}

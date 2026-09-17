@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 34736.9,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 5258,
+    "prompt_tokens": 681,
+    "completion_tokens": 4577,
+    "total_cost": 0.0013,
+    "avg_tokens": 2629.0,
+    "avg_cost": 0.00065,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 34736.9
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 40,
+      "db_id": "world_1",
+      "question": "Which continent has the most diverse languages?",
+      "route": "complex",
+      "final_sql": "SELECT country.Continent FROM country JOIN countrylanguage ON country.Code = countrylanguage.CountryCode GROUP BY country.Continent ORDER BY count(countrylanguage.Language) DESC LIMIT 1",
+      "gold_sql": "SELECT T1.Continent FROM country AS T1 JOIN countrylanguage AS T2 ON T1.Code  =  T2.CountryCode GROUP BY T1.Continent ORDER BY COUNT(*) DESC LIMIT 1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 28270.7,
+      "terminate_reason": "ok",
+      "total_tokens": 2074,
+      "prompt_tokens": 308,
+      "completion_tokens": 1766,
+      "cost": 0.0005
+    },
+    {
+      "id": 35,
+      "db_id": "world_1",
+      "question": "How many languages are spoken in Aruba?",
+      "route": "complex",
+      "final_sql": "SELECT count(T1.Language) FROM countrylanguage AS T1 JOIN country AS T2 ON T1.CountryCode  =  T2.Code WHERE T2.Name = 'Aruba'",
+      "gold_sql": "SELECT COUNT(T2.Language) FROM country AS T1 JOIN countrylanguage AS T2 ON T1.Code  =  T2.CountryCode WHERE T1.Name  =  \"Aruba\"",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 41203.2,
+      "terminate_reason": "ok",
+      "total_tokens": 3184,
+      "prompt_tokens": 373,
+      "completion_tokens": 2811,
+      "cost": 0.0008
+    }
+  ]
+}

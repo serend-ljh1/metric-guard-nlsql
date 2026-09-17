@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 14073.8,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 2228,
+    "prompt_tokens": 313,
+    "completion_tokens": 1915,
+    "total_cost": 0.0006,
+    "avg_tokens": 1114.0,
+    "avg_cost": 0.0003,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 14073.8
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 19,
+      "db_id": "singer",
+      "question": "What are the song titles and singer names?",
+      "route": "complex",
+      "final_sql": "SELECT song.Title, singer.Name FROM song JOIN singer ON song.Singer_ID = singer.Singer_ID",
+      "gold_sql": "SELECT T2.Title ,  T1.Name FROM singer AS T1 JOIN song AS T2 ON T1.Singer_ID  =  T2.Singer_ID",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 8523.0,
+      "terminate_reason": "ok",
+      "total_tokens": 687,
+      "prompt_tokens": 155,
+      "completion_tokens": 532,
+      "cost": 0.0002
+    },
+    {
+      "id": 22,
+      "db_id": "singer",
+      "question": "Show the names of singers that have more than one song.",
+      "route": "complex",
+      "final_sql": "SELECT s.Name FROM singer s JOIN song so ON s.Singer_ID = so.Singer_ID GROUP BY s.Singer_ID, s.Name HAVING COUNT(so.Song_ID) > 1",
+      "gold_sql": "SELECT T1.Name FROM singer AS T1 JOIN song AS T2 ON T1.Singer_ID  =  T2.Singer_ID GROUP BY T1.Name HAVING COUNT(*)  >  1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 19624.6,
+      "terminate_reason": "ok",
+      "total_tokens": 1541,
+      "prompt_tokens": 158,
+      "completion_tokens": 1383,
+      "cost": 0.0004
+    }
+  ]
+}

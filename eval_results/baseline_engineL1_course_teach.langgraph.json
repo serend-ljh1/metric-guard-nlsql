@@ -1,0 +1,91 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 0.6666666666666666,
+    "em": 0.0,
+    "avg_attempts": 1.33,
+    "avg_repairs": 0.33,
+    "avg_latency_ms": 36283.8,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 8272,
+    "prompt_tokens": 920,
+    "completion_tokens": 7352,
+    "total_cost": 0.0022,
+    "avg_tokens": 2757.3,
+    "avg_cost": 0.000733,
+    "by_route": {
+      "simple": {
+        "n": 1,
+        "ex": 0.0,
+        "avg_repairs": 1.0,
+        "avg_latency_ms": 64717.1
+      },
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 22067.2
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 19,
+      "db_id": "course_teach",
+      "question": "What is the name of each teacher and what course they teach?",
+      "route": "complex",
+      "final_sql": "SELECT t.Name, c.Course FROM teacher t JOIN course_arrange ca ON t.Teacher_ID = ca.Teacher_ID JOIN course c ON ca.Course_ID = c.Course_ID",
+      "gold_sql": "SELECT T3.Name ,  T2.Course FROM course_arrange AS T1 JOIN course AS T2 ON T1.Course_ID  =  T2.Course_ID JOIN teacher AS T3 ON T1.Teacher_ID  =  T3.Teacher_ID",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 19709.5,
+      "terminate_reason": "ok",
+      "total_tokens": 1600,
+      "prompt_tokens": 165,
+      "completion_tokens": 1435,
+      "cost": 0.0004
+    },
+    {
+      "id": 6,
+      "db_id": "course_teach",
+      "question": "List the name of teachers whose hometown is not `` Little Lever Urban District '' .",
+      "route": "simple",
+      "final_sql": "SELECT Name FROM teacher WHERE Hometown <> 'Little Lever Urban District'",
+      "gold_sql": "select name from teacher where hometown != \"little lever urban district\"",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 1,
+      "attempts": 2,
+      "latency_ms": 64717.1,
+      "terminate_reason": "max_retry",
+      "total_tokens": 4776,
+      "prompt_tokens": 520,
+      "completion_tokens": 4256,
+      "cost": 0.0013
+    },
+    {
+      "id": 12,
+      "db_id": "course_teach",
+      "question": "Show different hometown of teachers and the number of teachers from each hometown.",
+      "route": "complex",
+      "final_sql": "SELECT Hometown, COUNT(Teacher_ID) FROM teacher GROUP BY Hometown;",
+      "gold_sql": "SELECT Hometown ,  COUNT(*) FROM teacher GROUP BY Hometown",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 24424.8,
+      "terminate_reason": "ok",
+      "total_tokens": 1896,
+      "prompt_tokens": 235,
+      "completion_tokens": 1661,
+      "cost": 0.0005
+    }
+  ]
+}

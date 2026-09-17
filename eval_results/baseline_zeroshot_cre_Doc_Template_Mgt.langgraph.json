@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 0.3333333333333333,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 25765.1,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 6649,
+    "prompt_tokens": 954,
+    "completion_tokens": 5695,
+    "total_cost": 0.0017,
+    "avg_tokens": 2216.3,
+    "avg_cost": 0.000567,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 0.3333333333333333,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 25765.1
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 24,
+      "db_id": "cre_Doc_Template_Mgt",
+      "question": "Show all distinct template type codes for all templates.",
+      "route": "complex",
+      "final_sql": "SELECT DISTINCT Template_Type_Code FROM Templates",
+      "gold_sql": "SELECT DISTINCT template_type_code FROM Templates",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 15652.0,
+      "terminate_reason": "ok",
+      "total_tokens": 1371,
+      "prompt_tokens": 264,
+      "completion_tokens": 1107,
+      "cost": 0.0003
+    },
+    {
+      "id": 14,
+      "db_id": "cre_Doc_Template_Mgt",
+      "question": "What is the id and type code for the template used by the most documents?",
+      "route": "complex",
+      "final_sql": "SELECT T.Template_ID, T.Template_Type_Code FROM Templates T JOIN Documents D ON T.Template_ID = D.Template_ID GROUP BY T.Template_ID, T.Template_Type_Code ORDER BY COUNT(D.Document_ID) DESC LIMIT 1",
+      "gold_sql": "SELECT T1.template_id ,  T2.Template_Type_Code FROM Documents AS T1 JOIN Templates AS T2 ON T1.template_id  =  T2.template_id GROUP BY T1.template_id ORDER BY count(*) DESC LIMIT 1",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 27304.7,
+      "terminate_reason": "max_retry",
+      "total_tokens": 2321,
+      "prompt_tokens": 341,
+      "completion_tokens": 1980,
+      "cost": 0.0006
+    },
+    {
+      "id": 73,
+      "db_id": "cre_Doc_Template_Mgt",
+      "question": "What are the ids and names of each document, as well as the number of paragraphs in each?",
+      "route": "complex",
+      "final_sql": "SELECT T1.Document_ID , T1.Document_Name , count(T2.Paragraph_ID) FROM Documents AS T1 LEFT JOIN Paragraphs AS T2 ON T1.Document_ID  =  T2.Document_ID GROUP BY T1.Document_ID",
+      "gold_sql": "SELECT T1.document_id ,  T2.document_name ,  count(*) FROM Paragraphs AS T1 JOIN Documents AS T2 ON T1.document_id  =  T2.document_id GROUP BY T1.document_id",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 34338.5,
+      "terminate_reason": "max_retry",
+      "total_tokens": 2957,
+      "prompt_tokens": 349,
+      "completion_tokens": 2608,
+      "cost": 0.0008
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 1.0,
+    "em": 0.3333333333333333,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 36100.9,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 8616,
+    "prompt_tokens": 1292,
+    "completion_tokens": 7324,
+    "total_cost": 0.0022,
+    "avg_tokens": 2872.0,
+    "avg_cost": 0.000733,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 36100.9
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 15,
+      "db_id": "wta_1",
+      "question": "How many different loser names are there?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(DISTINCT loser_name) FROM matches;",
+      "gold_sql": "SELECT count(DISTINCT loser_name) FROM matches",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 28283.7,
+      "terminate_reason": "ok",
+      "total_tokens": 2351,
+      "prompt_tokens": 418,
+      "completion_tokens": 1933,
+      "cost": 0.0006
+    },
+    {
+      "id": 35,
+      "db_id": "wta_1",
+      "question": "What is the name of the winner who has won the most matches, and how many rank points does this player have?",
+      "route": "complex",
+      "final_sql": "SELECT winner_name , winner_rank_points FROM matches GROUP BY winner_id ORDER BY count(winner_id) DESC LIMIT 1",
+      "gold_sql": "SELECT winner_name ,  winner_rank_points FROM matches GROUP BY winner_name ORDER BY count(*) DESC LIMIT 1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 45261.1,
+      "terminate_reason": "ok",
+      "total_tokens": 3518,
+      "prompt_tokens": 450,
+      "completion_tokens": 3068,
+      "cost": 0.0009
+    },
+    {
+      "id": 9,
+      "db_id": "wta_1",
+      "question": "What is the average rank for winners in all matches?",
+      "route": "complex",
+      "final_sql": "SELECT avg(winner_rank) FROM matches",
+      "gold_sql": "SELECT avg(winner_rank) FROM matches",
+      "ex": true,
+      "em": true,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 34757.9,
+      "terminate_reason": "ok",
+      "total_tokens": 2747,
+      "prompt_tokens": 424,
+      "completion_tokens": 2323,
+      "cost": 0.0007
+    }
+  ]
+}

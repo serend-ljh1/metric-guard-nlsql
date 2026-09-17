@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 0.6666666666666666,
+    "em": 0.0,
+    "avg_attempts": 1.33,
+    "avg_repairs": 0.33,
+    "avg_latency_ms": 55720.9,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 13708,
+    "prompt_tokens": 1291,
+    "completion_tokens": 12417,
+    "total_cost": 0.0037,
+    "avg_tokens": 4569.3,
+    "avg_cost": 0.001233,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 0.6666666666666666,
+        "avg_repairs": 0.3333333333333333,
+        "avg_latency_ms": 55720.9
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 2,
+      "db_id": "car_1",
+      "question": "How many countries does each continent have? List the continent id, continent name and the number of countries.",
+      "route": "complex",
+      "final_sql": "SELECT c.ContId, c.Continent, COUNT(co.CountryId) FROM continents c JOIN countries co ON c.ContId = co.Continent GROUP BY c.ContId, c.Continent",
+      "gold_sql": "SELECT T1.ContId ,  T1.Continent ,  count(*) FROM CONTINENTS AS T1 JOIN COUNTRIES AS T2 ON T1.ContId  =  T2.Continent GROUP BY T1.ContId;",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 20267.0,
+      "terminate_reason": "ok",
+      "total_tokens": 1772,
+      "prompt_tokens": 258,
+      "completion_tokens": 1514,
+      "cost": 0.0005
+    },
+    {
+      "id": 14,
+      "db_id": "car_1",
+      "question": "Find the make and production time of the cars that were produced in the earliest year?",
+      "route": "complex",
+      "final_sql": "SELECT T2.Make , T1.Year FROM cars_data AS T1 JOIN car_names AS T2 ON T1.Id  =  T2.MakeId WHERE T1.Year = (SELECT min(Year) FROM cars_data)",
+      "gold_sql": "SELECT T2.Make ,  T1.Year FROM CARS_DATA AS T1 JOIN CAR_NAMES AS T2 ON T1.Id  =  T2.MakeId WHERE T1.Year  =  (SELECT min(YEAR) FROM CARS_DATA);",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 31154.3,
+      "terminate_reason": "ok",
+      "total_tokens": 2597,
+      "prompt_tokens": 254,
+      "completion_tokens": 2343,
+      "cost": 0.0007
+    },
+    {
+      "id": 12,
+      "db_id": "car_1",
+      "question": "Find the name of the makers that produced some cars in the year of 1970?",
+      "route": "complex",
+      "final_sql": "SELECT DISTINCT T1.Maker FROM car_makers AS T1 JOIN car_names AS T2 ON T1.Id  =  T2.MakeId JOIN cars_data AS T3 ON T2.MakeId  =  T3.Id WHERE T3.Year = 1970",
+      "gold_sql": "SELECT DISTINCT T1.Maker FROM CAR_MAKERS AS T1 JOIN MODEL_LIST AS T2 ON T1.Id  =  T2.Maker JOIN CAR_NAMES AS T3 ON T2.model  =  T3.model JOIN CARS_DATA AS T4 ON T3.MakeId  =  T4.id WHERE T4.year  =  '1970';",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 1,
+      "attempts": 2,
+      "latency_ms": 115741.3,
+      "terminate_reason": "max_retry",
+      "total_tokens": 9339,
+      "prompt_tokens": 779,
+      "completion_tokens": 8560,
+      "cost": 0.0025
+    }
+  ]
+}

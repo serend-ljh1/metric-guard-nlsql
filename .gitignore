@@ -30,7 +30,6 @@ docs/面试准备.md
 
 # ---- 运行产物 ----
 eval_result*.json
-eval_results/
 .pytest_tmp/
 .tmp/
 .tmppytest*/
@@ -43,6 +42,16 @@ data/datasources.yaml
 data/olist_sample/
 data/app.db
 *.log
+
+# ---- 评测逐题产物（**随仓库发布**）----
+# README 引用的 EX/token/成本数字只有靠这些逐题 JSON 才能被复核；
+# 去掉它们，"数字可复核"就只是口号。合计约 220KB。
+# 注意：不能用"先忽略整个目录再豁免文件"的写法（git 不会进入被忽略的目录），
+# 且例外规则必须放在上面 `*.log` 等宽规则之后才生效。
+!eval_results/
+!eval_results/*.json
+!eval_results/*.log
+!eval_results/*.md
 
 # ---- IDE ----
 .idea/

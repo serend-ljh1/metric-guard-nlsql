@@ -246,22 +246,39 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 ```
 > 说明：业务层用**真实公开数据**(Olist)；`data/olist_sample/` 是**同结构小样本**，仅用于离线验证组装逻辑（非真实数据）。
 
-## 评测框架（能力说明，非准确率声明）
+## 真实评测结果（Spider-dev · 实测）
 
-> **本仓库不提供可复现的 EX 准确率数字。** 原因如下，请以本节为准，不要引用任何"EX 0.8x / +7pp / +23pp"之类的数字。
->
-> 仓库内 `data/benchmark_results.json` 是**手动维护的展示用常量**（供 `app.py` 的引擎演示页渲染），**没有任何脚本生成它**，也没有对应的逐题运行产物；`data/spider/` 为空（真实数据集需自行下载）。因此其中的数值**不构成证据**。
->
-> 更关键的是，该文件中**同一配置出现了两组互相矛盾的数值**：基线表把 `max_repair_round=0`（单次直出）记为 **0.86**、`max_repair_round=1` 记为 **0.88**；而自愈消融表在**同样声称 N=100、seed=42** 下把同一组配置记为 **0.76** 和 **0.83**。同一实验出现两个答案，说明这些数字至少有一组不可信。在查清并重跑之前，本项目**不做任何准确率主张**。
+> **数据来源**：Spider-dev，跨库分层随机抽样 **N=50（seed=42）**，引擎 `--engine langgraph`，模型 **qwen3.7-flash**（阿里云百炼兼容端点，`LLM_TEMPERATURE=0`）。逐题产物在 `eval_results/`（81 个 JSON，含每题 SQL / 路由 / 修复轮次 / token / 成本 / `gold_failed`），可复核。
+> 复现命令：
+> ```bash
+> python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
+>   --baseline --ablation --ablation-rounds 1,3 --out-dir ./eval_results
+> ```
 
-### 已经实现并可直接复用的部分（这才是本项目的工程价值）
+| 配置 | EX | EM | token/题 | 成本/题 | 平均延迟 | 平均修复轮次 |
+|---|---|---|---|---|---|---|
+| **L0** 单次直出（zero-shot，无自愈） | **0.82** (41/50) | 0.04 | 2367 | ¥0.00062 | 28.9s | 0.00 |
+| **L1** 引擎（最多修 1 轮） | **0.86** (43/50) · **0.88** (44/50) | 0.02 | 2845–2923 | ¥0.00074 | 36–39s | 0.12–0.14 |
+| **L3** 全自愈（最多修 3 轮） | **0.90** (45/50) | 0.04 | 4001 | ¥0.00104 | 47.7s | 0.38 |
 
-`run_eval.py` + `src/sqlpa/eval/` 是一套**完整可用的评测框架**，安装真实数据集与 Key 后即可产出可复现报告：
+**结论（含不确定度，不夸大）**：
+- **自愈有效**：L0 → L1 提升 **+4 ~ +6 pp**（41 → 43/44 题）；L1 → L3 再 **+2 ~ +4 pp**（44 → 45 题）。
+- **代价是 token**：L3 每题 4001 token，是 L0 的 **1.69 倍**（1.41 倍于 L1），延迟从 28.9s 涨到 47.7s。
+- **⚠️ 必须说明的运行间波动**：同一份 L1 配置在这次运行中跑了两次（`baseline_engineL1` 与 `ablation_L1`），结果分别为 **43/50 与 44/50**——**差 1 道题 = 2.0 pp**。逐题对账确认差异集中在同 1 道题（`repairs` 1→0）。也就是说：
+  - **本次 L1→L3 的 +2 ~ +4 pp 落在运行间波动量级内**，方向与幅度都**不足以作为强结论**；要主张"L3 更好"需要更大样本或多次重复取均值。
+  - 顺带更正了一个历史说法：此前 README 声称"存在甜点位、L1(0.83) 优于 L3(0.80)"，**本次实测未复现该非单调性**（L3 ≥ L1）。旧数字本身互相矛盾，见下方"历史数字说明"。
+  - 路由也存在同类波动：同一个问题在两次运行中被分别判为 complex / simple。
 
-- **分层抽样**：`--sample N --seed 42`，跨库轮询以覆盖多个 schema（`run_eval.py:188-203`）。
-- **指标**：EX（执行结果比对）与 EM（SQL 逐字匹配），按 simple/complex 分档统计（`src/sqlpa/eval/metrics.py`、`runner.py:97-114`）。
-- **Token / 成本**：真实客户端已累计 `usage` 与按 `LLM_INPUT/OUTPUT_PRICE_PER_1M` 估算的成本，`runner` 逐题读取并汇总（`total/avg tokens`、`total/avg cost`），随报告一起输出——此前这些数据**已采集但从未进报告**。
-- **消融开关**：自愈深度 L0/L1/L3（`--ablation --ablation-rounds 0,1,3`）、Writer↔Critic（`--critic-ablation`）、Schema-Linker（`--schema-link-ablation`）。
+### 历史数字说明（为什么不引用 `data/benchmark_results.json`）
+
+该文件是**手动维护的展示用常量**（供 `app.py` 引擎演示页渲染），**没有任何脚本生成它**，也没有对应的逐题产物。它内部**自相矛盾**：基线表把 `max_repair_round=0/1` 记为 0.86 / 0.88，而自愈消融表在同样声称 N=100、seed=42 下记为 0.76 / 0.83。数字仍保留在文件中（并带 `DISCLAIMER`）作为历史记录，但**不构成证据**；请只引用上表的实测结果。
+
+### 评测框架能力（可复用于你自己的数据）
+
+- **分层抽样**：`--sample N --seed 42`，跨库轮询以覆盖多个 schema，抽样可复现。
+- **指标**：EX（执行结果比对，**金标准执行失败的题不计为正确**并单独报 `gold_failed`）与 EM（SQL 逐字匹配），按 simple/complex 分档。
+- **Token / 成本**：逐题采集 `usage` 并按 `LLM_INPUT/OUTPUT_PRICE_PER_1M` 估算成本，随报告输出。
+- **消融开关**：`--baseline`（L0 vs L1）、`--ablation --ablation-rounds 0,1,3`、`--critic-ablation`、`--schema-link-ablation`。
 - **逐题落盘**：**每条实验臂**都会写出逐题 JSON（含每题 SQL / 路由 / 修复轮次 / `gold_failed` / 终止原因），默认目录 `eval_results/`（可用 `--out-dir` 指定，已 gitignore）。修复前只有主跑路径落盘、且目录不存在会直接崩 —— "结果无法复核"在方法层面就是必然的。
 
 ### ⚠️ EX 口径修复（本轮，重要）
@@ -278,18 +295,21 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 
 > ⚠️ **使用前需注意的两点**：① 抽样是**每库近似等额轮询**，并非按 Spider-dev 的问题分布比例抽样，因此结果**不可直接与论文公开的 dev EX 对比**；② 本仓库的 EX 是自实现比对（结果集去重后比较），**不是 Spider 官方 `evaluation` 脚本**，两套口径不等价。
 
-### 如何产出你自己的可信数字
+### 环境准备与复现要点
 
 ```bash
-py tools/download_data.py --dataset spider --dir data/spider   # 在可联网机器上
-py run_eval.py --dataset spider --split dev --sample 100 --seed 42 --baseline
-py run_eval.py --dataset spider --split dev --sample 50  --seed 42 --critic-ablation
-# 消融/基线各臂的逐题 JSON 会写入 eval_results/（--out-dir 可改）
+# 1) 拿到 Spider 数据（本仓库不附带）。下载后目录需含 dev.json 与 database/<db_id>/<db_id>.sqlite
+py tools/download_data.py --dataset spider --dir data/spider
+#    数据放在别处时用 --db-root 或 .env 的 EVAL_DB_ROOT 指定
+
+# 2) 配好 .env：LLM_API_BASE / LLM_API_KEY / LLM_MODEL（模型名务必记入报告）
 ```
 
-建议把生成的逐题 JSON 一并提交，并在 README 中标注**数据集版本、模型名与 commit SHA**——这是让数字可被复核的最低要求。
+建议把 `eval_results/` 的逐题 JSON 一并提交，并在报告中标注**数据集版本、模型名、seed 与 commit SHA**——这是让数字可被复核的最低要求。
 
-> **运行引擎**：默认 `--engine langgraph`（`src/sqlpa/graph/langgraph_graph.py`，含条件边 / 自愈闭环 / Writer↔Critic / 护栏）。`langgraph` 未安装时自动回退到无依赖的 `pipeline.py`。注意两者**并非完全等价**：LangGraph 有 `PlannerAgent` 并把 `plan` 传给 Writer，而 pipeline 恒传 `plan=""`；两者的评审轮次上限也不同（`pipeline.py:162` vs `langgraph_graph.py:153`）。因此**不能假设两者结果一致**，`--engine` 需在报告中注明。
+> **一个经验教训（本仓库踩过）**：LLM 在 `temperature=0` 下**仍非完全确定**。本项目同配置两次运行相差 1 道题（2.0 pp）。因此**不要把"L1 vs L3"这类 1~2 题的差异当作强结论**；要下结论请扩大样本或多次重复取均值。
+
+> **运行引擎**：默认 `--engine langgraph`（`src/sqlpa/graph/langgraph_graph.py`，含条件边 / 自愈闭环 / Writer↔Critic / 护栏）。`langgraph` 未安装时自动回退到无依赖的 `pipeline.py`。注意两者**并非完全等价**：LangGraph 有 `PlannerAgent` 并把 `plan` 传给 Writer，而 pipeline 恒传 `plan=""`；两者的评审轮次上限也不同。因此**不能假设两者结果一致**，`--engine` 需在报告中注明。
 
 ## 业务语义层评测（离线、确定性、无需 API Key）
 

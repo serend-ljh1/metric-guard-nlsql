@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 21060.9,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 4995,
+    "prompt_tokens": 690,
+    "completion_tokens": 4305,
+    "total_cost": 0.0013,
+    "avg_tokens": 1665.0,
+    "avg_cost": 0.000433,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 21060.9
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 25,
+      "db_id": "employee_hire_evaluation",
+      "question": "Which shop has the most employees? Give me the shop name.",
+      "route": "complex",
+      "final_sql": "SELECT s.Name FROM shop s JOIN hiring h ON s.Shop_ID = h.Shop_ID GROUP BY s.Shop_ID ORDER BY COUNT(*) DESC LIMIT 1",
+      "gold_sql": "SELECT t2.name FROM hiring AS t1 JOIN shop AS t2 ON t1.shop_id  =  t2.shop_id GROUP BY t1.shop_id ORDER BY count(*) DESC LIMIT 1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 25194.0,
+      "terminate_reason": "ok",
+      "total_tokens": 1870,
+      "prompt_tokens": 207,
+      "completion_tokens": 1663,
+      "cost": 0.0005
+    },
+    {
+      "id": 7,
+      "db_id": "employee_hire_evaluation",
+      "question": "Find the cities that have more than one employee under age 30.",
+      "route": "complex",
+      "final_sql": "SELECT City FROM employee WHERE Age < 30 GROUP BY City HAVING COUNT(Employee_ID) > 1",
+      "gold_sql": "SELECT city FROM employee WHERE age  <  30 GROUP BY city HAVING count(*)  >  1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 23539.6,
+      "terminate_reason": "ok",
+      "total_tokens": 1945,
+      "prompt_tokens": 279,
+      "completion_tokens": 1666,
+      "cost": 0.0005
+    },
+    {
+      "id": 2,
+      "db_id": "employee_hire_evaluation",
+      "question": "Sort employee names by their age in ascending order.",
+      "route": "complex",
+      "final_sql": "SELECT Name FROM employee ORDER BY Age ASC;",
+      "gold_sql": "SELECT name FROM employee ORDER BY age",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 14449.2,
+      "terminate_reason": "ok",
+      "total_tokens": 1180,
+      "prompt_tokens": 204,
+      "completion_tokens": 976,
+      "cost": 0.0003
+    }
+  ]
+}
