@@ -1,0 +1,72 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.5,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 93835.1,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 11214,
+    "prompt_tokens": 4108,
+    "completion_tokens": 7106,
+    "total_cost": 0.0026,
+    "avg_tokens": 5607.0,
+    "avg_cost": 0.0013,
+    "by_route": {
+      "simple": {
+        "n": 1,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 30174.1
+      },
+      "complex": {
+        "n": 1,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 157496.0
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 1,
+      "db_id": "real_estate_properties",
+      "question": "What is the feature type name of feature AirCon?",
+      "route": "simple",
+      "final_sql": "SELECT T1.feature_type_name FROM Ref_Feature_Types AS T1 JOIN Other_Available_Features AS T2 ON T1.feature_type_code = T2.feature_type_code WHERE T2.feature_name = 'AirCon'",
+      "gold_sql": "SELECT T2.feature_type_name FROM Other_Available_Features AS T1 JOIN Ref_Feature_Types AS T2 ON T1.feature_type_code  =  T2.feature_type_code WHERE T1.feature_name  =  \"AirCon\"",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 30174.1,
+      "terminate_reason": "ok",
+      "total_tokens": 2470,
+      "prompt_tokens": 1353,
+      "completion_tokens": 1117,
+      "cost": 0.0005
+    },
+    {
+      "id": 2,
+      "db_id": "real_estate_properties",
+      "question": "Show the property type descriptions of properties belonging to that code.",
+      "route": "complex",
+      "final_sql": "SELECT property_type_description FROM Ref_Property_Types;",
+      "gold_sql": "SELECT T2.property_type_description FROM Properties AS T1 JOIN Ref_Property_Types AS T2 ON T1.property_type_code  =  T2.property_type_code GROUP BY T1.property_type_code",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 2,
+      "latency_ms": 157496.0,
+      "terminate_reason": "ok",
+      "total_tokens": 8744,
+      "prompt_tokens": 2755,
+      "completion_tokens": 5989,
+      "cost": 0.0021
+    }
+  ]
+}
