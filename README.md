@@ -261,7 +261,7 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 - **分层抽样**：`--sample N --seed 42`，跨库轮询以覆盖多个 schema（`run_eval.py:188-203`）。
 - **指标**：EX（执行结果比对）与 EM（SQL 逐字匹配），按 simple/complex 分档统计（`src/sqlpa/eval/metrics.py`、`runner.py:97-114`）。
 - **消融开关**：自愈深度 L0/L1/L3（`--ablation`）、Writer↔Critic（`--critic-ablation`）、Schema-Linker（`--schema-link-ablation`）。
-- **逐题落盘**：主路径支持 `save_path`，输出每题 SQL / 路由 / 修复轮次 / 延迟，便于复核（`runner.py:116-121`）。
+- **逐题落盘**：**每条实验臂**都会写出逐题 JSON（含每题 SQL / 路由 / 修复轮次 / `gold_failed` / 终止原因），默认目录 `eval_results/`（可用 `--out-dir` 指定，已 gitignore）。修复前只有主跑路径落盘、且目录不存在会直接崩 —— "结果无法复核"在方法层面就是必然的。
 
 ### ⚠️ EX 口径修复（本轮，重要）
 
@@ -281,8 +281,9 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 
 ```bash
 py tools/download_data.py --dataset spider --dir data/spider   # 在可联网机器上
-py run_eval.py --dataset spider --split dev --sample 100 --seed 42 --ablation
+py run_eval.py --dataset spider --split dev --sample 100 --seed 42 --baseline
 py run_eval.py --dataset spider --split dev --sample 50  --seed 42 --critic-ablation
+# 消融/基线各臂的逐题 JSON 会写入 eval_results/（--out-dir 可改）
 ```
 
 建议把生成的逐题 JSON 一并提交，并在 README 中标注**数据集版本、模型名与 commit SHA**——这是让数字可被复核的最低要求。

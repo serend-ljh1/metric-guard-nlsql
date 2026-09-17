@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import re
 import sys
 from pathlib import Path
 
@@ -35,9 +36,14 @@ sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from sqlpa.data.loader import load_spider_dev  # noqa: E402
+from sqlpa.eval.console import ensure_utf8_console  # noqa: E402
 from sqlpa.eval.runner import run_benchmark, report, EvalSummary  # noqa: E402
 from sqlpa.llm.mock_llm import MockLLM  # noqa: E402
 from sqlpa.llm.openai_compat import OpenAICompatLLM  # noqa: E402
+
+# Windows 控制台默认 GBK，无法编码 "¥" 等字符；统一改 UTF-8，
+# 否则汇总打印会在所有结果都已算完之后抛 UnicodeEncodeError（退出码非 0）。
+ensure_utf8_console()
 
 
 def _has_key() -> bool:
@@ -79,60 +85,98 @@ def agg_summaries(ss) -> EvalSummary | None:
                        by_route=by_route)
 
 
-def run_ablation_multi(db_bms, llm, max_rounds=(0, 1, 3), engine: str = "pipeline") -> None:
+def _arm_save_path(arm: str, engine: str, out_dir: Path | None) -> str | None:
+    """为一条实验臂生成逐题落盘路径。
+
+    修复前只有主跑路径会落盘，消融/基线/评测臂都不落盘 —— 于是"结果无法复核"
+    这件事在方法层面就是必然的。现在每条臂都会写出逐题 JSON（含每题 SQL/路由/
+    修复轮次/gold_failed），便于事后核对与回归对比。
+    """
+    if out_dir is None:
+        return None
+    out_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^0-9A-Za-z_.-]+", "_", arm)
+    return str(out_dir / f"{safe}.{engine}.json")
+
+
+def _arm_summaries(db_bms, llm, out_dir, arm: str, engine: str, **kw):
+    """按臂跑 benchmark 并落盘，返回各库 summary 列表。"""
+    ss = []
+    for _db_id, bm in db_bms:
+        ss.append(run_benchmark(bm, llm, engine=engine,
+                                save_path=_arm_save_path(f"{arm}_{_db_id}", engine, out_dir),
+                                **kw))
+    return ss
+
+
+def run_ablation_multi(db_bms, llm, max_rounds=(0, 1, 3), engine: str = "pipeline",
+                       out_dir: Path | None = None) -> None:
     """在同一批（跨库）样本上跑自愈深度消融，L0/L1/L3 对齐可对比。"""
     print("\n=== 自愈深度消融（同一批样本，跨库）===")
     print("  max_repair=0=单次直出(无自愈) | 3=多Agent全自愈")
     for lvl in max_rounds:
-        ss = [run_benchmark(bm, llm, max_repair_round=lvl, engine=engine) for _db_id, bm in db_bms]
+        ss = _arm_summaries(db_bms, llm, out_dir, f"ablation_L{lvl}", engine,
+                            max_repair_round=lvl)
         ag = agg_summaries(ss)
         if ag:
             line = (f"  max_repair={lvl}: EX={ag.ex:.4f} EM={ag.em:.4f} "
-                    f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms")
+                    f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms"
+                    f" gold失败={ag.gold_failed}")
             for r, v in ag.by_route.items():
                 line += f" | {r}:EX={v['ex']:.4f}(n={v['n']})"
             print(line)
 
 
-def run_critic_ablation(db_bms, llm, critic_only: bool = False, engine: str = "pipeline") -> None:
+def run_critic_ablation(db_bms, llm, critic_only: bool = False, engine: str = "pipeline",
+                        out_dir: Path | None = None) -> None:
     """多agent协作消融：同一批样本上, 单Writer vs Writer+Critic 的 EX 对比(含简单/复杂分档)。"""
     print("\n=== 多Agent协作消融: 单Writer vs Writer+Critic ===")
     print("  (真实 LLM 才有效果; 关键看 complex 的差距)")
     arms = [("Writer+Critic", True)] if critic_only else [("单Writer(无Critic)", False), ("Writer+Critic", True)]
     for label, use_critic in arms:
-        ss = [run_benchmark(bm, llm, use_critic=use_critic, engine=engine) for _db_id, bm in db_bms]
+        ss = _arm_summaries(db_bms, llm, out_dir,
+                            ("critic_on" if use_critic else "critic_off"), engine,
+                            use_critic=use_critic)
         ag = agg_summaries(ss)
         if ag:
             line = (f"  {label}: EX={ag.ex:.4f} EM={ag.em:.4f} "
-                    f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms")
+                    f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms"
+                    f" gold失败={ag.gold_failed}")
             for r, v in ag.by_route.items():
                 line += f" | {r}:EX={v['ex']:.4f}(n={v['n']})"
             print(line)
 
 
-def run_baseline(db_bms, llm, ref=None, engine: str = "pipeline") -> None:
+def run_baseline(db_bms, llm, ref=None, engine: str = "pipeline",
+                 out_dir: Path | None = None) -> None:
     """基线对照：单次直出(zero-shot, L0) vs 完整引擎(自愈L1甜点位)，并可对标公开基线 --ref。"""
     print("\n=== 基线对照: 单次直出(zero-shot) vs 完整引擎 ===")
-    b_ss = [run_benchmark(bm, llm, max_repair_round=0, engine=engine) for _db_id, bm in db_bms]   # 单次直出
-    o_ss = [run_benchmark(bm, llm, max_repair_round=1, use_critic=False, engine=engine) for _db_id, bm in db_bms]  # 引擎(甜点位L1)
+    b_ss = _arm_summaries(db_bms, llm, out_dir, "baseline_zeroshot", engine,
+                          max_repair_round=0)
+    o_ss = _arm_summaries(db_bms, llm, out_dir, "baseline_engineL1", engine,
+                          max_repair_round=1, use_critic=False)
     b, o = agg_summaries(b_ss), agg_summaries(o_ss)
     if b and o:
-        print(f"  单次直出 zero-shot(无自愈): EX={b.ex:.4f}")
-        print(f"  完整引擎(自愈L1):          EX={o.ex:.4f}")
+        print(f"  单次直出 zero-shot(无自愈): EX={b.ex:.4f} (gold失败={b.gold_failed})")
+        print(f"  完整引擎(自愈L1):          EX={o.ex:.4f} (gold失败={o.gold_failed})")
         print(f"  提升: {(o.ex - b.ex) * 100:+.1f} pp")
         if ref is not None:
             print(f"  对标公开 Spider-dev 基线 {ref:.3f}: 相对 {(o.ex - ref) * 100:+.1f} pp")
 
 
-def run_schema_link_ablation(db_bms, llm, engine: str = "pipeline") -> None:
+def run_schema_link_ablation(db_bms, llm, engine: str = "pipeline",
+                             out_dir: Path | None = None) -> None:
     """Schema-Linker 消融：同一批样本上, 关(全量schema) vs 开(列级裁剪) 的 EX/token 对比。"""
     print("\n=== Schema-Linker 消融: 关(全量schema) vs 开(列级裁剪) ===")
     for label, use in [("关(全量schema)", False), ("开(列级裁剪)", True)]:
-        ss = [run_benchmark(bm, llm, use_schema_link=use, engine=engine) for _db_id, bm in db_bms]
+        ss = _arm_summaries(db_bms, llm, out_dir,
+                            ("schemalink_on" if use else "schemalink_off"), engine,
+                            use_schema_link=use)
         ag = agg_summaries(ss)
         if ag:
             print(f"  {label}: EX={ag.ex:.4f} EM={ag.em:.4f} "
-                  f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms")
+                  f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms"
+                  f" gold失败={ag.gold_failed}")
 
 
 def main() -> int:
@@ -149,6 +193,8 @@ def main() -> int:
                     help="多agent协作消融: 单Writer vs Writer+Critic 的EX对比")
     ap.add_argument("--critic-only", action="store_true",
                     help="只跑 Writer+Critic 臂(补另一半,省时)")
+    ap.add_argument("--out-dir", default=None,
+                    help="各臂逐题 JSON 输出目录（默认 eval_results/，已 gitignore）")
     ap.add_argument("--baseline", action="store_true",
                     help="基线对照: 单次直出(zero-shot) vs 完整引擎, 并(可选)对标 --ref")
     ap.add_argument("--ref", type=float, default=None,
@@ -247,15 +293,23 @@ def main() -> int:
                   f"平均修复: {ag.avg_repairs:.2f}   "
                   f"平均延迟: {ag.avg_latency_ms:.0f} ms")
 
+    # 每条臂的逐题产物目录（可用 --out-dir 指定）；这是"数字可复核"的前提
+    out_dir = Path(args.out_dir) if args.out_dir else (ROOT / "eval_results")
+    if args.ablation or args.ablation_only or args.critic_ablation or args.baseline \
+            or args.schema_link_ablation:
+        print(f"  [info] 各臂逐题结果将写入 {out_dir}/")
+
     if (args.ablation or args.ablation_only) and db_bms:
-        run_ablation_multi(db_bms, llm, engine=args.engine)
+        run_ablation_multi(db_bms, llm, engine=args.engine, out_dir=out_dir)
     if args.critic_ablation and db_bms:
-        run_critic_ablation(db_bms, llm, critic_only=args.critic_only, engine=args.engine)
+        run_critic_ablation(db_bms, llm, critic_only=args.critic_only,
+                            engine=args.engine, out_dir=out_dir)
     if args.baseline and db_bms:
-        run_baseline(db_bms, llm, args.ref, engine=args.engine)
+        run_baseline(db_bms, llm, args.ref, engine=args.engine, out_dir=out_dir)
     if args.schema_link_ablation and db_bms:
-        run_schema_link_ablation(db_bms, llm, engine=args.engine)
-    print("\n完成。真实准确率需接入真实 LLM + 真实数据集。")
+        run_schema_link_ablation(db_bms, llm, engine=args.engine, out_dir=out_dir)
+    print("\n完成。真实准确率需接入真实 LLM + 真实数据集；"
+          f"逐题产物见 {out_dir}/（请连同数字一起提交以便复核）。")
     return 0
 
 

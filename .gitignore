@@ -27,6 +27,7 @@ docs/面试准备.md
 
 # ---- 运行产物 ----
 eval_result*.json
+eval_results/
 .pytest_tmp/
 .tmp/
 .tmppytest*/

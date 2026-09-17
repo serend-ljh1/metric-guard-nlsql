@@ -129,3 +129,31 @@ def test_runner_counts_gold_failures(mini_db):
     assert s.gold_failed == 1, "金标准失败未计入统计"
     assert s.gold_failed_rate == 1.0
     assert s.ex == 0.0, "金标准失败时 EX 必须为 0，不能因'空 vs 空'得 1"
+
+
+def test_runner_writes_per_question_artifacts(mini_db, tmpdir_clean):
+    """逐题结果必须能落盘，且目录不存在时自动创建。
+
+    这是"数字可复核"的前提；修复前只有主跑路径落盘、且目录不存在会直接崩。
+    """
+    import json
+
+    from sqlpa.data.loader import Benchmark, Question
+    from sqlpa.eval.runner import run_benchmark
+    from sqlpa.llm.mock_llm import MockLLM
+
+    q = "How many singers do we have?"
+    gold = "SELECT count(*) FROM singer"
+    bm = Benchmark(db_id="mini", db_path=str(mini_db),
+                   questions=[Question(id=0, db_id="mini", question=q, gold_sql=gold)])
+    # 故意指向一个**尚不存在**的多层目录
+    out = tmpdir_clean / "deep" / "nested" / "arm.json"
+    run_benchmark(bm, MockLLM(answer_key={q: gold}), max_repair_round=0,
+                  save_path=str(out))
+    assert out.exists(), "逐题产物未写出（或目录未自动创建）"
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert {"summary", "results"} <= set(data)
+    rec = data["results"][0]
+    for k in ("ex", "gold_failed", "final_sql", "route", "repairs", "terminate_reason"):
+        assert k in rec, f"逐题产物缺少字段 {k}"
+    assert "gold_failed_rate" in data["summary"]

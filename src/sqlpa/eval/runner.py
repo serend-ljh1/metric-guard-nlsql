@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from sqlpa.eval.metrics import execution_match, gold_match, em_match, accuracy, mean
+from sqlpa.eval.console import ensure_utf8_console
 from sqlpa.graph.pipeline import run_question
 from sqlpa.sandbox.sql_executor import SqlSandbox, ExecConfig
 from sqlpa.data.schema_extractor import extract_from_sqlite
@@ -100,6 +102,7 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
                             repairs=r.repairs, attempts=r.attempts,
                             latency_ms=round(lat, 1), terminate_reason=r.terminate_reason))
         # 实时进度（每处理一条打一行，避免"卡死"的错觉）
+        ensure_utf8_console()   # Windows GBK 控制台无法编码 ✓/✗，会直接抛错
         flag = "金标准失败" if gold_failed else ("✓" if ex else "✗")
         print(f"  [{len(qres)}/{len(benchmark.questions)}] "
               f"{flag} route={r.route} repairs={r.repairs} "
@@ -130,6 +133,9 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
     if save_path:
         out = {"summary": summary.to_dict(),
                "results": [r.to_dict() for r in qres]}
+        # 目标目录可能不存在（例如 --out-dir 首次运行）→ 先建目录，
+        # 否则会 FileNotFoundError 让整轮评测在"算完之后"失败。
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         with open(save_path, "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
     return summary
