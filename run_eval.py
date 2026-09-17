@@ -280,6 +280,9 @@ def main() -> int:
         bm.questions = by_db[db_id]
         db_bms.append((db_id, bm))
 
+    # 逐题产物目录（所有臂统一用；可用 --out-dir 指定）。这必须在主跑分支之前定义。
+    out_dir = Path(args.out_dir) if args.out_dir else (ROOT / "eval_results")
+
     if not (args.ablation or args.ablation_only or args.critic_ablation or args.baseline
             or args.schema_link_ablation):
         ss = []
@@ -301,8 +304,7 @@ def main() -> int:
                   f"平均修复: {ag.avg_repairs:.2f}   "
                   f"平均延迟: {ag.avg_latency_ms:.0f} ms")
 
-    # 每条臂的逐题产物目录（可用 --out-dir 指定）；这是"数字可复核"的前提
-    out_dir = Path(args.out_dir) if args.out_dir else (ROOT / "eval_results")
+    # 每条臂的逐题产物目录（已在前面解析为 out_dir）；这是"数字可复核"的前提
     if args.ablation or args.ablation_only or args.critic_ablation or args.baseline \
             or args.schema_link_ablation:
         print(f"  [info] 各臂逐题结果将写入 {out_dir}/")
