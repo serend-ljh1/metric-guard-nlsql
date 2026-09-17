@@ -23,5 +23,10 @@ jobs:
       - name: Run pytest (offline suite)
         run: pytest tests -q
 
+      - name: Business semantic-layer eval (offline, deterministic)
+        # 口径命中 / 口径外拒绝 / 权限拦截 / PII 掩码 / 公式防篡改 / 审计留痕
+        # 无需 API Key，用同结构样本库；这一步能拦住语义层与治理护栏的回归。
+        run: python evaluation/eval_business.py --report-dir /tmp/eval_reports
+
       - name: Smoke-check Streamlit app import
         run: python -c "import ast; ast.parse(open('app.py', encoding='utf-8').read()); print('app.py syntax OK')"
