@@ -13,6 +13,9 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+.env.bak
+.env.*.bak
+*.bak
 
 # ---- 下载的真实数据集（体量大，不进仓库）----
 data/spider/

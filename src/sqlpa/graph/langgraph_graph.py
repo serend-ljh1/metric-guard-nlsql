@@ -169,8 +169,12 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
 
     def diagnose(state: AgentState) -> Dict:
         t0 = time.time()
-        diag = llm.diagnose_error(state.get("current_sql", ""),
-                                  state["exec_result"].get("error", "mismatch"), schema_text)
+        # exec_result 里 error 可能是 None（例如"结果不匹配"但无报错信息），
+        # 而 LLMProvider.diagnose_error 约定 error 为 str —— 先归一化，
+        # 否则 mock/真实实现里对 error 做切片都会 TypeError。
+        err = state["exec_result"].get("error") or \
+            state["exec_result"].get("reason") or "result_mismatch"
+        diag = llm.diagnose_error(state.get("current_sql", ""), str(err), schema_text)
         return {"error_diagnosis": diag, "repairs": state.get("repairs", 0) + 1,
                 "agent_trace": _logged(state, "DiagnoseAgent", "报错诊断", (diag or "")[:45], t0)}
 

@@ -211,6 +211,10 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42, help="抽样随机种子(默认42，可复现)")
     ap.add_argument("--max-repair", type=int, default=None,
                     help="自愈最大轮次（默认读 config/settings.yaml）")
+    ap.add_argument("--ablation-rounds", default="1,3",
+                    help="自愈消融要跑的档位，逗号分隔（默认 1,3）。"
+                         "注意：L0(单次直出)已由 --baseline 覆盖，重复跑纯属浪费；"
+                         "想完整复现 L0/L1/L3 用 --ablation-rounds 0,1,3")
     ap.add_argument("--out", default="eval_result.json")
     ap.add_argument("--key", default=None)
     ap.add_argument("--base", default=None)
@@ -226,12 +230,14 @@ def main() -> int:
     # ---- 真实数据集（Spider/BIRD）：按库分组跑 ----
     from sqlpa.data.schema_extractor import extract_from_sqlite  # noqa: F401
     from sqlpa.sandbox.sql_executor import SqlSandbox  # noqa: F401
-    db_root = Path(args.db_root or f"data/{args.dataset}")
+    # 数据集根目录优先级：--db-root > 环境变量 EVAL_DB_ROOT（.env 里配）> data/<dataset>
+    # （此前 --db-root 默认值写死 data/<dataset>，导致 .env 的 EVAL_DB_ROOT 形同虚设）
+    db_root = Path(args.db_root or os.environ.get("EVAL_DB_ROOT") or f"data/{args.dataset}")
     json_path = db_root / f"{args.split}.json"
     if not json_path.exists():
         raise FileNotFoundError(
-            f"找不到 {json_path}。请先用 tools/download_data.py 下载 {args.dataset}，"
-            f"或确认 db_root/split 正确。")
+            f"找不到 {json_path}。请确认 --db-root / EVAL_DB_ROOT 指向数据集根目录"
+            f"（该目录下应有 {args.split}.json 与 database/）。")
     per_db = load_spider_dev(json_path, db_root / "database")
     # 收集 (db_id, question)，支持"跨库轮询抽样"(--sample) 或 "全局前 N 条"(--limit)
     if args.sample:
@@ -278,8 +284,10 @@ def main() -> int:
             or args.schema_link_ablation):
         ss = []
         for db_id, bm in db_bms:
+            # 主跑路径同样落到 --out-dir（此前写死在项目根，--out-dir 对它无效，
+            # 会在仓库根目录堆一堆 eval_result.json.<db>.json）
             summary = run_benchmark(bm, llm, max_repair_round=args.max_repair,
-                                    save_path=str(ROOT / f"{args.out}.{db_id}.json"),
+                                    save_path=_arm_save_path(f"main_{db_id}", args.engine, out_dir),
                                     use_critic=args.critic, use_schema_link=args.schema_link,
                                     engine=args.engine)
             print(f"\n=== {db_id} ({len(bm.questions)} 条) ===")
@@ -300,7 +308,12 @@ def main() -> int:
         print(f"  [info] 各臂逐题结果将写入 {out_dir}/")
 
     if (args.ablation or args.ablation_only) and db_bms:
-        run_ablation_multi(db_bms, llm, engine=args.engine, out_dir=out_dir)
+        try:
+            rounds = tuple(int(x) for x in str(args.ablation_rounds).split(",") if x.strip())
+        except ValueError:
+            print(f"  [!!] --ablation-rounds 解析失败：{args.ablation_rounds}，回退 1,3")
+            rounds = (1, 3)
+        run_ablation_multi(db_bms, llm, max_rounds=rounds, engine=args.engine, out_dir=out_dir)
     if args.critic_ablation and db_bms:
         run_critic_ablation(db_bms, llm, critic_only=args.critic_only,
                             engine=args.engine, out_dir=out_dir)
