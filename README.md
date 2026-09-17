@@ -248,12 +248,32 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 
 ## 真实评测结果（Spider-dev · 实测）
 
-> **数据来源**：Spider-dev，跨库分层随机抽样 **N=50（seed=42）**，引擎 `--engine langgraph`，模型 **qwen3.7-flash**（阿里云百炼兼容端点，`LLM_TEMPERATURE=0`）。逐题产物在 `eval_results/`（81 个 JSON，含每题 SQL / 路由 / 修复轮次 / token / 成本 / `gold_failed`），可复核。
+> **数据来源**：Spider-dev，跨库分层随机抽样 **N=50（seed=42）**，引擎 `--engine langgraph`，阿里云百炼兼容端点，`LLM_TEMPERATURE=0`。逐题产物在 `eval_results/`（83 个文件，含每题 SQL / 路由 / 修复轮次 / token / 成本 / `gold_failed`），可复核。
 > 复现命令：
 > ```bash
 > python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
 >   --baseline --ablation --ablation-rounds 1,3 --out-dir ./eval_results
 > ```
+>
+> ⚠️ **模型口径（重要，勿省略）**：本轮**未能确认所用模型**。当时 `MODEL_POOL` 首选为 `qwen3.7-flash`，但随后实测该模型**免费额度已耗尽（HTTP 403 insufficient_quota）**，而池中其余 6 个模型可用；模型池会在额度耗尽时**自动切换**，因此本轮可能是 `qwen3.7-flash` 与替补模型（大概率为 `qwen3.8-max`）的**混合结果**。产物生成时尚未记录每题模型（该字段随后已补：`QResult.model` + `EvalSummary.models`，见下方"模型池与可追溯性"）。
+> **因此：请把本节数字读作"池化配置下的结果"，不要把 token/成本/延迟的绝对值归因到某个具体模型。** 若要得到可比数字，应**固定单一模型重跑**：加 `--model qwen3.8-max`（该参数会把模型池收敛为单一成员，见下），并在报告中记录模型名。
+
+### 模型池与可追溯性（本轮修复）
+
+`MODEL_POOL` 会按顺序尝试模型，遇 **403/额度耗尽/404/401/400/context超限/空内容** 切换到下一个，仅 **429/5xx/超时** 在当前模型上指数退避重试；全部失败才抛错（并在错误中列出试过的池）。实测确认该切换有效：池首 `qwen3.7-flash` 返回 403 后自动切到 `qwen3.8-max` 并成功生成 SQL。
+
+但"会切换"带来一个隐患：**若产物不记录实际模型，一旦中途切换，导出的 EX/token/成本就是多模型混合且无人察觉**——这正是本轮遇到的问题。现已修复：每题 JSON 增加 `model` 字段，汇总增加 `models = {模型名: 题数}`，报告会打印实际模型并在出现**多于一个模型**时显式告警。
+
+**另修一个真 bug**：`--model` 此前**锁不住模型**——它只设置 `self.model`，而 `_chat` 遍历的是 `model_pool`（来自 `MODEL_POOL`），所以传了 `--model` 仍会在池里漂移。现在显式传 `--model` 会把池收敛为单一成员，才真正是"可归因到单一模型"的评测：
+
+```bash
+# 池化运行（默认）：有故障切换，产物记录每题实际模型
+python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph --baseline
+
+# 锁定单一模型：不做切换，绝对指标可归因
+python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
+  --model qwen3.8-max --baseline
+```
 
 | 配置 | EX | EM | token/题 | 成本/题 | 平均延迟 | 平均修复轮次 |
 |---|---|---|---|---|---|---|

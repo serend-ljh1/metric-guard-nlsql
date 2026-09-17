@@ -56,8 +56,13 @@ def _has_key() -> bool:
 def build_llm(args, answer_key=None):
     if args.mock:
         return MockLLM(answer_key=answer_key)
+    # ⚠️ `_chat` 遍历的是 model_pool（默认取环境变量 MODEL_POOL），
+    # 因此**只传 model= 是锁不住模型的**——池子照样会漂移。
+    # 显式指定 --model 时把它作为"唯一"池成员，才真正是单模型可归因的评测。
+    pool = [args.model] if args.model else None
     return OpenAICompatLLM(api_key=args.key, base_url=args.base,
-                           model=args.model, temperature=args.temperature)
+                           model=args.model, temperature=args.temperature,
+                           model_pool=pool)
 
 
 def agg_summaries(ss) -> EvalSummary | None:
@@ -253,7 +258,11 @@ def main() -> int:
     ap.add_argument("--out", default="eval_result.json")
     ap.add_argument("--key", default=None)
     ap.add_argument("--base", default=None)
-    ap.add_argument("--model", default=None)
+    ap.add_argument("--model", default=None,
+                    help="锁定为单一模型（忽略 MODEL_POOL，不做故障切换）。"
+                         "想让绝对指标可归因到某个模型时务必显式指定，例如 "
+                         "--model qwen3.8-max；不指定则按 MODEL_POOL 池化运行，"
+                         "产物会记录每题实际模型。")
     ap.add_argument("--temperature", type=float, default=0.0)
     args = ap.parse_args()
     if args.max_repair is None:
