@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.llm.mock_llm
 ==================
 离线 Mock LLM：不调用任何外部 API。
@@ -44,9 +44,11 @@ class MockLLM(LLMProvider):
         return {"valid": True, "reason": "execution ok (mock)"}
 
     def difficulty_judge(self, question: str, schema_text: str) -> str:
-        from sqlpa.agents.router import classify
-        import json
-        return "complex" if len(question) > 12 else "simple"
+        """Mock：永远认为"不复杂"，保证路由结果确定、测试可复现。
+
+        真实实现见 openai_compat.OpenAICompatLLM.difficulty_judge。
+        """
+        return "simple"
 
     def complete(self, prompt: str) -> str:
         return ""

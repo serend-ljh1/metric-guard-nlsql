@@ -1,4 +1,4 @@
-﻿"""
+"""
 api.py
 ======
 FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Streamlit 前端共用同一套
@@ -11,6 +11,16 @@ FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Streamli
   GET  /api/audit           审计留痕（最近 N 条）
   GET  /api/datasources     已注册数据源（密码掩码）
 
+鉴权（重要）：
+  修复前 /api/query 无鉴权，且 `role` 直接取自请求体 —— 任何调用方只要传
+  `{"role": "admin"}` 就能绕过全部表列权限。现改为：
+    - 配置 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 后，请求必须带
+      `X-API-Token` 头，**角色取自 token**；请求体里的 role 仅可用于在自身
+      权限范围内"降级"（不能提权）。
+    - 未配置 `SQLPA_API_TOKENS` 时（本地/演示/测试），忽略请求体 role，
+      一律按**最小权限角色 `SQLPA_DEFAULT_ROLE`（默认 analyst）**执行。
+    生产部署应配置 token 或接入企业鉴权。
+
 运行：uvicorn api:app --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
@@ -18,9 +28,9 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -59,7 +69,8 @@ def _db_path() -> str:
 
 def _sandbox():
     from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
-    return SqlSandbox(_db_path(), ExecConfig(max_rows=2000))
+    # 由 config/settings.yaml 驱动（超时/多语句/额外禁用关键字）
+    return SqlSandbox(_db_path(), ExecConfig.from_settings(max_rows=2000))
 
 
 def _llm():
@@ -75,9 +86,43 @@ def _llm():
 
 class QueryIn(BaseModel):
     question: str = Field(..., description="自然语言业务问题")
-    role: str = Field("analyst", description="analyst / admin")
+    role: str = Field("analyst",
+                      description="期望角色；仅可在 token 授予的权限范围内使用（不能提权）")
     history: List[dict] = Field(default_factory=list,
                                 description="对话历史 [{'question','metric','sql'}]，用于多轮追问")
+
+
+# ---------------- 鉴权 ----------------
+
+def _token_map() -> Dict[str, str]:
+    """解析 SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst" → {token: role}。"""
+    raw = (os.getenv("SQLPA_API_TOKENS") or "").strip()
+    out: Dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        tok, _, role = part.partition(":")
+        tok, role = tok.strip(), role.strip()
+        if tok and role:
+            out[tok] = role
+    return out
+
+
+def _resolve_role(token: Optional[str], requested: str) -> str:
+    """决定本次请求实际使用的角色。
+
+    原则：**角色只能来自凭据，不能来自请求体**。
+    - 配了 token：必须提供有效 token；角色取自 token。请求体 role 只能用于降级
+      （当它与 token 角色不同时，一律以 token 角色为准，避免提权）。
+    - 未配 token：忽略请求体 role，使用最小权限默认角色。
+    """
+    tokens = _token_map()
+    if tokens:
+        if not token or token not in tokens:
+            raise HTTPException(status_code=401, detail="缺少或无效的 X-API-Token")
+        return tokens[token]
+    return (os.getenv("SQLPA_DEFAULT_ROLE") or "analyst").strip() or "analyst"
 
 
 # ---------------- 端点 ----------------
@@ -88,10 +133,13 @@ def health():
 
 
 @app.post("/api/query")
-def api_query(q: QueryIn):
+def api_query(q: QueryIn, x_api_token: Optional[str] = Header(default=None)):
     from sqlpa.business.service import answer
+    # 角色只认凭据，不认请求体（修复越权：原实现直接 role=q.role）
+    role = _resolve_role(x_api_token, q.role)
     a = answer(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-               role=q.role, history=q.history)
+               role=role, history=q.history)
+    a["effective_role"] = role
     # 控制响应体积
     if isinstance(a.get("rows"), list):
         a["rows"] = [list(r) for r in a["rows"][:200]]

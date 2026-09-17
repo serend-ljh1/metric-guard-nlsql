@@ -1,4 +1,4 @@
-﻿"""
+"""
 run_business.py
 ===============
 **业务产品模式入口**（与 run_eval.py 评测模式严格隔离）。
@@ -101,7 +101,7 @@ def main() -> int:
 
     cfg = load_config()
     sb_path = Path(args.db) if args.db else pick_db()
-    sb = SqlSandbox(sb_path, ExecConfig(max_rows=2000))
+    sb = SqlSandbox(sb_path, ExecConfig.from_settings(max_rows=2000))
 
     if args.mock:
         llm = None

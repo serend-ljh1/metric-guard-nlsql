@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.sandbox.sql_executor
 ==========================
 确定性、只读、加固的 SQLite 沙箱执行器。
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
@@ -51,6 +52,27 @@ class ExecConfig:
     max_rows: int = 500           # 结果集行数上限（防无 LIMIT 爆表）
     allow_multi_statement: bool = False
     extra_blocked_keywords: frozenset = frozenset()
+
+    @classmethod
+    def from_settings(cls, max_rows: Optional[int] = None) -> "ExecConfig":
+        """按 config/settings.yaml 构造（改规则不改代码）。
+
+        读取 security.timeout_seconds / security.allow_multi_statement /
+        security.forbid_keywords 与 eval.max_rows。
+        修复前这些键**从未被读取**，属"文档声称可配置、实际是死配置"。
+        """
+        try:
+            from sqlpa.config import get as cfg_get
+        except Exception:  # noqa: BLE001
+            return cls()
+        kws = cfg_get("security.forbid_keywords", []) or []
+        return cls(
+            timeout_seconds=float(cfg_get("security.timeout_seconds", 5.0) or 5.0),
+            max_rows=int(max_rows if max_rows is not None
+                         else (cfg_get("eval.max_rows", 500) or 500)),
+            allow_multi_statement=bool(cfg_get("security.allow_multi_statement", False)),
+            extra_blocked_keywords=frozenset(str(k).upper() for k in kws),
+        )
 
 
 @dataclass
@@ -168,7 +190,17 @@ class SqlSandbox:
         conn.execute("PRAGMA query_only = ON")   # 双保险：只读
         if self.config.timeout_seconds:
             conn.execute(f"PRAGMA busy_timeout = {int(self.config.timeout_seconds * 1000)}")
+            # 真正的"查询超时"：SQLite 的 busy_timeout 只管等锁，不管长查询。
+            # 这里用 progress_handler 每 N 个 VM 步检查一次耗时，超时即中断，
+            # 避免 `SELECT ... FROM huge_table ORDER BY ...` 这类查询把进程挂住。
+            self._install_deadline(conn)
         return conn
+
+    def _install_deadline(self, conn: sqlite3.Connection) -> None:
+        """给连接装一个截止时间：超过 timeout_seconds 就中断查询。"""
+        deadline = time.monotonic() + float(self.config.timeout_seconds)
+        # 每 1000 个 VM 指令回调一次（足够细，且开销可忽略）
+        conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 1000)
 
     def execute(self, sql: str, params: Optional[list] = None) -> ExecResult:
         # 语句级安全校验对所有方言一致生效

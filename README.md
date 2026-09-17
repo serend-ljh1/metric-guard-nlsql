@@ -263,6 +263,18 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 - **消融开关**：自愈深度 L0/L1/L3（`--ablation`）、Writer↔Critic（`--critic-ablation`）、Schema-Linker（`--schema-link-ablation`）。
 - **逐题落盘**：主路径支持 `save_path`，输出每题 SQL / 路由 / 修复轮次 / 延迟，便于复核（`runner.py:116-121`）。
 
+### ⚠️ EX 口径修复（本轮，重要）
+
+修复前 `execution_match([], []) == True`（空集等于空集），而**金标准 SQL 自身执行失败时 `rows` 恰好也是空列表**——于是"预测也没跑出结果"的错答案会被判成**正确**，导致 EX **系统性虚高**。该缺陷同时存在于 `eval/runner.py`、`pipeline.validate`、`langgraph_graph._is_valid` 三处。
+
+现已修复：
+- 新增 `gold_match(gold_rows, gold_valid, pred_rows)`：**金标准执行失败直接返回不匹配**并标记 `gold_failed`，绝不与其他空结果"撞对"。
+- `EvalSummary` 新增 `gold_failed` / `gold_failed_rate` 并随报告输出——这类题**不可判定**，既已计为错，也要把数量暴露出来，避免"金标准坏了"被误读成"模型答错了"。
+- 两个引擎都在金标准失败时走显式路径（LangGraph 直接进 validate 记录 `terminate_reason=gold_failed`，不再无意义地反复自愈）。
+- 回归测试 `tests/test_ex_scoring.py`（10 项）锁定该口径。
+
+> **这解释了此前那个可疑的高分**：EX 0.86/0.88 显著高于 Spider-dev 公开基线，而评测口径恰好存在"空 vs 空算对"的漏洞。修复并重跑之前，任何历史 EX 数字都不应采信。
+
 > ⚠️ **使用前需注意的两点**：① 抽样是**每库近似等额轮询**，并非按 Spider-dev 的问题分布比例抽样，因此结果**不可直接与论文公开的 dev EX 对比**；② 本仓库的 EX 是自实现比对（结果集去重后比较），**不是 Spider 官方 `evaluation` 脚本**，两套口径不等价。
 
 ### 如何产出你自己的可信数字
@@ -289,17 +301,17 @@ pytest tests -q    # 29 项离线测试（未安装 langgraph 时其中 1 项 sk
 
 ## 诚实说明（局限与边界）
 
-- **确定性路由是启发式**：schema 感知（跨表=复杂）+ 逻辑信号，属于**快速预筛**；`difficulty_judge` 接口已在 LLM 层预留但**当前未被调用**，`pipeline.route_llm_fallback` 开关也**尚未接入**——即隐式 JOIN 等边界情形目前**没有** LLM 兜底。
+- **确定性路由是启发式**：schema 感知（跨表=复杂）+ 逻辑信号，属于**快速预筛**；对**判为 simple** 的题会走一层**轻量 LLM 二次判断兜底**（`route_with_llm_fallback`，只做 simple→complex 单向升级、异常静默回退），开关 `pipeline.route_llm_fallback`。评测时可用环境变量 `SQLPA_ROUTE_LLM_FALLBACK=0` 关闭以保证可复现。
 - **测试用内置迷你 schema**（singer/concert，由 `tests/conftest.py` 运行时构建，非评测基准）仅用于引擎/沙箱自检，**不是** Spider/BIRD，不能作为准确率证据。
-- **长时记忆 / Checkpoint 断点续跑未实现**（`config/settings.yaml` 的 `memory.*` 与 `pipeline.parallel_candidates`、`security.timeout_seconds` 等配置项**当前未被任何代码读取**，属预留占位）。
-- 访问公开数据的网络在本仓库受限；`--dir` 的数据与 `.env` 的 Key 需由使用方提供。
+- **长时记忆 / Checkpoint 断点续跑未实现**。此前 `settings.yaml` 的 `memory.*`、`pipeline.parallel_candidates` 等键**从未被任何代码读取**（属"写个配置假装支持"），已删除；现在配置里的每个键都真实生效：`security.timeout_seconds`（SQLite `progress_handler` **真实中断**长查询，不再只是等锁）、`security.forbid_keywords`、`security.allow_multi_statement`、`eval.max_rows`、`pipeline.max_repair_round`、`pipeline.route_llm_fallback`。
+- 访问公开数据的网络在本仓库受限；`--dir` 的数据与 `.env` 的 Key 需由使用方提供。Spider 数据位置用环境变量 `SQLPA_SPIDER_ROOT` 指定（已移除写死的机器路径）。
 - **MySQL/PostgreSQL 方言层**已实现语句级安全校验与 schema 提取，但真实库连通性需在装有对应驱动与目标库的环境验证。
 - **数据源密码**使用 XOR+Base64 **可逆编码**（密钥为源码内硬编码的兜底值，非加密）存储于 `data/datasources.yaml`（已 gitignore），仅原型级；生产部署应改用密钥管理服务（KMS）。
 - **用户密码**使用 SHA-256 哈希存储于本地 SQLite（`data/app.db`，已 gitignore），但**盐值是全局硬编码常量**且比较非常量时间，仅原型级，不可用于生产。
-- **⚠️ 已知安全缺口（勿用于生产）**：① `api.py` 的 `/api/query` **无鉴权**，`role` 直接取自请求体，调用方可自报 `admin` 绕过权限；② `permissions._column_refs` 只匹配 `别名.列` 形式，因此 `SELECT customer_zip_code_prefix FROM customers` 这类**非限定列名可绕过列白名单**；③ 结果掩码按**输出列名**匹配，故 `SELECT customer_zip_code_prefix AS zip ...` 会**返回未掩码的原始值**（已实测复现）。
+- **API 鉴权已修复**：`/api/query` 的角色**只认凭据、不认请求体**。配置 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 后必须带 `X-API-Token`；未配置时（本地/演示）忽略请求体 role，按最小权限角色 `SQLPA_DEFAULT_ROLE`（默认 analyst）执行。**生产部署务必配置 token 或接入企业鉴权。**
 
 ## 指标口径
 
-- **EX (Execution Accuracy)**：执行结果与金标准一致即判对，忽略写法差异（最贴合业务价值）。
+- **EX (Execution Accuracy)**：执行结果与金标准一致即判对，忽略写法差异（最贴合业务价值）。**金标准自身执行失败的题不计为正确**，并在汇总中单独报告 `gold_failed` 数量。
 - **EM (Exact Match)**：与金标准 SQL 逐字匹配（较严，参考用）。
 - **平均修复轮次 / 端到端延迟 / Token 消耗**：工程性能指标。

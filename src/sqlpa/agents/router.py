@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.agents.router
 ===================
 难度路由（Router Agent）：判断一条自然语言问题应走"轻量单 Agent"还是"多 Agent 自愈链路"。
@@ -63,7 +63,7 @@ def _referenced_tables(question: str, schema: Dict) -> List[str]:
 
 
 def route_decision(question: str, schema: Dict | None = None) -> Dict:
-    """返回路由决策与可观测的判据。"""
+    """返回路由决策与可观测的判据（纯确定性，不调用 LLM）。"""
     q = question or ""
     refs = _referenced_tables(q, schema)
     n_tables = len(refs)
@@ -76,6 +76,46 @@ def route_decision(question: str, schema: Dict | None = None) -> Dict:
         "referenced_tables": refs,
         "logic_hit": logic_hit,
     }
+
+
+def route_with_llm_fallback(question: str, schema: Dict | None = None, llm=None,
+                            schema_text: str = "",
+                            enabled: Optional[bool] = None) -> Dict:
+    """确定性路由 + **可选的** LLM 二次判断兜底。
+
+    动机：纯词面/跨表启发式对"隐式 JOIN"这类题会误判为 simple
+    （例如"每个州有多少订单"没写出表名，但实际需要 join）。
+    enabled=True（或 enabled=None 且 settings.yaml `pipeline.route_llm_fallback: true`）
+    且提供了 llm 时，**仅对判为 simple 的题**问一次 LLM：它若认为复杂则升为 complex。
+
+    设计取舍：
+      - 只做"single → complex"的**单向升级**，且只在判为 simple 时调用，
+        避免在简单题上白白多花一次 LLM 调用；
+      - 任何异常都静默回退到确定性结论——兜底失败不能让主流程失败；
+      - 修复前 `difficulty_judge` 在 3 个 LLM 实现里都有定义却**从未被调用**，
+        `route_llm_fallback` 配置也从未被读取（文档声称有兜底，实际没有）。
+    """
+    base = route_decision(question, schema)
+    base["llm_fallback"] = False
+    if base["decision"] != "simple" or llm is None:
+        return base
+    if enabled is None:
+        try:
+            from sqlpa.config import get as cfg_get
+            enabled = bool(cfg_get("pipeline.route_llm_fallback", False))
+        except Exception:  # noqa: BLE001
+            enabled = False
+    if not enabled:
+        return base
+    try:
+        verdict = str(llm.difficulty_judge(question, schema_text or "") or "").strip().lower()
+    except Exception:  # noqa: BLE001 —— 兜底失败不影响主流程
+        return base
+    if verdict == "complex":
+        base["decision"] = "complex"
+        base["llm_fallback"] = True
+        base["logic_hit"] = True   # 记为命中了复杂信号，便于 trace 解释
+    return base
 
 
 def classify(question: str, schema: Dict | None = None) -> str:

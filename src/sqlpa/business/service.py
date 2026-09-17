@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.business.service
 ======================
 业务"混合模式"的统一入口：CLI(run_business) 与 UI(app.py) 共用这套逻辑，保证一致。
@@ -79,8 +79,8 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
         cols = er.exec_result.get("columns", [])
         rows = er.exec_result.get("rows", []) if ok else []
 
-        # 护栏：自由查询同样必须过表列权限
-        unauth = check_access(role, cfg.permissions, final_sql)
+        # 护栏：自由查询同样必须过表列权限（传 schema 以解析非限定列名）
+        unauth = check_access(role, cfg.permissions, final_sql, schema=schema)
         if unauth:
             reason = "权限: " + "; ".join(unauth)
             append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
@@ -92,7 +92,9 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                     "rewritten_question": q, "used_context": used_ctx}
 
         if ok:
-            rows = mask_result(cols, rows, cfg.permissions.get("sensitive_columns", {}))
+            # 按列来源掩码（覆盖 AS 别名绕过）
+            rows = mask_result(cols, rows, cfg.permissions.get("sensitive_columns", {}),
+                               sql=final_sql, perms=cfg.permissions, schema=schema)
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                                  matched_metric="", generated_sql=final_sql,
                                  is_success=ok, result_rows=len(rows), mode="free", certified=False))
@@ -141,8 +143,8 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                 "reject": reason, "metric": res.metric_key,
                 "sql": final_sql, "source": source,
                 "rewritten_question": q, "used_context": used_ctx}
-    # 护栏2: 表列权限
-    unauth = check_access(role, cfg.permissions, final_sql)
+    # 护栏2: 表列权限（传 schema 以解析非限定列名）
+    unauth = check_access(role, cfg.permissions, final_sql, schema=schema)
     if unauth:
         reason = "权限: " + "; ".join(unauth)
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
@@ -155,7 +157,9 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                 "rewritten_question": q, "used_context": used_ctx}
 
     if ok:
-        rows = mask_result(cols, rows, cfg.permissions.get("sensitive_columns", {}))
+        # 按列来源掩码（覆盖 AS 别名绕过）
+        rows = mask_result(cols, rows, cfg.permissions.get("sensitive_columns", {}),
+                           sql=final_sql, perms=cfg.permissions, schema=schema)
     else:
         enqueue(q, res.metric_key, final_sql, "引擎执行未通过", role=role)  # HITL: 引擎失败 -> 人工
     append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
