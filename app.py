@@ -70,7 +70,7 @@ def _sandbox_for(ds_id: str, sqlite_path: str):
     from sqlpa.sandbox.sql_executor import ExecConfig, make_sandbox
     ds = get_datasource(ds_id) or {"id": "builtin_sqlite", "kind": "sqlite"}
     spec = to_sandbox_spec(ds, sqlite_path)
-    return make_sandbox(spec, ExecConfig(max_rows=2000))
+    return make_sandbox(spec, ExecConfig.from_settings(max_rows=2000))
 
 
 # ============================================================================
@@ -420,7 +420,9 @@ def _datasource_page() -> None:
 # 🧪 引擎演示
 # ============================================================================
 
-SPIDER_DB_ROOT = Path(r"D:\ds harness\spider")
+# Spider 数据根目录：默认仓库内 data/spider（已 gitignore）。
+# 可用环境变量 SQLPA_SPIDER_ROOT 指向本地下载的 Spider 数据，避免写死机器路径。
+SPIDER_DB_ROOT = Path(os.environ.get("SQLPA_SPIDER_ROOT") or (ROOT / "data" / "spider"))
 
 
 @st.cache_resource
@@ -445,7 +447,7 @@ def _spider_data():
 @st.cache_resource
 def _spider_sandbox(db_path: str):
     from sqlpa.sandbox.sql_executor import SqlSandbox, ExecConfig
-    return SqlSandbox(db_path, ExecConfig(max_rows=2000))
+    return SqlSandbox(db_path, ExecConfig.from_settings(max_rows=2000))
 
 
 def _agent_roles() -> None:
@@ -572,7 +574,7 @@ def _engine_mode() -> None:
     st.divider()
     _agent_roles()
     st.divider()
-    from sqlpa.eval.metrics import execution_match, em_match
+    from sqlpa.eval.metrics import execution_match, gold_match, em_match
     from sqlpa.graph.pipeline import run_question
     from sqlpa.data.schema_extractor import extract_from_sqlite
 
@@ -602,10 +604,15 @@ def _engine_mode() -> None:
             res = run_question(q_text, qs[0]["db_id"], schema, sb, _real_llm(),
                                gold_sql=gold, max_repair_round=max_repair)
         st.session_state["last_latency_ms"] = int(sum(a["ms"] for a in res.agent_trace))
-        gold_rows = sb.execute(gold).rows
+        gold_exec = sb.execute(gold)
         llm_rows = res.exec_result.get("rows") or []
-        ex = bool(res.final_valid) and execution_match(gold_rows, llm_rows)
+        # 金标准执行失败时不可用"空 vs 空"判为一致（与 runner 同一口径）
+        matched, _reason = gold_match(gold_exec.rows, bool(gold_exec.ok), llm_rows)
+        ex = bool(res.final_valid) and matched
         em = em_match(gold, res.final_sql)
+        if not gold_exec.ok:
+            st.warning("⚠️ 本题金标准 SQL 在沙箱中执行失败，EX 不可判定（已计为不符）。"
+                       f"原因：{gold_exec.error or gold_exec.reason}")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("EX (执行一致)", f"{ex}")

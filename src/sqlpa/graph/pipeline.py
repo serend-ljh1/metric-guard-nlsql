@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.graph.pipeline
 ====================
 确定性参考编排器：把"路由 → Schema → 规划 → 生成 → 沙箱执行 → 诊断 → 修复 → 校验"
@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 import time
 from typing import Dict, List, Optional
 
-from sqlpa.agents.router import route_decision
+from sqlpa.agents.router import route_decision, route_with_llm_fallback
 from sqlpa.config import get as cfg_get
-from sqlpa.eval.metrics import execution_match
+from sqlpa.eval.metrics import execution_match, gold_match
 from sqlpa.llm.base import build_schema_text
 from sqlpa.sandbox.sql_executor import SqlSandbox
 
@@ -34,6 +34,7 @@ class PipelineResult:
     exec_result: Dict
     final_valid: bool
     terminate_reason: str
+    gold_failed: bool = False  # 金标准 SQL 在本沙箱执行失败 → 本题不可判定（必须单独统计）
     trace: List[str] = field(default_factory=list)
     agent_trace: List[Dict] = field(default_factory=list)  # [{agent, role, detail, ms}]
 
@@ -83,11 +84,19 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
     if max_repair_round is None:
         max_repair_round = int(cfg_get("pipeline.max_repair_round", 3))
     t0 = time.time()
-    rt = route_decision(question, schema)
+    # 确定性路由 +（可选，settings.yaml 开关）LLM 二次判断兜底。
+    # 评测/测试可通过 ROUTE_LLM_FALLBACK 环境变量或显式参数关闭以保证可复现。
+    import os as _os
+    _env = _os.environ.get("SQLPA_ROUTE_LLM_FALLBACK")
+    _enabled = None if _env is None else (_env.strip().lower() in ("1", "true", "yes"))
+    rt = route_with_llm_fallback(question, schema, llm=llm, schema_text=schema_text,
+                                 enabled=_enabled)
     route = rt["decision"]
     _trace(agent_trace, "RouterAgent", "难度路由",
-           f"判定={route} (涉及 {rt['n_tables']} 表, logic={rt['logic_hit']})", t0)
-    trace = [f"route={route} ({rt['n_tables']} tables, logic={rt['logic_hit']})"]
+           f"判定={route} (涉及 {rt['n_tables']} 表, logic={rt['logic_hit']}"
+           + (", LLM兜底=是" if rt.get("llm_fallback") else "") + ")", t0)
+    trace = [f"route={route} ({rt['n_tables']} tables, logic={rt['logic_hit']}"
+             + (f", llm_fallback={rt['llm_fallback']}" if rt.get("llm_fallback") else "") + ")"]
 
     state = {"question": question, "db_id": db_id, "schema_text": schema_text}
     prev_try: Optional[Dict] = None
@@ -95,6 +104,7 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
     repairs = 0
     terminate_reason = ""
     llm_error: Optional[str] = None
+    gold_failed = [False]  # 用列表以便在闭包 validate() 里写回
 
     def execute(sql: str) -> Dict:
         t = time.time()
@@ -128,10 +138,18 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
         # 若有 gold，用执行结果比对方可确定"语义是否对"（这才是硬判据）
         if gold_sql is not None:
             gold_res = _run_sql(sb, gold_sql)
-            ok = execution_match(gold_res["rows"], exec_res["rows"])
+            if not gold_res["ok"]:
+                # 金标准自己都跑不出来（方言/超时/语法）→ 本题无法判定。
+                # 修复前这里会用"空 vs 空"判为一致，把错答案算成对，系统性虚高 EX。
+                gold_failed[0] = True
+                _trace(agent_trace, "ValidatorAgent", "结果校验(VS金标准)",
+                       f"金标准执行失败({gold_res.get('error') or gold_res.get('reason')}),本题判为不可判定",
+                       t)
+                return False
+            matched, _reason = gold_match(gold_res["rows"], True, exec_res["rows"])
             _trace(agent_trace, "ValidatorAgent", "结果校验(VS金标准)",
-                   f"一致={ok} 行数 gold={len(gold_res['rows'])} pred={len(exec_res['rows'])}", t)
-            return ok
+                   f"一致={matched} 行数 gold={len(gold_res['rows'])} pred={len(exec_res['rows'])}", t)
+            return matched
         v = llm.validate_semantics(question, exec_res["sql"], exec_res)
         ok = bool(v.get("valid", True))
         _trace(agent_trace, "ValidatorAgent", "语义校验", f"valid={ok}", t)
@@ -143,8 +161,8 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
             attempts=attempts, repairs=repairs, final_sql="",
             exec_result={"sql": "", "ok": False, "reason": resp_reason,
                          "error": reason, "rows": [], "columns": []},
-            final_valid=False, terminate_reason=resp_reason, trace=trace,
-            agent_trace=agent_trace)
+            final_valid=False, terminate_reason=resp_reason, gold_failed=gold_failed[0],
+            trace=trace, agent_trace=agent_trace)
 
     # ---- 第一步：Supervisor 派发 → Writer 生成 SQL ----
     t0 = time.time()
@@ -202,4 +220,5 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
         question=question, route=route, planned=(route == "complex"),
         attempts=attempts, repairs=repairs, final_sql=exec_res["sql"],
         exec_result=exec_res, final_valid=final_valid,
-        terminate_reason=terminate_reason, trace=trace, agent_trace=agent_trace)
+        terminate_reason=terminate_reason, gold_failed=gold_failed[0],
+        trace=trace, agent_trace=agent_trace)

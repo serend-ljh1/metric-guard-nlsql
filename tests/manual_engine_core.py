@@ -1,12 +1,16 @@
+import os
 import sys
-sys.path.insert(0, r'D:\ds harness\metric-guard-nlsql\src')
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 import json
 from sqlpa.sandbox.sql_executor import SqlSandbox, ExecConfig
 from sqlpa.data.schema_extractor import extract_from_sqlite
 from sqlpa.eval.metrics import execution_match
 
-SPIDER = Path(r'D:\ds harness\spider')
+# Spider 数据位置：优先环境变量，其次仓库内 data/spider（避免写死机器路径）
+SPIDER = Path(os.environ.get("SQLPA_SPIDER_ROOT") or (ROOT / "data" / "spider"))
 PASS = 0
 FAIL = 0
 

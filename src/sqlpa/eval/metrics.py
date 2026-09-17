@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.eval.metrics
 ==================
 Text-to-SQL 客观度量：Execution Accuracy (EX) 与 Exact Match (EM)。
@@ -65,6 +65,35 @@ def _same_up_to_column_order(g: set, p: set) -> bool:
         # 每行转为按值排序的元组（丢弃列位置信息），再收集为多集
         return set(tuple(sorted(r)) for r in s)
     return row_bags(g) == row_bags(p)
+
+
+def gold_match(gold_rows: Sequence[Sequence[Any]],
+               gold_valid: bool,
+               pred_rows: Sequence[Sequence[Any]],
+               column_order_insensitive: bool = False) -> "tuple[bool, str]":
+    """金标准安全版判定：返回 (是否命中, 原因)。
+
+    为什么需要它而不是直接用 execution_match：
+    `execution_match([], [])` 为 True（空集等于空集）。但当**金标准 SQL 自身执行失败**时
+    gold_rows 恰好也是空列表——此时若预测 SQL 同样没跑出结果（rows 也为空），
+    就会把一条错误答案判成"正确"，从而**系统性虚高 EX**。
+
+    这是本项目真实存在过的缺陷：修复前 `eval/runner.py`、`pipeline.validate`、
+    `langgraph_graph._is_valid` 三处都在金标准执行失败时把"空 vs 空"当成匹配成功。
+
+    Args:
+        gold_rows: 金标准执行结果（gold_valid=False 时无意义）
+        gold_valid: 金标准**是否执行成功**（由调用方从执行结果传入，不要默认 True）
+        pred_rows: 预测执行结果
+
+    Returns:
+        (matched, reason)：matched 表示本题是否计为正确；reason 便于排查
+        （"ok" / "gold_failed"）。
+    """
+    if not gold_valid:
+        # 金标准都跑不出结果 → 本题无从判定，必须算错并单独统计，绝不能算对
+        return False, "gold_failed"
+    return execution_match(gold_rows, pred_rows, column_order_insensitive), "ok"
 
 
 def em_match(gold_sql: str, pred_sql: str) -> bool:

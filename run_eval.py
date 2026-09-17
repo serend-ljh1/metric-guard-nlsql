@@ -1,4 +1,4 @@
-﻿"""
+"""
 run_eval.py
 ===========
 **主入口**：在 PyCharm 里运行本文件，填好 LLM Key 即可对公开基准做真实评测（默认 LangGraph 引擎）。
@@ -72,8 +72,11 @@ def agg_summaries(ss) -> EvalSummary | None:
             by_route[r] = {"n": nr, "ex": sum(x["ex"] * x["n"] for x in subs) / nr,
                            "avg_repairs": sum(x["avg_repairs"] * x["n"] for x in subs) / nr,
                            "avg_latency_ms": sum(x["avg_latency_ms"] * x["n"] for x in subs) / nr}
+    n_gold_failed = sum(s.gold_failed for s in ss)
     return EvalSummary(n=n, ex=ex, em=em, avg_attempts=attempts, avg_repairs=repairs,
-                       avg_latency_ms=lat, by_route=by_route)
+                       avg_latency_ms=lat, gold_failed=n_gold_failed,
+                       gold_failed_rate=round(n_gold_failed / n, 4) if n else 0.0,
+                       by_route=by_route)
 
 
 def run_ablation_multi(db_bms, llm, max_rounds=(0, 1, 3), engine: str = "pipeline") -> None:

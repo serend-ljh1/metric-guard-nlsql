@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.graph.langgraph_graph
 ===========================
 生产版：真正的 LangGraph StateGraph 多智能体 Text-to-SQL 引擎。
@@ -22,8 +22,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional, TypedDict
 
-from sqlpa.agents.router import route_decision
-from sqlpa.eval.metrics import execution_match
+from sqlpa.agents.router import route_decision, route_with_llm_fallback
+from sqlpa.eval.metrics import execution_match, gold_match
 from sqlpa.llm.base import build_schema_text
 from sqlpa.sandbox.sql_executor import SqlSandbox
 
@@ -58,6 +58,24 @@ def _execute(sb: SqlSandbox, sql: str) -> Dict:
             "rows": r.rows, "columns": r.columns}
 
 
+def _make_gold_runner(sb: SqlSandbox, gold_sql: Optional[str]):
+    """返回一个"只执行金标准一次"的取结果函数。
+
+    条件边与 validate 节点都会判定 gold，而金标准 SQL 在一次 run_graph 内是常量：
+    缓存后避免同一段 SQL 被反复执行（多次执行还可能触发沙箱超时/抖动）。
+    """
+    cache: Dict[str, Dict] = {}
+
+    def gold_result() -> Optional[Dict]:
+        if gold_sql is None:
+            return None
+        if gold_sql not in cache:
+            cache[gold_sql] = _execute(sb, gold_sql)
+        return cache[gold_sql]
+
+    return gold_result
+
+
 def _logged(state: AgentState, agent: str, role: str, detail: str, t0: float) -> List[Dict]:
     tr = list(state.get("agent_trace", []))
     tr.append({"agent": agent, "role": role, "detail": detail,
@@ -65,14 +83,33 @@ def _logged(state: AgentState, agent: str, role: str, detail: str, t0: float) ->
     return tr
 
 
-def _is_valid(sb: SqlSandbox, llm, state: AgentState, gold_sql: Optional[str]) -> bool:
+def _check(sb: SqlSandbox, llm, state: AgentState, gold_sql: Optional[str],
+           gold_result=None) -> "tuple[bool, str]":
+    """候选 SQL 是否可判为正确，以及原因。
+
+    返回 (valid, reason)，reason ∈ {ok, exec_failed, gold_failed, mismatch, semantic}。
+
+    关键点：**金标准执行失败时必须单独识别**。修复前这里直接
+    `execution_match(gold["rows"], res["rows"])`，而金标准失败时 gold["rows"] 为空，
+    候选若也返回空结果就会被判为"一致"，把错答案算成对（系统性虚高 EX）。
+    """
     res = state["exec_result"]
     if not res.get("ok"):
-        return False
+        return False, "exec_failed"
     if gold_sql is not None:
-        gold = _execute(sb, gold_sql)
-        return execution_match(gold["rows"], res["rows"])
-    return bool(llm.validate_semantics(state["question"], res.get("sql", ""), res).get("valid", True))
+        gold = gold_result() if callable(gold_result) else _execute(sb, gold_sql)
+        if gold is None or not gold.get("ok"):
+            # 金标准自身跑不出结果 → 本题不可判定，绝不算对
+            return False, "gold_failed"
+        matched, _ = gold_match(gold["rows"], True, res["rows"])
+        return (True, "ok") if matched else (False, "mismatch")
+    valid = bool(llm.validate_semantics(state["question"], res.get("sql", ""), res).get("valid", True))
+    return valid, "semantic"
+
+
+def _is_valid(sb: SqlSandbox, llm, state: AgentState, gold_sql: Optional[str],
+              gold_result=None) -> bool:
+    return _check(sb, llm, state, gold_sql, gold_result)[0]
 
 
 def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = None,
@@ -81,13 +118,16 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
     from langgraph.graph import StateGraph, START, END
 
     schema_text = schema_text or build_schema_text(schema)
+    gold_result = _make_gold_runner(sb, gold_sql)
 
     # ---------- 节点 ----------
     def route(state: AgentState) -> Dict:
         t0 = time.time()
-        rt = route_decision(state["question"], schema)
+        rt = route_with_llm_fallback(state["question"], schema, llm=llm,
+                                     schema_text=schema_text)
         tr = _logged(state, "RouterAgent", "难度路由",
-                     f"判定={rt['decision']} (涉及 {rt['n_tables']} 表)", t0)
+                     f"判定={rt['decision']} (涉及 {rt['n_tables']} 表"
+                     + (", LLM兜底=是" if rt.get("llm_fallback") else "") + ")", t0)
         return {"route": rt["decision"], "agent_trace": tr}
 
     def plan(state: AgentState) -> Dict:
@@ -136,10 +176,18 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
 
     def validate(state: AgentState) -> Dict:
         t0 = time.time()
-        valid = _is_valid(sb, llm, state, gold_sql)
+        valid, reason = _check(sb, llm, state, gold_sql, gold_result)
+        # 金标准失败时把原因如实写进 terminate_reason，便于评测统计与排查
+        if valid:
+            term = "ok"
+        elif reason == "gold_failed":
+            term = "gold_failed"   # 本题不可判定：既非对也非模型错
+        else:
+            term = "mismatch"
         return {"final_sql": state.get("current_sql", ""), "final_valid": valid,
-                "terminate_reason": "ok" if valid else "mismatch",
-                "agent_trace": _logged(state, "ValidatorAgent", "结果校验", f"valid={valid}", t0)}
+                "terminate_reason": term,
+                "agent_trace": _logged(state, "ValidatorAgent", "结果校验",
+                                       f"valid={valid} reason={reason}", t0)}
 
     def give_up(state: AgentState) -> Dict:
         return {"final_sql": state.get("current_sql", ""), "final_valid": False,
@@ -155,8 +203,12 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
         return "rewrite"
 
     def after_execute(state: AgentState) -> str:
-        res = state["exec_result"]
-        if _is_valid(sb, llm, state, gold_sql):
+        valid, reason = _check(sb, llm, state, gold_sql, gold_result)
+        if valid:
+            return "validate"
+        # 金标准自己跑不出来 → 本题不可判定，直接进 validate 如实记录，
+        # 不要去 diagnose 白白修复（修复也救不了一个坏掉的金标准）。
+        if reason == "gold_failed":
             return "validate"
         if state.get("repairs", 0) >= max_repair_round:
             return "give_up"
@@ -241,4 +293,5 @@ def run_graph(sb: SqlSandbox, schema: Dict, llm, question: str, db_id: str,
         exec_result=out.get("exec_result", {"ok": False, "sql": "", "rows": [], "columns": []}),
         final_valid=bool(out.get("final_valid")),
         terminate_reason=out.get("terminate_reason", ""),
+        gold_failed=(out.get("terminate_reason") == "gold_failed"),
         trace=trace, agent_trace=at)

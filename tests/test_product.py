@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_product.py
 =====================
 产品化功能测试（离线、无需 API Key，CI 可复现）：
@@ -72,8 +72,8 @@ def test_chart_recommend():
 # ---------------- 4) 指标中心 CRUD ----------------
 
 @pytest.fixture
-def cfg_copy(tmp_path):
-    p = tmp_path / "business_config.yaml"
+def cfg_copy(tmpdir_clean):
+    p = tmpdir_clean / "business_config.yaml"
     shutil.copy(REAL_CFG, p)
     return p
 
@@ -110,9 +110,9 @@ def test_dimension_crud(cfg_copy):
 
 # ---------------- 5) 数据源注册中心 ----------------
 
-def test_datasource_registry(tmp_path, monkeypatch):
+def test_datasource_registry(tmpdir_clean, monkeypatch):
     from sqlpa.business import datasources as dss
-    monkeypatch.setattr(dss, "_STORE", tmp_path / "datasources.yaml")
+    monkeypatch.setattr(dss, "_STORE", tmpdir_clean / "datasources.yaml")
     spec = dss.add_datasource({"kind": "mysql", "name": "测试库", "host": "h",
                                "port": 3306, "user": "u", "password": "p",
                                "database": "d"})

@@ -30,6 +30,9 @@ eval_result*.json
 .pytest_tmp/
 .tmp/
 .tmppytest*/
+.pyt/
+._test_tmp/
+.pytest_cache/
 data/business_audit.jsonl
 data/hitl_queue.jsonl
 data/datasources.yaml

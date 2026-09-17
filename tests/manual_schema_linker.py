@@ -1,11 +1,15 @@
+import os
 import sys
-sys.path.insert(0, r'D:\ds harness\metric-guard-nlsql\src')
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 from sqlpa.data.schema_extractor import extract_from_sqlite
 from sqlpa.agents.schema_linker import link
 
 # 真实 Spider 多表库（英文题 -> 应列级裁剪）
-SPIDER = Path(r'D:\ds harness\spider')
+# 位置优先环境变量 SQLPA_SPIDER_ROOT，其次仓库内 data/spider
+SPIDER = Path(os.environ.get("SQLPA_SPIDER_ROOT") or (ROOT / "data" / "spider"))
 def spider_case(db, q):
     p = SPIDER / 'database' / db / (db + '.sqlite')
     schema = extract_from_sqlite(p, db).to_dict()
@@ -20,7 +24,7 @@ assert r1['reduced'], "英文题应列级裁剪(reduced=True)"
 assert 'Students' in r1['kept_tables']
 
 # Olist 中文业务题: 安全、不抛错,且应让相关列保留
-schema_olist = extract_from_sqlite(r'D:\ds harness\metric-guard-nlsql\data\olist\olist.db', 'olist').to_dict()
+schema_olist = extract_from_sqlite(str(ROOT / 'data' / 'olist' / 'olist.db'), 'olist').to_dict()
 r2 = link('各个品类的GMV', schema_olist)
 print(f"\n[Olist] 列: {r2['orig_cols']} -> {r2['kept_cols']} (reduced={r2['reduced']})")
 assert r2['orig_cols'] > 0 and r2['kept_tables']
