@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 0.6666666666666666,
+    "em": 0.0,
+    "avg_attempts": 1.67,
+    "avg_repairs": 0.33,
+    "avg_latency_ms": 68915.3,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 22178,
+    "prompt_tokens": 3355,
+    "completion_tokens": 18823,
+    "total_cost": 0.0057,
+    "avg_tokens": 7392.7,
+    "avg_cost": 0.0019,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 0.6666666666666666,
+        "avg_repairs": 0.3333333333333333,
+        "avg_latency_ms": 68915.3
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 18,
+      "db_id": "concert_singer",
+      "question": "What is the name and capacity for the stadium with highest average attendance?",
+      "route": "complex",
+      "final_sql": "SELECT Name, Capacity FROM stadium ORDER BY Average DESC LIMIT 1",
+      "gold_sql": "SELECT name ,  capacity FROM stadium ORDER BY average DESC LIMIT 1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 25973.3,
+      "terminate_reason": "ok",
+      "total_tokens": 2816,
+      "prompt_tokens": 513,
+      "completion_tokens": 2303,
+      "cost": 0.0007
+    },
+    {
+      "id": 21,
+      "db_id": "concert_singer",
+      "question": "How many concerts occurred in 2014 or 2015?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(*) FROM concert WHERE Year IN ('2014', '2015');",
+      "gold_sql": "SELECT count(*) FROM concert WHERE YEAR  =  2014 OR YEAR  =  2015",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 46742.8,
+      "terminate_reason": "ok",
+      "total_tokens": 4661,
+      "prompt_tokens": 598,
+      "completion_tokens": 4063,
+      "cost": 0.0012
+    },
+    {
+      "id": 36,
+      "db_id": "concert_singer",
+      "question": "What are the names of the singers and number of concerts for each person?",
+      "route": "complex",
+      "final_sql": "SELECT s.Name, COUNT(sic.concert_ID) AS concert_count FROM singer s LEFT JOIN singer_in_concert sic ON s.Singer_ID = sic.Singer_ID GROUP BY s.Singer_ID, s.Name;",
+      "gold_sql": "SELECT T2.name ,  count(*) FROM singer_in_concert AS T1 JOIN singer AS T2 ON T1.singer_id  =  T2.singer_id GROUP BY T2.singer_id",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 1,
+      "attempts": 3,
+      "latency_ms": 134029.9,
+      "terminate_reason": "max_retry",
+      "total_tokens": 14701,
+      "prompt_tokens": 2244,
+      "completion_tokens": 12457,
+      "cost": 0.0038
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 0.6666666666666666,
+    "em": 0.0,
+    "avg_attempts": 1.33,
+    "avg_repairs": 0.33,
+    "avg_latency_ms": 77626.9,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 22814,
+    "prompt_tokens": 2369,
+    "completion_tokens": 20445,
+    "total_cost": 0.006,
+    "avg_tokens": 7604.7,
+    "avg_cost": 0.002,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 0.6666666666666666,
+        "avg_repairs": 0.3333333333333333,
+        "avg_latency_ms": 77626.9
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 11,
+      "db_id": "museum_visit",
+      "question": "What is the name of the museum that had no visitor yet?",
+      "route": "complex",
+      "final_sql": "SELECT Name FROM museum WHERE Museum_ID NOT IN (SELECT Museum_ID FROM visit)",
+      "gold_sql": "SELECT name FROM museum WHERE Museum_ID NOT IN (SELECT museum_id FROM visit)",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 39938.0,
+      "terminate_reason": "ok",
+      "total_tokens": 3599,
+      "prompt_tokens": 416,
+      "completion_tokens": 3183,
+      "cost": 0.0009
+    },
+    {
+      "id": 9,
+      "db_id": "museum_visit",
+      "question": "What are the id, name and membership level of visitors who have spent the largest amount of money in total in all museum tickets?",
+      "route": "complex",
+      "final_sql": "SELECT ID, Name, Level_of_membership FROM (SELECT T1.ID, T1.Name, T1.Level_of_membership, RANK() OVER(ORDER BY SUM(T2.Total_spent) DESC) as rk FROM visitor AS T1 JOIN visit AS T2 ON T1.ID = T2.visitor_ID GROUP BY T1.ID, T1.Name, T1.Level_of_membership) WHERE rk = 1",
+      "gold_sql": "SELECT t2.visitor_id ,  t1.name ,  t1.Level_of_membership FROM visitor AS t1 JOIN visit AS t2 ON t1.id  =  t2.visitor_id GROUP BY t2.visitor_id ORDER BY sum(t2.Total_spent) DESC LIMIT 1",
+      "ex": false,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 1,
+      "attempts": 2,
+      "latency_ms": 124368.0,
+      "terminate_reason": "max_retry",
+      "total_tokens": 12797,
+      "prompt_tokens": 1437,
+      "completion_tokens": 11360,
+      "cost": 0.0034
+    },
+    {
+      "id": 17,
+      "db_id": "museum_visit",
+      "question": "How many museums were opened after 2013 or before 2008?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(Museum_ID) FROM museum WHERE Open_Year > '2013' OR Open_Year < '2008';",
+      "gold_sql": "SELECT count(*) FROM museum WHERE open_year  >  2013 OR open_year  <  2008",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 68574.7,
+      "terminate_reason": "ok",
+      "total_tokens": 6418,
+      "prompt_tokens": 516,
+      "completion_tokens": 5902,
+      "cost": 0.0017
+    }
+  ]
+}

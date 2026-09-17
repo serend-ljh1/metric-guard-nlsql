@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 40724.8,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 12253,
+    "prompt_tokens": 1348,
+    "completion_tokens": 10905,
+    "total_cost": 0.0032,
+    "avg_tokens": 4084.3,
+    "avg_cost": 0.001067,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 40724.8
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 78,
+      "db_id": "flight_2",
+      "question": "Find the name of airports which do not have any flight in and out.",
+      "route": "complex",
+      "final_sql": "SELECT AirportName FROM airports WHERE AirportCode NOT IN (SELECT SourceAirport FROM flights UNION SELECT DestAirport FROM flights)",
+      "gold_sql": "SELECT AirportName FROM Airports WHERE AirportCode NOT IN (SELECT SourceAirport FROM Flights UNION SELECT DestAirport FROM Flights)",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 47810.4,
+      "terminate_reason": "ok",
+      "total_tokens": 4775,
+      "prompt_tokens": 499,
+      "completion_tokens": 4276,
+      "cost": 0.0013
+    },
+    {
+      "id": 5,
+      "db_id": "flight_2",
+      "question": "What are the airline names and abbreviations for airlines in the USA?",
+      "route": "complex",
+      "final_sql": "SELECT Airline, Abbreviation FROM airlines WHERE Country = 'USA'",
+      "gold_sql": "SELECT Airline ,  Abbreviation FROM AIRLINES WHERE Country  =  \"USA\"",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 33771.6,
+      "terminate_reason": "ok",
+      "total_tokens": 3181,
+      "prompt_tokens": 419,
+      "completion_tokens": 2762,
+      "cost": 0.0008
+    },
+    {
+      "id": 42,
+      "db_id": "flight_2",
+      "question": "Which city has most number of arriving flights?",
+      "route": "complex",
+      "final_sql": "SELECT a.City FROM flights f JOIN airports a ON f.DestAirport = a.AirportCode GROUP BY a.City ORDER BY COUNT(f.FlightNo) DESC LIMIT 1",
+      "gold_sql": "SELECT T1.City FROM AIRPORTS AS T1 JOIN FLIGHTS AS T2 ON T1.AirportCode  =  T2.DestAirport GROUP BY T1.City ORDER BY count(*) DESC LIMIT 1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 40592.3,
+      "terminate_reason": "ok",
+      "total_tokens": 4297,
+      "prompt_tokens": 430,
+      "completion_tokens": 3867,
+      "cost": 0.0011
+    }
+  ]
+}

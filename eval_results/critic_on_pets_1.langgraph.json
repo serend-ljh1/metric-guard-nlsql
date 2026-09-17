@@ -1,0 +1,85 @@
+{
+  "summary": {
+    "n": 3,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 46460.4,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 14707,
+    "prompt_tokens": 1667,
+    "completion_tokens": 13040,
+    "total_cost": 0.004,
+    "avg_tokens": 4902.3,
+    "avg_cost": 0.001333,
+    "by_route": {
+      "complex": {
+        "n": 3,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 46460.4
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 15,
+      "db_id": "pets_1",
+      "question": "What are the students' first names who have both cats and dogs as pets?",
+      "route": "complex",
+      "final_sql": "SELECT T1.Fname FROM Student AS T1 JOIN Has_Pet AS T2 ON T1.StuID = T2.StuID JOIN Pets AS T3 ON T2.PetID = T3.PetID WHERE T3.PetType = 'cat' INTERSECT SELECT T1.Fname FROM Student AS T1 JOIN Has_Pet AS T2 ON T1.StuID = T2.StuID JOIN Pets AS T3 ON T2.PetID = T3.PetID WHERE T3.PetType = 'dog'",
+      "gold_sql": "SELECT T1.Fname FROM student AS T1 JOIN has_pet AS T2 ON T1.stuid  =  T2.stuid JOIN pets AS T3 ON T3.petid  =  T2.petid WHERE T3.pettype  =  'cat' INTERSECT SELECT T1.Fname FROM student AS T1 JOIN has_pet AS T2 ON T1.stuid  =  T2.stuid JOIN pets AS T3 ON T3.petid  =  T2.petid WHERE T3.pettype  =  'dog'",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 55490.3,
+      "terminate_reason": "ok",
+      "total_tokens": 6216,
+      "prompt_tokens": 565,
+      "completion_tokens": 5651,
+      "cost": 0.0017
+    },
+    {
+      "id": 0,
+      "db_id": "pets_1",
+      "question": "Find the number of pets whose weight is heavier than 10.",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(*) FROM Pets WHERE weight > 10",
+      "gold_sql": "SELECT count(*) FROM pets WHERE weight  >  10",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 47393.7,
+      "terminate_reason": "ok",
+      "total_tokens": 4383,
+      "prompt_tokens": 526,
+      "completion_tokens": 3857,
+      "cost": 0.0012
+    },
+    {
+      "id": 13,
+      "db_id": "pets_1",
+      "question": "What are the first names of every student who has a cat or dog as a pet?",
+      "route": "complex",
+      "final_sql": "SELECT DISTINCT Student.Fname FROM Student JOIN Has_Pet ON Student.StuID = Has_Pet.StuID JOIN Pets ON Has_Pet.PetID = Pets.PetID WHERE Pets.PetType IN ('cat', 'dog');",
+      "gold_sql": "SELECT DISTINCT T1.Fname FROM student AS T1 JOIN has_pet AS T2 ON T1.stuid  =  T2.stuid JOIN pets AS T3 ON T3.petid  =  T2.petid WHERE T3.pettype  =  'cat' OR T3.pettype  =  'dog'",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 36497.3,
+      "terminate_reason": "ok",
+      "total_tokens": 4108,
+      "prompt_tokens": 576,
+      "completion_tokens": 3532,
+      "cost": 0.0011
+    }
+  ]
+}

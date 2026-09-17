@@ -61,6 +61,14 @@ class LLMProvider(ABC):
         """重置累计用量（评测按题统计时逐题调用）。"""
         return None
 
+    def last_model(self) -> str:
+        """最近一次实际调用的模型名（默认空串：离线/Mock 后端无模型概念）。
+
+        存在的意义：模型池会静默切换模型，评测产物若不记录实际模型，
+        一旦中途切换，"绝对指标"就会变成多个模型的混合结果且无人察觉。
+        """
+        return ""
+
 
 def build_schema_text(schema: Dict) -> str:
     """把 schema 结构转成分层提示词文本，供 LLM 使用。"""

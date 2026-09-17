@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 12936.2,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 2933,
+    "prompt_tokens": 511,
+    "completion_tokens": 2422,
+    "total_cost": 0.0008,
+    "avg_tokens": 1466.5,
+    "avg_cost": 0.0004,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 12936.2
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 37,
+      "db_id": "orchestra",
+      "question": "Count the number of orchestras that have CD or DVD as their record format.",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(*) FROM orchestra WHERE Major_Record_Format IN ('CD', 'DVD')",
+      "gold_sql": "SELECT COUNT(*) FROM orchestra WHERE Major_Record_Format  =  \"CD\" OR Major_Record_Format  =  \"DVD\"",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 10393.6,
+      "terminate_reason": "ok",
+      "total_tokens": 1167,
+      "prompt_tokens": 253,
+      "completion_tokens": 914,
+      "cost": 0.0003
+    },
+    {
+      "id": 19,
+      "db_id": "orchestra",
+      "question": "What are the names of conductors as well as the corresonding orchestras that they have conducted?",
+      "route": "complex",
+      "final_sql": "SELECT c.Name, o.Orchestra FROM conductor c JOIN orchestra o ON c.Conductor_ID = o.Conductor_ID",
+      "gold_sql": "SELECT T1.Name ,  T2.Orchestra FROM conductor AS T1 JOIN orchestra AS T2 ON T1.Conductor_ID  =  T2.Conductor_ID",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 15478.8,
+      "terminate_reason": "ok",
+      "total_tokens": 1766,
+      "prompt_tokens": 258,
+      "completion_tokens": 1508,
+      "cost": 0.0005
+    }
+  ]
+}

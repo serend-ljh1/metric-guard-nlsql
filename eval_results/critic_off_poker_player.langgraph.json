@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.5,
+    "avg_attempts": 1.0,
+    "avg_repairs": 0.0,
+    "avg_latency_ms": 21401.8,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 3821,
+    "prompt_tokens": 403,
+    "completion_tokens": 3418,
+    "total_cost": 0.0011,
+    "avg_tokens": 1910.5,
+    "avg_cost": 0.00055,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.0,
+        "avg_latency_ms": 21401.8
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 38,
+      "db_id": "poker_player",
+      "question": "How many distinct nationalities are there?",
+      "route": "complex",
+      "final_sql": "SELECT COUNT(DISTINCT Nationality) FROM people;",
+      "gold_sql": "SELECT count(DISTINCT Nationality) FROM people",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 13361.3,
+      "terminate_reason": "ok",
+      "total_tokens": 1344,
+      "prompt_tokens": 164,
+      "completion_tokens": 1180,
+      "cost": 0.0004
+    },
+    {
+      "id": 8,
+      "db_id": "poker_player",
+      "question": "What is the money rank of the poker player with the highest earnings?",
+      "route": "complex",
+      "final_sql": "SELECT Money_Rank FROM poker_player ORDER BY Earnings DESC LIMIT 1",
+      "gold_sql": "SELECT Money_Rank FROM poker_player ORDER BY Earnings DESC LIMIT 1",
+      "ex": true,
+      "em": true,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 29442.3,
+      "terminate_reason": "ok",
+      "total_tokens": 2477,
+      "prompt_tokens": 239,
+      "completion_tokens": 2238,
+      "cost": 0.0007
+    }
+  ]
+}

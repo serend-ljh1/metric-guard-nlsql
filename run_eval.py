@@ -86,6 +86,10 @@ def agg_summaries(ss) -> EvalSummary | None:
     tot_prompt = sum(s.prompt_tokens for s in ss)
     tot_completion = sum(s.completion_tokens for s in ss)
     tot_cost = sum(s.total_cost for s in ss)
+    models: dict = {}
+    for s in ss:
+        for m, c in (s.models or {}).items():
+            models[m] = models.get(m, 0) + c
     return EvalSummary(n=n, ex=ex, em=em, avg_attempts=attempts, avg_repairs=repairs,
                        avg_latency_ms=lat, gold_failed=n_gold_failed,
                        gold_failed_rate=round(n_gold_failed / n, 4) if n else 0.0,
@@ -94,6 +98,7 @@ def agg_summaries(ss) -> EvalSummary | None:
                        total_cost=round(tot_cost, 6),
                        avg_tokens=round(tot_tok / n, 1),
                        avg_cost=round(tot_cost / n, 6),
+                       models=models,
                        by_route=by_route)
 
 

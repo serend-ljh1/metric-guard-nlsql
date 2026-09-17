@@ -1,0 +1,66 @@
+{
+  "summary": {
+    "n": 2,
+    "ex": 1.0,
+    "em": 0.0,
+    "avg_attempts": 1.5,
+    "avg_repairs": 0.5,
+    "avg_latency_ms": 68272.4,
+    "gold_failed": 0,
+    "gold_failed_rate": 0.0,
+    "total_tokens": 14472,
+    "prompt_tokens": 2857,
+    "completion_tokens": 11615,
+    "total_cost": 0.0037,
+    "avg_tokens": 7236.0,
+    "avg_cost": 0.00185,
+    "by_route": {
+      "complex": {
+        "n": 2,
+        "ex": 1.0,
+        "avg_repairs": 0.5,
+        "avg_latency_ms": 68272.4
+      }
+    }
+  },
+  "results": [
+    {
+      "id": 28,
+      "db_id": "student_transcripts_tracking",
+      "question": "Who is enrolled in a Bachelor degree program? List the first name, middle name, last name.",
+      "route": "complex",
+      "final_sql": "SELECT DISTINCT s.first_name, s.middle_name, s.last_name FROM Students s JOIN Student_Enrolment se ON s.student_id = se.student_id JOIN Degree_Programs dp ON se.degree_program_id = dp.degree_program_id WHERE dp.degree_summary_name LIKE '%Bachelor%'",
+      "gold_sql": "SELECT DISTINCT T1.first_name ,  T1.middle_name ,  T1.last_name FROM Students AS T1 JOIN Student_Enrolment AS T2 ON T1.student_id  =  T2.student_id JOIN Degree_Programs AS T3 ON T2.degree_program_id  =  T3.degree_program_id WHERE T3.degree_summary_name  =  'Bachelor'",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 0,
+      "attempts": 1,
+      "latency_ms": 37620.1,
+      "terminate_reason": "ok",
+      "total_tokens": 3843,
+      "prompt_tokens": 755,
+      "completion_tokens": 3088,
+      "cost": 0.001
+    },
+    {
+      "id": 64,
+      "db_id": "student_transcripts_tracking",
+      "question": "How many times at most can a course enrollment result show in different transcripts? Also show the course enrollment id.",
+      "route": "complex",
+      "final_sql": "SELECT count(transcript_id) , student_course_id FROM Transcript_Contents GROUP BY student_course_id ORDER BY count(transcript_id) DESC LIMIT 1",
+      "gold_sql": "SELECT count(*) ,  student_course_id FROM Transcript_Contents GROUP BY student_course_id ORDER BY count(*) DESC LIMIT 1",
+      "ex": true,
+      "em": false,
+      "gold_failed": false,
+      "repairs": 1,
+      "attempts": 2,
+      "latency_ms": 98924.7,
+      "terminate_reason": "ok",
+      "total_tokens": 10629,
+      "prompt_tokens": 2102,
+      "completion_tokens": 8527,
+      "cost": 0.0027
+    }
+  ]
+}

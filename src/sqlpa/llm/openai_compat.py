@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.llm.openai_compat
 =======================
 针对 OpenAI 兼容接口的真实 LLM 客户端（DeepSeek / OpenAI / 任何兼容端点）。
@@ -97,6 +97,10 @@ class OpenAICompatLLM(LLMProvider):
 
     def stats(self) -> Dict:
         return {"usage": dict(self.usage), "cost": round(self.cost, 4)}
+
+    def last_model(self) -> str:
+        """最近一次实际调用的模型名（用于发现模型池中途切换）。"""
+        return str(getattr(self, "last_used_model", "") or "")
 
     def reset_stats(self) -> None:
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

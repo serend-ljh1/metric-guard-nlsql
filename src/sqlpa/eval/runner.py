@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -43,6 +44,7 @@ class QResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost: float = 0.0            # 该题的估算成本
+    model: str = ""              # 该题实际使用的模型（模型池切换后可据此发现混合）
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -64,6 +66,7 @@ class EvalSummary:
     total_cost: float = 0.0       # 估算成本（按 LLM_INPUT/OUTPUT_PRICE_PER_1M 计价）
     avg_tokens: float = 0.0       # 平均每题 token
     avg_cost: float = 0.0         # 平均每题成本
+    models: Dict[str, int] = field(default_factory=dict)  # {模型名: 题数}，用于发现池切换
     by_route: Dict[str, Dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -112,6 +115,11 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
         q_prompt = int(q_usage.get("prompt_tokens", 0) or 0)
         q_completion = int(q_usage.get("completion_tokens", 0) or 0)
         q_cost = float(st.get("cost", 0.0) or 0.0)
+        # 记录实际使用的模型：池子静默切换时，产物必须能看出来
+        try:
+            q_model = str(llm.last_model() or "")
+        except Exception:  # noqa: BLE001
+            q_model = ""
         gold = sb.execute(q.gold_sql)
         pred = sb.execute(r.final_sql)
         # 金标准执行失败时**不能**用"空 vs 空"判为一致（修复前会系统性虚高 EX）。
@@ -128,7 +136,8 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
                             repairs=r.repairs, attempts=r.attempts,
                             latency_ms=round(lat, 1), terminate_reason=r.terminate_reason,
                             total_tokens=q_tokens, prompt_tokens=q_prompt,
-                            completion_tokens=q_completion, cost=round(q_cost, 6)))
+                            completion_tokens=q_completion, cost=round(q_cost, 6),
+                            model=q_model))
         # 实时进度（每处理一条打一行，避免"卡死"的错觉）
         ensure_utf8_console()   # Windows GBK 控制台无法编码 ✓/✗，会直接抛错
         flag = "金标准失败" if gold_failed else ("✓" if ex else "✗")
@@ -164,6 +173,7 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
         total_cost=round(total_cost, 6),
         avg_tokens=round(mean([r.total_tokens for r in qres]), 1),
         avg_cost=round(mean([r.cost for r in qres]), 6),
+        models=dict(Counter(r.model for r in qres if r.model)),
         by_route=by_route)
 
     if save_path:
@@ -188,6 +198,9 @@ def report(summary: EvalSummary) -> str:
              f"，平均 {summary.avg_tokens:.0f}/题",
              f"成本(估算): 合计 ¥{summary.total_cost:.4f}，平均 ¥{summary.avg_cost:.5f}/题"
              "（计价口径见 LLM_INPUT/OUTPUT_PRICE_PER_1M）",
+             f"实际模型: {summary.models or '未记录'}"
+             + ("  ⚠️ 出现多个模型 → 绝对指标不可归因到单一模型"
+                if len(summary.models) > 1 else ""),
              f"平均尝试次数: {summary.avg_attempts}",
              f"平均修复轮次: {summary.avg_repairs}",
              f"平均延迟: {summary.avg_latency_ms} ms"]
