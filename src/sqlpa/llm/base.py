@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.llm.base
 ==============
 LLM 抽象层：定义各 Agents 需要的最小接口，便于"真实 API / 离线 Mock / 其他后端"可插拔。
@@ -48,6 +48,18 @@ class LLMProvider(ABC):
     def review_sql(self, question: str, sql: str, schema_text: str,
                    exec_result: Optional[Dict] = None) -> Dict:
         """评审 Agent：用独立标准审核 SQL，返回 {"pass":bool,"issues":[...],"feedback":str}。"""
+
+    # ---- 用量/成本统计（可选能力，默认零成本实现）----
+    # 真实客户端（OpenAICompatLLM）会覆盖这两个方法，累计 token 与估算成本；
+    # Mock/离线后端沿用默认值，保证评测代码无需特判。
+    def stats(self) -> Dict:
+        """返回累计用量与成本：{"usage": {...}, "cost": float}。"""
+        return {"usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "cost": 0.0}
+
+    def reset_stats(self) -> None:
+        """重置累计用量（评测按题统计时逐题调用）。"""
+        return None
 
 
 def build_schema_text(schema: Dict) -> str:

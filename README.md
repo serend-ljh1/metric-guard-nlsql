@@ -260,7 +260,8 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 
 - **分层抽样**：`--sample N --seed 42`，跨库轮询以覆盖多个 schema（`run_eval.py:188-203`）。
 - **指标**：EX（执行结果比对）与 EM（SQL 逐字匹配），按 simple/complex 分档统计（`src/sqlpa/eval/metrics.py`、`runner.py:97-114`）。
-- **消融开关**：自愈深度 L0/L1/L3（`--ablation`）、Writer↔Critic（`--critic-ablation`）、Schema-Linker（`--schema-link-ablation`）。
+- **Token / 成本**：真实客户端已累计 `usage` 与按 `LLM_INPUT/OUTPUT_PRICE_PER_1M` 估算的成本，`runner` 逐题读取并汇总（`total/avg tokens`、`total/avg cost`），随报告一起输出——此前这些数据**已采集但从未进报告**。
+- **消融开关**：自愈深度 L0/L1/L3（`--ablation --ablation-rounds 0,1,3`）、Writer↔Critic（`--critic-ablation`）、Schema-Linker（`--schema-link-ablation`）。
 - **逐题落盘**：**每条实验臂**都会写出逐题 JSON（含每题 SQL / 路由 / 修复轮次 / `gold_failed` / 终止原因），默认目录 `eval_results/`（可用 `--out-dir` 指定，已 gitignore）。修复前只有主跑路径落盘、且目录不存在会直接崩 —— "结果无法复核"在方法层面就是必然的。
 
 ### ⚠️ EX 口径修复（本轮，重要）
@@ -290,10 +291,33 @@ py run_eval.py --dataset spider --split dev --sample 50  --seed 42 --critic-abla
 
 > **运行引擎**：默认 `--engine langgraph`（`src/sqlpa/graph/langgraph_graph.py`，含条件边 / 自愈闭环 / Writer↔Critic / 护栏）。`langgraph` 未安装时自动回退到无依赖的 `pipeline.py`。注意两者**并非完全等价**：LangGraph 有 `PlannerAgent` 并把 `plan` 传给 Writer，而 pipeline 恒传 `plan=""`；两者的评审轮次上限也不同（`pipeline.py:162` vs `langgraph_graph.py:153`）。因此**不能假设两者结果一致**，`--engine` 需在报告中注明。
 
+## 业务语义层评测（离线、确定性、无需 API Key）
+
+> 这一节回答的是"**语义层 + 治理**到底管不管用"——即本项目自称的核心，而不是 SQL 生成准确率。
+> 跑法：`python evaluation/eval_business.py`，逐例明细落在 `evaluation/reports/business.json`。
+
+| 指标 | 结果 | 说明 |
+|---|---|---|
+| 口径内命中率 | **100% (8/8)** | 配置内的"指标+维度"组合是否被正确识别（`llm=None`，纯确定性关键词链路） |
+| 指标识别准确率 | **100% (8/8)** | 命中时 `metric_key` 与标注一致 |
+| 维度识别准确率 | **100% (8/8)** | 识别出的维度集合与标注一致 |
+| 口径内执行成功率 | **100% (8/8)** | 口径内问题经确定性组装器真的跑出结果（Olist 同结构样本库） |
+| 口径外拦截率 | **100% (4/4)** | 无对应指标 / 维度组合不受支持时**拒绝**而非硬生成 |
+| 拒绝原因可读率 | **100% (4/4)** | 拒绝时给出可操作提示（业务人员能据此调整问法） |
+| **公式防篡改拦截率** | **75% (3/4)** | ⚠️ 见下：**子串包含判定的真实局限** |
+| 权限拦截率 | **100% (5/5)** | 限定列 / **非限定列** / **别名改写** 三种越权写法全部拦下；允许列与 admin 不误拦 |
+| PII 掩码覆盖率 | **100% (2/2)** | 含 `AS 别名` 改写场景（历史绕过点） |
+| 审计覆盖率 | **100% (12/12)** | 每次取数都写入审计留痕 |
+
+> **口径说明（请连同数字一起引用）**：
+> - 这是**离线确定性验证**（`llm=None` + Olist 同结构小样本库），不是 LLM 准确率；样本为人工设计的 12 条标注用例，规模小，**不代表真实流量的分布**。
+> - **公式防篡改 75% 是真实的已知缺口**，不是笔误：`verify_formula` 是"表达式子串包含"判定，只要保留 `SUM(oi.price)` 再乘系数（如 `SUM(oi.price)*0.5`）就能绕过；而"换成别的口径""删掉公式写成空壳"都能拦住。该项已由 `tests/test_business_eval.py` 的 xfail 用例锁定，修复（改为表达式结构校验）后会自动转为通过。
+> - 配置里 `sensitive_columns` 还列了 `customer_phone`，但 Olist 的 `customers` 表**没有 phone 列**，该条目在当前数据下不可达；权限/掩码用例因此改用真实存在的 `customer_zip_code_prefix`。
+
 ## 测试与 CI
 
 ```bash
-pytest tests -q    # 29 项离线测试（未安装 langgraph 时其中 1 项 skip）：沙箱安全/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API
+pytest tests -q    # 88 项离线测试（未安装 langgraph 时其中 1 项 skip）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/EX口径/权限与掩码/路由兜底/业务语义层
 ```
 
 - **无需 API Key、无需外部数据**（内置迷你库 + 同结构样本库），本地与 CI 行为一致。
@@ -315,4 +339,4 @@ pytest tests -q    # 29 项离线测试（未安装 langgraph 时其中 1 项 sk
 
 - **EX (Execution Accuracy)**：执行结果与金标准一致即判对，忽略写法差异（最贴合业务价值）。**金标准自身执行失败的题不计为正确**，并在汇总中单独报告 `gold_failed` 数量。
 - **EM (Exact Match)**：与金标准 SQL 逐字匹配（较严，参考用）。
-- **平均修复轮次 / 端到端延迟 / Token 消耗**：工程性能指标。
+- **平均修复轮次 / 端到端延迟 / Token 消耗 / 估算成本**：工程性能指标，随逐题产物一起输出。

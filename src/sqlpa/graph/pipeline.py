@@ -202,7 +202,10 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
             break
         repairs += 1
         t0 = time.time()
-        diag = llm.diagnose_error(sql, exec_res.get("error", "result_mismatch"), schema_text)
+        # error 可能是 None（例如"结果不匹配"但执行本身没报错），而 LLMProvider
+        # 约定 error 为 str —— 归一化后再传，否则实现里对 error 切片会 TypeError。
+        err = exec_res.get("error") or exec_res.get("reason") or "result_mismatch"
+        diag = llm.diagnose_error(sql, str(err), schema_text)
         _trace(agent_trace, "DiagnoseAgent", "报错诊断",
                (diag or "")[:45], t0)
         trace.append(f"repair{repairs}: {diag}")

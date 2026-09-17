@@ -79,9 +79,21 @@ def agg_summaries(ss) -> EvalSummary | None:
                            "avg_repairs": sum(x["avg_repairs"] * x["n"] for x in subs) / nr,
                            "avg_latency_ms": sum(x["avg_latency_ms"] * x["n"] for x in subs) / nr}
     n_gold_failed = sum(s.gold_failed for s in ss)
+    # token / 成本是"总量"字段，跨库合并要累加（不是加权平均），
+    # 再据此算出加权后的平均值。漏掉这些字段会让 `run_eval` 的臂汇总
+    # 丢失 token/成本（README 承诺的工程指标）。
+    tot_tok = sum(s.total_tokens for s in ss)
+    tot_prompt = sum(s.prompt_tokens for s in ss)
+    tot_completion = sum(s.completion_tokens for s in ss)
+    tot_cost = sum(s.total_cost for s in ss)
     return EvalSummary(n=n, ex=ex, em=em, avg_attempts=attempts, avg_repairs=repairs,
                        avg_latency_ms=lat, gold_failed=n_gold_failed,
                        gold_failed_rate=round(n_gold_failed / n, 4) if n else 0.0,
+                       total_tokens=tot_tok, prompt_tokens=tot_prompt,
+                       completion_tokens=tot_completion,
+                       total_cost=round(tot_cost, 6),
+                       avg_tokens=round(tot_tok / n, 1),
+                       avg_cost=round(tot_cost / n, 6),
                        by_route=by_route)
 
 
@@ -121,7 +133,8 @@ def run_ablation_multi(db_bms, llm, max_rounds=(0, 1, 3), engine: str = "pipelin
         if ag:
             line = (f"  max_repair={lvl}: EX={ag.ex:.4f} EM={ag.em:.4f} "
                     f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms"
-                    f" gold失败={ag.gold_failed}")
+                    f" gold失败={ag.gold_failed}"
+                    f" tok={ag.avg_tokens:.0f}/题 成本=¥{ag.avg_cost:.5f}/题")
             for r, v in ag.by_route.items():
                 line += f" | {r}:EX={v['ex']:.4f}(n={v['n']})"
             print(line)
@@ -141,7 +154,8 @@ def run_critic_ablation(db_bms, llm, critic_only: bool = False, engine: str = "p
         if ag:
             line = (f"  {label}: EX={ag.ex:.4f} EM={ag.em:.4f} "
                     f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms"
-                    f" gold失败={ag.gold_failed}")
+                    f" gold失败={ag.gold_failed}"
+                    f" tok={ag.avg_tokens:.0f}/题 成本=¥{ag.avg_cost:.5f}/题")
             for r, v in ag.by_route.items():
                 line += f" | {r}:EX={v['ex']:.4f}(n={v['n']})"
             print(line)
@@ -157,8 +171,8 @@ def run_baseline(db_bms, llm, ref=None, engine: str = "pipeline",
                           max_repair_round=1, use_critic=False)
     b, o = agg_summaries(b_ss), agg_summaries(o_ss)
     if b and o:
-        print(f"  单次直出 zero-shot(无自愈): EX={b.ex:.4f} (gold失败={b.gold_failed})")
-        print(f"  完整引擎(自愈L1):          EX={o.ex:.4f} (gold失败={o.gold_failed})")
+        print(f"  单次直出 zero-shot(无自愈): EX={b.ex:.4f} (gold失败={b.gold_failed}) tok={b.avg_tokens:.0f}/题 成本=¥{b.avg_cost:.5f}/题")
+        print(f"  完整引擎(自愈L1):          EX={o.ex:.4f} (gold失败={o.gold_failed}) tok={o.avg_tokens:.0f}/题 成本=¥{o.avg_cost:.5f}/题")
         print(f"  提升: {(o.ex - b.ex) * 100:+.1f} pp")
         if ref is not None:
             print(f"  对标公开 Spider-dev 基线 {ref:.3f}: 相对 {(o.ex - ref) * 100:+.1f} pp")
@@ -176,7 +190,8 @@ def run_schema_link_ablation(db_bms, llm, engine: str = "pipeline",
         if ag:
             print(f"  {label}: EX={ag.ex:.4f} EM={ag.em:.4f} "
                   f"修复={ag.avg_repairs:.2f} 延迟={ag.avg_latency_ms:.0f}ms"
-                  f" gold失败={ag.gold_failed}")
+                  f" gold失败={ag.gold_failed}"
+                    f" tok={ag.avg_tokens:.0f}/题 成本=¥{ag.avg_cost:.5f}/题")
 
 
 def main() -> int:

@@ -37,7 +37,9 @@ class MockLLM(LLMProvider):
         return self.answer_key.get(q, "SELECT 1")
 
     def diagnose_error(self, sql: str, error: str, schema_text: str) -> str:
-        return f"[mock-diagnose] 疑似 {error[:80]}; 建议修正列名/别名后重试"
+        # 防御：调用方可能传 None（历史上 pipeline/langgraph 都踩过这个坑）
+        error = error or "result_mismatch"
+        return f"[mock-diagnose] 疑似 {str(error)[:80]}; 建议修正列名/别名后重试"
 
     def validate_semantics(self, question: str, sql: str,
                            exec_result: Dict) -> Dict:

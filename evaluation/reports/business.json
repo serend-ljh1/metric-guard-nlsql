@@ -1,0 +1,379 @@
+{
+  "db": "D:\\ds harness\\metric-guard-nlsql\\data\\olist_sample\\sample.db",
+  "n_cases": 12,
+  "in_scope_hit_rate": 1.0,
+  "metric_accuracy": 1.0,
+  "dims_accuracy": 1.0,
+  "in_scope_exec_rate": 1.0,
+  "reject_accuracy": 1.0,
+  "reject_readability": 1.0,
+  "guard_block_rate": 0.75,
+  "permission_block_rate": 1.0,
+  "pii_mask_rate": 1.0,
+  "audit_coverage": 1.0,
+  "counts": {
+    "in": 8,
+    "in_hit": 8,
+    "reject": 4,
+    "reject_ok": 4,
+    "guard": 4,
+    "guard_ok": 3,
+    "perm": 5,
+    "perm_ok": 5,
+    "mask": 2,
+    "mask_ok": 2,
+    "audited": 12
+  },
+  "details": [
+    {
+      "q": "各个品类的GMV",
+      "expect": "in",
+      "note": "gmv 支持 category",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 2,
+      "reject_reasons": [],
+      "latency_ms": 12.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的GMV",
+      "expect": "in",
+      "note": "gmv 支持 state",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 3,
+      "reject_reasons": [],
+      "latency_ms": 6.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "订单数是多少",
+      "expect": "in",
+      "note": "order_count 无维度",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "order_count",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 6.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的订单数",
+      "expect": "in",
+      "note": "order_count 支持 category",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "order_count",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 2,
+      "reject_reasons": [],
+      "latency_ms": 6.5,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "客单价是多少",
+      "expect": "in",
+      "note": "aov 无维度",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "aov",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 7.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的取消率",
+      "expect": "in",
+      "note": "取消率 支持 state",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "cancellation_rate",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 3,
+      "reject_reasons": [],
+      "latency_ms": 6.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "平均评分",
+      "expect": "in",
+      "note": "avg_review 无维度",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "avg_review",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 7.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "客单价按品类",
+      "expect": "reject",
+      "note": "aov.support_dims 只有 dt/state，不含 category",
+      "matched": false,
+      "ok": false,
+      "mode": "free",
+      "metric": "",
+      "dims": [],
+      "reject": "客单价 不支持按「品类」统计（离线模式无 LLM，不支持自由查询）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 4.1,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "超时送达率按品类",
+      "expect": "reject",
+      "note": "late_delivery_rate 不支持 category",
+      "matched": false,
+      "ok": false,
+      "mode": "free",
+      "metric": "",
+      "dims": [],
+      "reject": "超时送达率 不支持按「品类」统计（离线模式无 LLM，不支持自由查询）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 4.0,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "平均运费是多少",
+      "expect": "reject",
+      "note": "配置里没有运费指标",
+      "matched": false,
+      "ok": false,
+      "mode": "free",
+      "metric": "",
+      "dims": [],
+      "reject": "未识别到业务指标(支持: gmv,order_count,aov,cancellation_rate,late_delivery_rate,avg_review)（离线模式无 LLM，不支持自由查询）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 4.0,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "今天天气怎么样",
+      "expect": "reject",
+      "note": "完全无关问题",
+      "matched": false,
+      "ok": false,
+      "mode": "free",
+      "metric": "",
+      "dims": [],
+      "reject": "未识别到业务指标(支持: gmv,order_count,aov,cancellation_rate,late_delivery_rate,avg_review)（离线模式无 LLM，不支持自由查询）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 5.0,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "最近30天的GMV",
+      "expect": "in",
+      "note": "时间范围过滤",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 6.4,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    }
+  ],
+  "guard_details": [
+    {
+      "sql": "SELECT SUM(oi.price) FROM orders o JOIN order_items oi ON o.order_id=o",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "原样使用配置公式 → 应通过"
+    },
+    {
+      "sql": "SELECT SUM(oi.price)*0.5 FROM orders o JOIN order_items oi ON o.order_",
+      "should_block": true,
+      "blocked": false,
+      "issues": [],
+      "note": "私自改系数（子串仍在，预期**拦不住**——已知局限）"
+    },
+    {
+      "sql": "SELECT COUNT(*) FROM orders",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成的SQL未按配置使用指标表达式「SUM(oi.price)」，已拦截(防口径篡改)"
+      ],
+      "note": "换成完全不同的口径 → 应拦截"
+    },
+    {
+      "sql": "SELECT 1 FROM orders WHERE 1=0",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成的SQL未按配置使用指标表达式「SUM(oi.price)」，已拦截(防口径篡改)"
+      ],
+      "note": "空壳 SQL（公式被删）→ 应拦截"
+    }
+  ],
+  "permission_details": [
+    {
+      "sql": "SELECT customer_zip_code_prefix FROM customers",
+      "role": "analyst",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "角色 analyst 无权访问字段 customers.customer_zip_code_prefix"
+      ],
+      "note": "非限定敏感列（历史绕过点）"
+    },
+    {
+      "sql": "SELECT c.customer_zip_code_prefix FROM customers c",
+      "role": "analyst",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "角色 analyst 无权访问字段 customers.customer_zip_code_prefix"
+      ],
+      "note": "限定敏感列"
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix AS zip FROM customers",
+      "role": "analyst",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "角色 analyst 无权访问字段 customers.customer_zip_code_prefix"
+      ],
+      "note": "别名改写敏感列"
+    },
+    {
+      "sql": "SELECT customer_city FROM customers",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "允许列不应被拦"
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix FROM customers",
+      "role": "admin",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "admin 全放行"
+    }
+  ],
+  "mask_details": [
+    {
+      "sql": "SELECT customer_zip_code_prefix FROM customers",
+      "note": "原列名",
+      "raw": [
+        [
+          "01000"
+        ],
+        [
+          "20000"
+        ],
+        [
+          "30000"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix AS zip FROM customers",
+      "note": "AS 别名",
+      "raw": [
+        [
+          "01000"
+        ],
+        [
+          "20000"
+        ],
+        [
+          "30000"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    }
+  ]
+}

@@ -39,6 +39,10 @@ class QResult:
     attempts: int
     latency_ms: float
     terminate_reason: str
+    total_tokens: int = 0        # 该题消耗的 token（真实 LLM 才有值）
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float = 0.0            # 该题的估算成本
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -54,6 +58,12 @@ class EvalSummary:
     avg_latency_ms: float
     gold_failed: int = 0          # 金标准在本沙箱执行失败的题数（这些题不可判定，已计为错）
     gold_failed_rate: float = 0.0
+    total_tokens: int = 0         # 全部题目累计 token
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_cost: float = 0.0       # 估算成本（按 LLM_INPUT/OUTPUT_PRICE_PER_1M 计价）
+    avg_tokens: float = 0.0       # 平均每题 token
+    avg_cost: float = 0.0         # 平均每题成本
     by_route: Dict[str, Dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -67,6 +77,12 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
     schema = extract_from_sqlite(benchmark.db_path, benchmark.db_id).to_dict()
     qres: List[QResult] = []
     for q in benchmark.questions:
+        # 逐题统计 token/成本：先归零，跑完读取增量。
+        # （真实客户端在用；Mock 走基类默认实现，恒为 0，不会报错）
+        try:
+            llm.reset_stats()
+        except Exception:  # noqa: BLE001
+            pass
         t0 = time.time()
         if engine == "langgraph":
             try:
@@ -86,6 +102,16 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
                              gold_sql=q.gold_sql, max_repair_round=max_repair_round,
                              use_critic=use_critic, use_schema_link=use_schema_link)
         lat = (time.time() - t0) * 1000.0
+        # 读取本题消耗（真实客户端会给出 token 与估算成本；Mock 恒为 0）
+        try:
+            st = llm.stats() or {}
+        except Exception:  # noqa: BLE001
+            st = {}
+        q_usage = st.get("usage") or {}
+        q_tokens = int(q_usage.get("total_tokens", 0) or 0)
+        q_prompt = int(q_usage.get("prompt_tokens", 0) or 0)
+        q_completion = int(q_usage.get("completion_tokens", 0) or 0)
+        q_cost = float(st.get("cost", 0.0) or 0.0)
         gold = sb.execute(q.gold_sql)
         pred = sb.execute(r.final_sql)
         # 金标准执行失败时**不能**用"空 vs 空"判为一致（修复前会系统性虚高 EX）。
@@ -100,13 +126,15 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
                             route=r.route, final_sql=r.final_sql, gold_sql=q.gold_sql,
                             ex=ex, em=em, gold_failed=gold_failed,
                             repairs=r.repairs, attempts=r.attempts,
-                            latency_ms=round(lat, 1), terminate_reason=r.terminate_reason))
+                            latency_ms=round(lat, 1), terminate_reason=r.terminate_reason,
+                            total_tokens=q_tokens, prompt_tokens=q_prompt,
+                            completion_tokens=q_completion, cost=round(q_cost, 6)))
         # 实时进度（每处理一条打一行，避免"卡死"的错觉）
         ensure_utf8_console()   # Windows GBK 控制台无法编码 ✓/✗，会直接抛错
         flag = "金标准失败" if gold_failed else ("✓" if ex else "✗")
         print(f"  [{len(qres)}/{len(benchmark.questions)}] "
               f"{flag} route={r.route} repairs={r.repairs} "
-              f"{r.terminate_reason} | {q.question[:40]}")
+              f"tok={q_tokens} {r.terminate_reason} | {q.question[:40]}")
 
     by_route: Dict[str, Dict] = {}
     for route in ("simple", "complex"):
@@ -120,6 +148,8 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
             }
 
     n_gold_failed = sum(1 for r in qres if r.gold_failed)
+    total_tokens = sum(r.total_tokens for r in qres)
+    total_cost = sum(r.cost for r in qres)
     summary = EvalSummary(
         n=len(qres), ex=accuracy([r.ex for r in qres]),
         em=accuracy([r.em for r in qres]),
@@ -128,6 +158,12 @@ def run_benchmark(benchmark, llm: LLMProvider, max_repair_round: int = 3,
         avg_latency_ms=round(mean([r.latency_ms for r in qres]), 1),
         gold_failed=n_gold_failed,
         gold_failed_rate=round(n_gold_failed / len(qres), 4) if qres else 0.0,
+        total_tokens=total_tokens,
+        prompt_tokens=sum(r.prompt_tokens for r in qres),
+        completion_tokens=sum(r.completion_tokens for r in qres),
+        total_cost=round(total_cost, 6),
+        avg_tokens=round(mean([r.total_tokens for r in qres]), 1),
+        avg_cost=round(mean([r.cost for r in qres]), 6),
         by_route=by_route)
 
     if save_path:
@@ -147,6 +183,11 @@ def report(summary: EvalSummary) -> str:
              f"EM (Exact Match): {summary.em:.4f}",
              f"金标准执行失败: {summary.gold_failed} ({summary.gold_failed_rate:.2%})"
              " ← 这些题不可判定，已计为错",
+             f"Token: 合计 {summary.total_tokens} "
+             f"(prompt {summary.prompt_tokens} / completion {summary.completion_tokens})"
+             f"，平均 {summary.avg_tokens:.0f}/题",
+             f"成本(估算): 合计 ¥{summary.total_cost:.4f}，平均 ¥{summary.avg_cost:.5f}/题"
+             "（计价口径见 LLM_INPUT/OUTPUT_PRICE_PER_1M）",
              f"平均尝试次数: {summary.avg_attempts}",
              f"平均修复轮次: {summary.avg_repairs}",
              f"平均延迟: {summary.avg_latency_ms} ms"]
