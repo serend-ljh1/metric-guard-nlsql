@@ -141,15 +141,26 @@ def run_ablation_multi(db_bms, llm, max_rounds=(0, 1, 3), engine: str = "pipelin
 
 
 def run_critic_ablation(db_bms, llm, critic_only: bool = False, engine: str = "pipeline",
-                        out_dir: Path | None = None) -> None:
-    """多agent协作消融：同一批样本上, 单Writer vs Writer+Critic 的 EX 对比(含简单/复杂分档)。"""
+                        out_dir: Path | None = None,
+                        max_repair_round: int | None = None) -> None:
+    """多agent协作消融：同一批样本上, 单Writer vs Writer+Critic 的 EX 对比(含简单/复杂分档)。
+
+    max_repair_round: 两条臂共用的自愈轮次预算。
+      ⚠️ 默认（None → settings.yaml 的 3）下，'单Writer' 臂与 `--ablation` 的 L3 臂
+      是**同一配置**，等于重复付费；而且 3 轮修复会掩盖评审者的作用。
+      做"评审者到底有没有用"这个实验时，建议显式传 `--critic-max-repair 1`
+      （本轮自愈基本不生效，评审者的影响才可辨认）。两条臂的修复预算保持一致，
+      因此对比仍是公平的。
+    """
+    budget = "默认(settings.yaml)" if max_repair_round is None else str(max_repair_round)
     print("\n=== 多Agent协作消融: 单Writer vs Writer+Critic ===")
-    print("  (真实 LLM 才有效果; 关键看 complex 的差距)")
+    print(f"  (真实 LLM 才有效果; 关键看 complex 的差距; 自愈预算={budget})")
     arms = [("Writer+Critic", True)] if critic_only else [("单Writer(无Critic)", False), ("Writer+Critic", True)]
+    kw = {} if max_repair_round is None else {"max_repair_round": max_repair_round}
     for label, use_critic in arms:
         ss = _arm_summaries(db_bms, llm, out_dir,
                             ("critic_on" if use_critic else "critic_off"), engine,
-                            use_critic=use_critic)
+                            use_critic=use_critic, **kw)
         ag = agg_summaries(ss)
         if ag:
             line = (f"  {label}: EX={ag.ex:.4f} EM={ag.em:.4f} "
@@ -208,6 +219,10 @@ def main() -> int:
                     help="多agent协作消融: 单Writer vs Writer+Critic 的EX对比")
     ap.add_argument("--critic-only", action="store_true",
                     help="只跑 Writer+Critic 臂(补另一半,省时)")
+    ap.add_argument("--critic-max-repair", type=int, default=None,
+                    help="评审者消融两条臂共用的自愈预算。默认读 settings.yaml(3)——"
+                         "但那样'单Writer'臂与 --ablation 的 L3 同配置(重复付费)，"
+                         "且 3 轮修复会掩盖评审者作用。建议传 1 做该实验。")
     ap.add_argument("--out-dir", default=None,
                     help="各臂逐题 JSON 输出目录（默认 eval_results/，已 gitignore）")
     ap.add_argument("--baseline", action="store_true",
@@ -333,7 +348,8 @@ def main() -> int:
         run_ablation_multi(db_bms, llm, max_rounds=rounds, engine=args.engine, out_dir=out_dir)
     if args.critic_ablation and db_bms:
         run_critic_ablation(db_bms, llm, critic_only=args.critic_only,
-                            engine=args.engine, out_dir=out_dir)
+                            engine=args.engine, out_dir=out_dir,
+                            max_repair_round=args.critic_max_repair)
     if args.baseline and db_bms:
         run_baseline(db_bms, llm, args.ref, engine=args.engine, out_dir=out_dir)
     if args.schema_link_ablation and db_bms:
