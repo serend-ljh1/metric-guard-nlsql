@@ -176,6 +176,105 @@ def _deterministic_summary(base: str, top_lines: List[str]) -> str:
     return base + "主要来自：\n" + "\n".join(top_lines)
 
 
+# ---------------------------------------------------------------- 多轮下钻
+
+def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
+          current_spec: str, path: List[Dict], next_dims: Optional[List[str]] = None,
+          previous_spec: Optional[str] = None, threshold_pct: float = 0.05) -> Dict:
+    """**逐层下钻**：沿某个维度值继续拆解，回答"为什么这个州跌了"。
+
+    真实分析是一条链，而不是单点：
+        GMV 跌了 → 主因是州 SP（占 52%）
+        → 那 SP 为什么跌？按品类拆 → 某品类占 68%
+        → 是单量少了还是客单价低了？按乘法因子拆
+
+    Args:
+        path: 已经下钻的路径，形如 [{"dim":"state","value":"SP"}]。
+              每层都会变成一个过滤条件叠加到查询上。
+        next_dims: 本层要拆的维度（默认取该指标支持、且不在 path 里的维度）。
+
+    Returns:
+        与 analyze 同构的结果，另附 `path`（下钻路径）与 `next_dims`（可继续拆的维度），
+        便于 UI/对话层提示"还可以往哪拆"。
+    """
+    m = cfg.metrics.get(metric_key)
+    if not m:
+        return {"ok": False, "reason": f"未知指标 {metric_key}"}
+    used = {p.get("dim") for p in (path or [])}
+    # 注意：显式传 next_dims=[] 表示"本层不拆任何维度"，不能被 `or` 当成未传。
+    cand = list(next_dims) if next_dims is not None \
+        else [d for d in m.support_dims if d not in used]
+
+    # 把下钻路径变成过滤条件：f"{dim} = '{value}'"
+    # 复用 compiler 的过滤渲染，保证与主查询同一套写法
+    from .compiler import render_filter
+
+    def _split_for(dim: str):
+        """在当前下钻路径的约束下，按 dim 拆当期/上期。"""
+        def _q(start: str, end: str) -> Dict:
+            frag = cfg.dimensions[dim].sql_fragment
+            wheres = [m.where_core] if m.where_core not in ("", "1=1") else []
+            for p in (path or []):
+                d, v = p.get("dim"), p.get("value")
+                if d in cfg.filter_templates:
+                    wheres.append(render_filter(cfg, d, v))
+            wheres.append(f"o.order_purchase_timestamp >= {start} AND "
+                          f"o.order_purchase_timestamp < {end}")
+            sql = (f"SELECT {frag} AS d, {m.metric_expr} AS v\n"
+                   f"{metric_source(cfg, m, [dim])}\nWHERE " + " AND ".join(wheres) +
+                   f"\nGROUP BY {frag}")
+            return _exec_map(db, sql)
+        return _q
+
+    c0, c1 = _range_spec(current_spec)
+    prev_spec = previous_spec or ("上月" if "月" in str(current_spec) else "上一期")
+    p0, p1 = _range_spec(prev_spec)
+
+    out = {
+        "ok": True, "metric": metric_key, "metric_name": m.name,
+        "current_spec": current_spec, "previous_spec": prev_spec,
+        "path": list(path or []),
+        "path_desc": " → ".join(f"{p.get('dim')}={p.get('value')}" for p in (path or [])) or "（全局）",
+        "dims": [], "top_contributors": [], "next_dims": cand,
+    }
+    if not cand:
+        out["note"] = "已无可继续拆解的维度"
+        return out
+
+    contributors = []
+    for dim in cand:
+        fn = _split_for(dim)
+        cur_map, prev_map = fn(c0, c1), fn(p0, p1)
+        delta = {k: round(float(cur_map.get(k, 0.0)) - float(prev_map.get(k, 0.0)), 4)
+                 for k in (set(cur_map) | set(prev_map))}
+        out["dims"].append({"dim": dim, "current": cur_map,
+                            "previous": prev_map, "delta": delta})
+        if delta:
+            k, d = max(delta.items(), key=lambda kv: abs(kv[1]))
+            contributors.append({"dim": dim, "key": k, "delta": d,
+                                 "desc": f"{cfg.dimensions[dim].name}「{k}」变化{d:+.2f}"})
+    out["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
+    return out
+
+
+def _exec_map(db: sqlite3.Connection, sql: str) -> Dict:
+    """执行"维度->值"查询；失败返回空（调用方据此标注不可用，而非静默当无波动）。"""
+    try:
+        return {row[0]: row[1] for row in db.execute(sql).fetchall()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def next_drill_suggestion(result: Dict) -> Optional[Dict]:
+    """给出"下一步该往哪拆"的建议：取当前贡献最大的维度值作为下钻目标。"""
+    contrib = (result.get("top_contributors") or [])
+    if not contrib:
+        return None
+    top = contrib[0]
+    return {"dim": top["dim"], "value": top["key"], "delta": top["delta"],
+            "hint": f"可继续下钻：{top['dim']}={top['key']}"}
+
+
 def summarize(result: Dict, llm=None) -> str:
     """把归因结果转成业务人员能看懂的话。
 

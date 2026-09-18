@@ -36,6 +36,32 @@ def _dialect_hint(sb) -> str:
     return getattr(getattr(sb, "connector", None), "prompt_hint", "") or ""
 
 
+def _infer_drill_path(question: str, history: List[Dict], extra: Dict) -> List[Dict]:
+    """判断本次是否在"追问上一轮的主因"，并据此构造下钻路径。
+
+    多轮下钻是真实分析的核心形态：「GMV 为什么跌？」→「那 SP 为什么跌？」。
+    识别方式是**确定性**的（不依赖 LLM）：
+      1) 问题里出现了上一轮主因维度的取值（如州名 SP）；或
+      2) 问题是追问语气（那/呢/为什么/继续/下钻/拆），且上一轮给出了下钻建议。
+    命中则沿该维度值下钻一层；否则不做任何额外分析。
+    """
+    prev = None
+    for h in reversed(history or []):
+        if isinstance(h, dict) and h.get("drill_suggestion"):
+            prev = h["drill_suggestion"]
+            break
+    if prev is None:
+        prev = extra.get("drill_suggestion")
+    if not prev:
+        return []
+    q = str(question or "")
+    value = str(prev.get("value", ""))
+    followup_tone = any(k in q for k in ("那", "呢", "为什么", "为何", "继续", "下钻", "再看", "拆"))
+    if value and (value.lower() in q.lower() or followup_tone):
+        return [{"dim": prev["dim"], "value": prev["value"]}]
+    return []
+
+
 def _engine_run(question: str, db_id: str, schema: Dict, sb, llm, **kw):
     """多 Agent 引擎调度：优先 LangGraph StateGraph（生产版编排），
     未安装 langgraph 时回退 pipeline（确定性等价编排器）。"""
@@ -195,6 +221,22 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                                               current_spec=time_spec, dims=res.dims)
                     extra["attribution"] = att
                     extra["attribution_summary"] = attribution.summarize(att, llm)
+                    # 多轮下钻：把"下一步可往哪拆"一并给出，供对话层直接追问
+                    sug = attribution.next_drill_suggestion(att)
+                    if sug:
+                        extra["drill_suggestion"] = sug
+                    # 若本次是追问（问题引用了上一轮的主因），自动执行下钻
+                    drill_path = _infer_drill_path(question, history or [], extra)
+                    if drill_path:
+                        d = attribution.drill(cfg, _db, res.metric_key, current_spec=time_spec,
+                                              path=drill_path)
+                        extra["drill"] = d
+                        extra["drill_summary"] = attribution.summarize(
+                            {**d, "current_total": d.get("path_desc", ""),
+                             "previous_total": "", "change": 0.0}, llm) if d.get("ok") else ""
+                        # 注意：本层若无进一步贡献，必须把建议**置空**而不是保留上一层，
+                        # 否则会把用户反复导向同一个维度（下钻死循环）。
+                        extra["drill_suggestion"] = attribution.next_drill_suggestion(d)
                     if att.get("is_abnormal"):
                         # 把 AI 归因总结一并写入工单 ai_note，人工复核时可直接看 AI 分析草稿
                         extra["hitl_id"] = attribution.notify_anomaly(
