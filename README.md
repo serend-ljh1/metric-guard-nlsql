@@ -1,28 +1,47 @@
-# 多智能体 Text-to-SQL 智能取数产品
+# 可治理的自助分析产品（语义层优先 + 多 Agent 兜底）
 
-面向**业务人员自然语言取数**的多智能体系统 + 业务语义层产品。核心设计原则：**推理归 LLM、计算归代码**——语义理解/生成/评审/诊断交给 LLM，执行/比对/护栏/口径公式交给确定性代码，杜绝大模型算错或篡改业务口径。
+> 面向**业务人员自助取数**的分析产品：**主路径是配置化的业务语义层**（口径由代码确定性编译、可追溯、零 token），
+> **长尾问题才降级**到多 Agent 生成 SQL；两侧都接治理面（口径冲突检测、异常归因与逐层下钻、HITL 闭环、交付物导出）。
 
-三层结构：
+**它解决的不是"教业务写 SQL"**，而是两件真实的事：
 
-- **底层引擎**：基于 **LangGraph StateGraph** 编排的多 Agent 自愈引擎（Supervisor 协调 Router / SQLWriter / Review(Critic) / Diagnose / Validator），附带可复现的 EX/EM 评测框架（**本仓库不附带可信准确率数字**，见下文"评测框架"）。
-- **业务语义层**：配置化指标中心（GMV / 客单价 / 取消率（公开数据无退款表，用取消率近似退货率）等公式写在配置里，并附防篡改校验）+ 权限白名单 + PII 掩码 + 审计留痕 + HITL 人工复核 + 用户认证（角色绑定），用 **Olist 真实电商数据**（~10万订单）做业务验证。
-- **产品层**：Streamlit 对话式前端（登录/多轮追问/自动图表/查询历史/收藏/反馈）+ FastAPI REST 后端 + MySQL/PostgreSQL 数据源接入 + Docker 一键部署。
+1. **同一个指标，不同人算出不同口径** → 指标公式写在配置里、由编译器确定性生成 SQL，并标注负责人/版本；
+2. **"这个数为什么涨跌、该不该告警、推给谁"** → 归因逐层下钻定位主因，异常自动带负责人进 HITL 闭环，并可导出带口径的报告。
 
-> **实现状态（诚实声明）**：运行引擎基于 LangGraph StateGraph（`--engine langgraph`，`langgraph` 已装机可用）；`pipeline.py` 是无依赖的离线回退编排器，两者**并非完全等价**（见下文）。"并行候选生成"当前是顺序的（Writer↔Review 闭环）；Chroma 长时记忆 / Checkpoint 断点续跑未实现；Schema-Linker 已实现为可选的 `--schema-link`。未实现项不在 README 中虚构为已实现。
+分三层：
+
+- **语义层（主路径）**：23 个配置化指标 + 4 个维度（dt 支持日/周/月/季）+ 3 个派生指标（比率/占比）。
+  命中即由 `compiler.py` **确定性编译** SQL——LLM 不在生成路径上，故可审计、零口径漂移、零 token。
+- **多 Agent 兜底（长尾）**：语义层覆盖不到的问题降级到 **LangGraph StateGraph** 引擎
+  （路由 → 写手 → 事后评审 → 只读沙箱 → 诊断自愈 → 校验），并明确标注"未经口径认证"。
+- **治理与交付**：口径冲突检测、指标口径解释（负责人/版本）、异常归因 + **多轮下钻**、
+  HITL 闭环（带负责人与 AI 归因草稿）、**报告/CSV 导出**、订阅告警。
+
+> **实现状态（诚实声明）**：语义层优先已落地（`path=semantic`）并在评测中量化覆盖率；
+> `langgraph` 为真实依赖（非回退路径）；Critic 已改为**事后评审**（先执行、再看结果），
+> 因实测"事前审写法"会同模型自评退化为风格改写、把对的改错；Chroma 长时记忆 / Checkpoint 未实现；
+> 公式防篡改是**子串校验**（可被"保留表达式再包装"绕过，且该指标已由 xfail 用例锁定）。
+> 未实现项不在此虚构为已实现。
 
 ---
 
 ## 核心特性
 
 **一句话概括**：
-> 一个"业务员自然语言取数"的多智能体产品，**基于 LangGraph StateGraph 编排**：底层是**分级路由 + 写手↔评审者(Critic)闭环 + 只读沙箱自愈**的 Text-to-SQL 引擎；上层是**配置化指标中心**（公式注入 + 防篡改校验）+ **权限/掩码/审计**；产品层提供**多轮对话取数、自动图表、指标可视化管理、MySQL/PG 接入、REST API、Docker 部署**。附**可复现评测框架**（分层抽样 + EX/EM + 自愈/评审消融），**但本仓库不附带可信的准确率数字**（见"评测框架"一节）。
+> 语义层优先的自助分析产品：**23 个配置化指标 + 派生指标**由编译器确定性生成 SQL（口径可追溯到负责人/版本），
+> 覆盖不到的长尾问题降级给 **LangGraph 多 Agent 引擎**兜底；在此之上提供**口径冲突检测、异常归因与多轮下钻、
+> 权限/掩码/审计、HITL 闭环、报告与 CSV 导出、订阅告警**。所有关键结论都有可复核的离线评测。
 
-- **引擎**：多 Agent 自愈（路由→写手→执行→报错修复→校验，Critic **仅在"执行成功但结果不对"时触发、执行失败直接走 diagnose**，且默认 `use_critic=False` 关闭），推理/计算解耦，沙箱只读、护栏防死循环。
-- **语义层**：配置化指标防"口径幻觉"（公式由配置注入并做**子串校验**兜底；该校验可被"保留表达式但改过滤/包装"绕过，属已知局限）+ 表列权限 + PII 掩码 + 审计 + HITL。
-- **分级放行**：口径内走配置硬约束（认证徽章）；口径外走多 Agent 自由生成（降级标注）。
-- **产品化**：多轮追问（指代消解改写）、结果自动图表、指标中心可视化管理、MySQL/PostgreSQL 方言适配、FastAPI REST API、Docker Compose 一键部署、pytest + GitHub Actions CI。
-- **两种模式隔离**：评测(Spider-dev) / 业务(真实 Olist)，业务样例不算 EX。
-- **评测框架**：分层抽样 + EX/EM + 自愈深度/评审者/Schema-Linker 三类消融，逐题结果可落盘（准确率需自行重跑，仓库不提供数字）。
+- **语义层优先（架构反转）**：命中语义层 → LLM 不在 SQL 生成路径上；口径表达式来自配置，响应带
+  `path=semantic`、负责人、版本、数据来源。长尾问题才走 `path=fallback`，并标注未认证。
+- **多 Agent 兜底引擎**：路由 → 写手 → **事后评审**（Critic 只在"执行成功但结果存疑"时介入，避免风格改写）→
+  只读沙箱 → 诊断自愈 → 校验；推理与计算解耦，护栏防死循环。
+- **治理面**：口径冲突检测（语义相近但公式不同即告警）、口径解释、PII 掩码、表列权限、审计留痕。
+- **分析闭环**：异常归因按"维度贡献/乘法因子"拆解，支持**逐层下钻**（追问"那 SP 为什么跌"会自动深挖），
+  异常阈值可配、自动带负责人进 HITL。
+- **交付物**：带**口径说明**的 Markdown 报告 + CSV（Excel 可直接打开）+ 订阅告警（与归因共用阈值口径）。
+- **产品指标**：语义层命中率 / 口径外占比 / 认证率等，见"产品指标"一节（可复跑）。
+- **组件压力测试**：多 Agent 兜底组件用 Spider-dev 做 EX 评测（见"兜底组件评测"）。
 
 ---
 
@@ -179,33 +198,32 @@ curl -X POST http://localhost:8000/api/query \
 
 ---
 
-## 在 PyCharm 里接真实 LLM 跑真实准确率
+## 复现兜底组件的评测（可选，需 LLM Key + Spider 数据）
 
-1. `pip install -r requirements.txt`（含 langgraph / langchain 等）。
-2. 复制 `.env.example` 为 `.env`，填 `LLM_API_KEY`（DeepSeek/OpenAI 兼容端点即可）。
-3. 用 `tools/download_data.py` 下载 Spider/BIRD（在可联网机器上）。
-4. 运行：
+> ⚠️ `pytest` 离线套件用 **Mock LLM**，只证明**流程/沙箱/度量正确**，**不代表准确率**。
+> 产品侧的主指标（语义层命中率等）**不需要 Key**，见上一节 `evaluation/eval_product.py`。
+
+要复现多 Agent 兜底组件的 EX/消融：
+
+1. `pip install -r requirements.txt`（含 langgraph）。
+2. 复制 `.env.example` 为 `.env`，填 `LLM_API_KEY`（OpenAI 兼容端点即可）。
+3. 下载 Spider 数据（可联网机器）：`py tools/download_data.py --dataset spider --dir data/spider`；
+   数据在别处时用 `--db-root` 或 `.env` 的 `EVAL_DB_ROOT`（注意指向**含 `dev.json` 与 `database/` 的那一级**）。
+4. 运行（各臂逐题 JSON 都会落盘，便于复核）：
    ```bash
-   py run_eval.py --dataset spider --db-root data/spider --split dev --ablation --limit 50
-   py run_eval.py --dataset bird   --db-root data/bird   --split dev
+   py run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
+     --baseline --ablation --ablation-rounds 1,3 --out-dir ./eval_results
    ```
-5. 结果以 EX / EM / 平均修复轮次 / 延迟 输出；主路径可用 `--out` 指定逐题 JSON 落盘（**消融/基线路径当前不落盘，需要留证时请自行扩展**）。`--ablation` 给出自愈深度 L0/L1/L3 对比。
-
-> **运行引擎**：默认用 **LangGraph StateGraph**（`--engine langgraph`，见 `sqlpa/graph/langgraph_graph.py`，含分支/护栏/自愈/评审闭环/公式约束）。`langgraph` 未安装时回退 `pipeline.py`（无依赖离线实现）；**两者并非完全等价**（提示词构造与评审轮次上限不同），报告中应注明实际使用的引擎。
-
-## 如何获得真实准确率
-
-⚠️ **重要**：`pytest` 离线套件用 **Mock LLM**，只能证明**流程/沙箱/度量正确**，**不代表真实准确率**。要得到真实 EX/EM 与消融增量，需要：
-
-1. **下载真实数据集**（在可联网机器上）：
+5. **锁定单一模型**可让绝对指标可归因（不加 `--model` 则按 `MODEL_POOL` 池化运行并记录每题实际模型）：
    ```bash
-   py tools/download_data.py --dataset spider --dir data/spider
-   py tools/download_data.py --dataset bird   --dir data/bird
+   py run_eval.py --dataset spider --split dev --sample 50 --seed 42 --model qwen3.8-max --baseline
    ```
-2. **配置 LLM Key**：复制 `.env.example` 为 `.env`，填入 `LLM_API_KEY`。
-3. **跑评测**：用 `run_eval.py` 对 dev split 计算 EX/EM 并跑消融（`--ablation` / `--critic-ablation` / `--schema-link-ablation`）。
-   - 现有实现提供的是 **zero-shot（`max_repair_round=0`）vs 自愈/评审** 的对照；
-   - README 早期版本提到的 "Baseline2：单 Agent + Schema RAG" **并未实现**，不要引用。
+
+> 现有实现提供的是 **zero-shot（`max_repair_round=0`）vs 自愈/评审** 对照；
+> 早期版本提到的 "Baseline2：单 Agent + Schema RAG" **并未实现**，不要引用。
+
+> **运行引擎**：默认 `--engine langgraph`（`sqlpa/graph/langgraph_graph.py`，含条件边/护栏/自愈/事后评审）。
+> `langgraph` 未安装时回退 `pipeline.py`；两者**并非完全等价**（提示词构造与评审轮次上限不同），报告中应注明实际引擎。
 
 ## 业务产品模式（把实验变成真实业务产品）
 
@@ -303,7 +321,36 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 - ❌ **不把权限/PII 掩码后置**：安全底座是上线底线，外部未脱敏数据不给业务用
 - ❌ 不做字段级血缘（当前只做"维度拆解"轻量归因，不追踪表/字段级血缘）
 
-## 真实评测结果（Spider-dev · 实测）
+## 产品指标（北极星：语义层命中率）
+
+> 这一节回答"**这个产品到底覆盖了多少业务问题**"，而不是"SQL 写得对不对"。
+> 跑法：`python evaluation/eval_product.py`，逐题明细落 `evaluation/reports/product.json`。
+> 题集：`evaluation/business_questions.jsonl`——**66 条人工标注的真实感业务问题**。
+
+| 指标 | 结果 | 含义 |
+|---|---|---|
+| ★ **语义层命中率** | **84.9% (56/66)** | 业务问题落到**已治理口径**的比例（主路径覆盖率，决定"口径一致"能覆盖多大面） |
+| 口径内执行成功率 | **100%** | 命中的问题都真的跑出了结果 |
+| 指标识别准确率 | **100%** | 识别出的指标与人工标注一致 |
+| 维度识别准确率 | **100%** | 识别出的分组维度与标注一致 |
+| 拒绝判定准确率 | **100%** | 指标支持但维度组合不合法时，**明确拒绝**而非硬生成 |
+| 口径认证率（成功中） | **100%** | 返回成功的结果全部带"口径已认证" |
+| 口径外占比 | **7.6% (5/66)** | 语义层没有对应指标 → 线上走多 Agent 降级 |
+
+**这些数字说明什么**：语义层已能覆盖大部分典型问法（指标 6→23、维度 +订单状态、时间粒度 4 档、派生指标 3 个），
+剩下的 7.6% 是**语义层确实没有的指标**（如复购周期、库存周转）——它们是降级路径的用武之地，而不是缺陷掩盖。
+
+> ⚠️ **口径说明**：本评测**离线运行**（`llm=None`），因此**降级路径未被实际触发**——离线时口径外问题会被
+> 明确拒绝而不是交给多 Agent。故这里以"语义层命中率"为主指标，口径外占比仅作降级规模的上界。
+> 报告 `offline_note` 字段中同样记录了这一点。
+
+---
+
+## 兜底组件评测（Spider-dev · 多 Agent 引擎）
+
+> 这一节是**组件级的压力测试**：语义层覆盖不到的长尾问题交给多 Agent 生成 SQL，
+> 它的可靠性用公开基准来量。**它不是产品的主指标**（主指标见上一节）。
+
 
 > **数据来源**：Spider-dev（评测集），跨库分层随机抽样 **N=50（seed=42）**，引擎 `--engine langgraph`，模型 **qwen3.7-flash**（阿里云百炼兼容端点，`LLM_TEMPERATURE=0`）。逐题产物在 `eval_results/`（83 个文件，含每题 SQL / 路由 / 修复轮次 / token / 成本 / `gold_failed`），可复核。
 > 复现命令：
@@ -468,7 +515,7 @@ py tools/download_data.py --dataset spider --dir data/spider
 ## 测试与 CI
 
 ```bash
-pytest tests -q    # 115 项离线测试（115 passed + 1 xfailed；该 1 项为已知口径局限的 xfail）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/EX口径/权限与掩码/路由兜底/业务语义层/治理闭环
+pytest tests -q    # 163 项离线测试（163 passed + 1 xfailed；该 xfail 为已知口径局限）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/EX口径/权限与掩码/路由兜底/业务语义层/治理闭环/语义层编译器/归因下钻/交付物
 ```
 > 测试数随着功能迭代一直在涨（历史出现过 88/92 等不同数字）；以上 115 为**最新一次全量 `pytest tests` 的实测口径**（86 个测试函数经参数化展开为 116 项，其中 1 项为已锁定已知局限的 xfail），后续改动请以实跑结果为准并同步更新此处。
 

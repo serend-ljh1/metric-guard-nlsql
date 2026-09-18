@@ -28,5 +28,10 @@ jobs:
         # 无需 API Key，用同结构样本库；这一步能拦住语义层与治理护栏的回归。
         run: python evaluation/eval_business.py --report-dir /tmp/eval_reports
 
+      - name: Product metrics eval (offline, deterministic)
+        # 北极星：语义层命中率 / 口径外占比 / 认证率。语义层是主路径，
+        # 这一步保证"覆盖率"不会因为改配置或改匹配规则而悄悄退化。
+        run: python evaluation/eval_product.py --report-dir /tmp/eval_reports
+
       - name: Smoke-check Streamlit app import
         run: python -c "import ast; ast.parse(open('app.py', encoding='utf-8').read()); print('app.py syntax OK')"
