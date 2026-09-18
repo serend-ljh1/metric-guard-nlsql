@@ -17,6 +17,7 @@ sqlpa.business.attribution
 from __future__ import annotations
 
 import datetime
+import json
 import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -271,8 +272,172 @@ def next_drill_suggestion(result: Dict) -> Optional[Dict]:
     if not contrib:
         return None
     top = contrib[0]
-    return {"dim": top["dim"], "value": top["key"], "delta": top["delta"],
-            "hint": f"可继续下钻：{top['dim']}={top['key']}"}
+    return {"dim": top.get("dim", ""), "value": top.get("key", ""), "delta": top.get("delta", 0.0),
+            "hint": f"可继续下钻：{top.get('dim', '')}={top.get('key', '')}"}
+
+
+# ---------------------------------------------------------------- 决策层（真 Agent）
+
+# 指标 → 可疑的乘法因子构成（用于"单量×客单价"式因子分解）。
+# 保持最小显式映射，避免无端为每个指标臆造代数关系。
+_FACTOR_MAP = {
+    "gmv": [("order_count", "订单量"), ("aov", "客单价")],
+}
+
+
+def _contribution_scattered(att: Dict, spread_frac: float = 0.6) -> bool:
+    """判断维度贡献是否"分散"：主因占波动比例低于阈值视为分散，需主动换维度再拆。"""
+    top = (att.get("top_contributors") or [])
+    if not top:
+        return False
+    return abs(top[0].get("pct_of_change", 0.0)) < spread_frac
+
+
+def decide_drill(att: Dict, question: str, llm=None) -> Dict:
+    """Agent 决策"下一步该往哪拆"（真 Agent 决策，规则兜底）。
+
+    返回 {"action": "drill" | "switch_dim" | "factorize" | "none",
+          "reason": str, "decision_source": "llm" | "rule", **action 特有字段}。
+      - drill      命中追问且主因清晰 → 沿主因维度值下钻
+      - switch_dim 命中追问但贡献分散 → 主动换一个维度再拆（自主决策）
+      - factorize  判断指标可疑由乘法因子构成（单量×客单价）→ 因子分解
+      - none       无追问 / 无显著贡献
+
+    代码只做计算与兜底；"要不要下钻、换哪个维度、要不要因子分解"这类**判断**交 LLM。
+    """
+    top = (att.get("top_contributors") or [])
+    q = str(question or "")
+    followup_tone = any(k in q for k in ("那", "呢", "为什么", "为何", "继续", "下钻", "再看", "拆", "再"))
+
+    def _rule() -> Dict:
+        if not top:
+            return {"action": "none", "reason": "无显著维度贡献", "decision_source": "rule"}
+        reason = f"贡献主因：{top[0].get('desc')}"
+        if followup_tone:
+            if _contribution_scattered(att):
+                return {"action": "switch_dim", "dim": top[0].get("dim", ""),
+                        "reason": reason + "；贡献分散，建议换维度再拆。", "decision_source": "rule"}
+            nxt = next_drill_suggestion(att)
+            if nxt and nxt.get("dim"):
+                return {"action": "drill", "path": [{"dim": nxt["dim"], "value": nxt["value"]}],
+                        "reason": reason, "decision_source": "rule"}
+        return {"action": "none", "reason": "无追问语气，不做下钻", "decision_source": "rule"}
+
+    rule = _rule()
+    if llm is None:
+        return rule
+
+    contrib_lines = "\n".join(
+        f"- {c.get('desc')}（占 {abs(c.get('pct_of_change', 0)) * 100:.0f}%）"
+        for c in top[:4]) or "无显著维度拆分。"
+    suggestion = next_drill_suggestion(att)
+    prompt = (
+        "你是归因分析 Agent。用户上一轮看到某指标波动，现在继续追问。"
+        "由你决定'下一步该拆哪儿'。可选动作：\n"
+        "- drill: 沿某个维度值下钻一层（给出 dim/value）\n"
+        "- switch_dim: 换一个维度重新拆（当前贡献分散时）\n"
+        "- factorize: 若指标可疑由乘法因子构成（如 GMV=订单量×客单价），做因子分解\n"
+        "- none: 无需继续，收尾\n"
+        f"指标波动与维度贡献：\n{contrib_lines}\n"
+        f"当前下一步建议：{suggestion or '无'}\n"
+        f"用户追问：{q}\n"
+        "（若指标是 gmv/成交/销售额，优先考虑 factorize 判断是否单量×客单价所致）\n"
+        "只输出 JSON：{\"action\":\"drill\"|\"switch_dim\"|\"factorize\"|\"none\","
+        "\"dim\":\"维度key\",\"value\":\"维度值\",\"reason\":\"你的判断理由\"}"
+    )
+    try:
+        text = llm.complete(prompt).strip().strip("`").removeprefix("json").removeprefix("JSON")
+        obj = json.loads(text)
+    except Exception:
+        return rule
+    action = obj.get("action")
+    if action not in ("drill", "switch_dim", "factorize", "none"):
+        return rule
+    out = {"action": action, "reason": obj.get("reason") or rule.get("reason") or "",
+           "decision_source": "llm"}
+    if action == "drill":
+        nxt = next_drill_suggestion(att) or {}
+        out["path"] = [{"dim": obj.get("dim") or nxt.get("dim") or top[0].get("dim", ""),
+                        "value": obj.get("value") or nxt.get("value") or top[0].get("key", "")}]
+    elif action == "switch_dim":
+        out["dim"] = obj.get("dim") or top[0].get("dim", "")
+    return out
+
+
+def factorize(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
+              current_spec: str, previous_spec: Optional[str] = None) -> Dict:
+    """乘法因子分解：把指标变化拆给构成它的因子（如 GMV=订单量×客单价）。
+
+    三部分分摊（对差异做微积分分解）：
+        因子A贡献 = B基期 × ΔA；因子B贡献 = A基期 × ΔB；交互项 = ΔA × ΔB。
+    回报每个因子的 当期/上期/变化/变化率/占总变动占比，可直接回答"跌来自单量还是客单价"。
+    """
+    factors = _FACTOR_MAP.get(metric_key)
+    if not factors:
+        return {"ok": False,
+                "reason": f"指标 {metric_key} 未定义乘法因子（当前仅支持 {list(_FACTOR_MAP)}）"}
+    m = cfg.metrics.get(metric_key)
+    if not m:
+        return {"ok": False, "reason": "未知指标"}
+
+    def _total(k: str, start: str, end: str):
+        fm = cfg.metrics.get(k)
+        if fm is None:
+            return None
+        sql = (f"SELECT {fm.metric_expr} AS v\n{metric_source(cfg, fm, [])}\n"
+               f"{_time_where(fm.where_core, start, end)}")
+        return _scalar(db, sql)
+
+    c0, c1 = _range_spec(current_spec)
+    prev_spec = previous_spec or ("上月" if "月" in str(current_spec) else "上一期")
+    p0, p1 = _range_spec(prev_spec)
+
+    cur_gmv = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, [])}\n"
+                          f"{_time_where(m.where_core, c0, c1)}")
+    prev_gmv = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, [])}\n"
+                           f"{_time_where(m.where_core, p0, p1)}")
+    if cur_gmv is None or prev_gmv is None:
+        return {"ok": False, "reason": "指标当期或上期无结果"}
+
+    values = []
+    for k, label in factors:
+        c = _total(k, c0, c1)
+        p = _total(k, p0, p1)
+        if c is None or p is None:
+            return {"ok": False, "reason": f"因子指标 {k} 无当期或上期结果，无法分解"}
+        values.append((k, label, float(c), float(p)))
+
+    A_c, A_p = values[0][2], values[0][3]      # 因子A（订单量）
+    B_c, B_p = values[1][2], values[1][3]      # 因子B（客单价）
+    dA, dB = A_c - A_p, B_c - B_p
+    dGmv = float(cur_gmv) - float(prev_gmv)
+    cA = B_p * dA
+    cB = A_p * dB
+    cInt = dA * dB
+
+    def _share(x: float) -> float:
+        return round(x / dGmv, 4) if dGmv else 0.0
+
+    factors_out = [
+        {"factor": values[0][0], "label": values[0][1], "current": A_c, "previous": A_p,
+         "change": round(dA, 4), "change_pct": round(dA / A_p, 4) if A_p else 0.0,
+         "contribution": round(cA, 4), "share": _share(cA)},
+        {"factor": values[1][0], "label": values[1][1], "current": B_c, "previous": B_p,
+         "change": round(dB, 4), "change_pct": round(dB / B_p, 4) if B_p else 0.0,
+         "contribution": round(cB, 4), "share": _share(cB)},
+    ]
+    main = max([(values[0][0], cA), (values[1][0], cB)],
+               key=lambda t: abs(t[1]))[0] if (dA or dB) else "无"
+    return {
+        "ok": True, "metric": metric_key, "metric_name": m.name,
+        "current_total": cur_gmv, "previous_total": prev_gmv,
+        "change": round(dGmv, 4),
+        "change_pct": round(dGmv / float(prev_gmv), 4) if float(prev_gmv) else 0.0,
+        "formula": f"{values[0][1]} × {values[1][1]}",
+        "main_factor": main,
+        "factors": factors_out,
+        "interaction": {"contribution": round(cInt, 4), "share": _share(cInt)},
+    }
 
 
 def summarize(result: Dict, llm=None) -> str:

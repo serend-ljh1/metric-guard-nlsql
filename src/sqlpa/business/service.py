@@ -225,18 +225,34 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                     sug = attribution.next_drill_suggestion(att)
                     if sug:
                         extra["drill_suggestion"] = sug
-                    # 若本次是追问（问题引用了上一轮的主因），自动执行下钻
-                    drill_path = _infer_drill_path(question, history or [], extra)
-                    if drill_path:
+                    # 若本次是追问 → 由归因 Agent 决策"下一步拆哪"，代码只执行计算。
+                    # （decide_drill 返回 action；失败/无 LLM 时内部回退确定性规则，绝不抛异常）
+                    decision = attribution.decide_drill(att, question, llm)
+                    extra["drill_decision"] = decision   # 决策理由+来源，供 UI/评测埋点
+                    action = decision.get("action")
+                    if action == "drill" and decision.get("path"):
                         d = attribution.drill(cfg, _db, res.metric_key, current_spec=time_spec,
-                                              path=drill_path)
+                                              path=decision["path"])
                         extra["drill"] = d
                         extra["drill_summary"] = attribution.summarize(
                             {**d, "current_total": d.get("path_desc", ""),
                              "previous_total": "", "change": 0.0}, llm) if d.get("ok") else ""
-                        # 注意：本层若无进一步贡献，必须把建议**置空**而不是保留上一层，
-                        # 否则会把用户反复导向同一个维度（下钻死循环）。
-                        extra["drill_suggestion"] = attribution.next_drill_suggestion(d)
+                        extra["drill_reason"] = decision.get("reason")
+                    elif action == "switch_dim" and decision.get("dim"):
+                        # 贡献分散 → 主动换一个维度再拆（Agent 自主决策）
+                        d = attribution.analyze(cfg, _db, res.metric_key, current_spec=time_spec,
+                                                previous_spec=None, dims=[decision["dim"]])
+                        extra["drill"] = d
+                        extra["drill_reason"] = "贡献分散，主动切换维度："
+                        extra["drill_reason"] += decision.get("reason") or ""
+                    elif action == "factorize":
+                        fz = attribution.factorize(cfg, _db, res.metric_key, current_spec=time_spec)
+                        if fz.get("ok"):
+                            extra["factor_split"] = fz
+                    # 注意：若本层已执行下钻，必须把建议**置空**（无进一步贡献时）而不要
+                    # 保留上一层，否则会把用户反复导向同一个维度（下钻死循环）。
+                    if "drill" in extra:
+                        extra["drill_suggestion"] = attribution.next_drill_suggestion(extra["drill"])
                     if att.get("is_abnormal"):
                         # 把 AI 归因总结一并写入工单 ai_note，人工复核时可直接看 AI 分析草稿
                         extra["hitl_id"] = attribution.notify_anomaly(

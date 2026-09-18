@@ -142,12 +142,14 @@ flowchart TD
         VA -- 异常时 --> VA2
     end
 
-    GRD --> ENG
+    GRD --> CMP[编译器 compiler.compile_spec<br/>确定性编译 SQL —— 语义层主路径，LLM 不写 SQL]
     FREE --> ENG
-    ENG --> GOV[治理面<br/>Governance口径冲突检测<br/>归因拆解<br/>HITL闭环(带负责人)]
+    CMP --> DB[(SQLite / MySQL / PostgreSQL)]
+    ENG --> DB
+    GRD --> GOV[治理面<br/>Governance口径冲突检测<br/>归因拆解<br/>HITL闭环(带负责人)]
+    ENG --> GOV
     GOV --> CH[自动图表 + 认证/降级徽章]
     CH --> U
-    ENG --> DB[(SQLite / MySQL / PostgreSQL)]
     ENG --> LLM[LLM: DeepSeek / OpenAI兼容]
 ```
 
@@ -515,9 +517,9 @@ py tools/download_data.py --dataset spider --dir data/spider
 ## 测试与 CI
 
 ```bash
-pytest tests -q    # 163 项离线测试（163 passed + 1 xfailed；该 xfail 为已知口径局限）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/EX口径/权限与掩码/路由兜底/业务语义层/治理闭环/语义层编译器/归因下钻/交付物
+pytest tests -q    # 174 项离线测试（174 passed + 1 xfailed；该 xfail 为已知口径局限）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/EX口径/权限与掩码/路由兜底/业务语义层/治理闭环/语义层编译器/归因下钻/归因决策(真Agent)/因子分解/交付物
 ```
-> 测试数随着功能迭代一直在涨（历史出现过 88/92 等不同数字）；以上 115 为**最新一次全量 `pytest tests` 的实测口径**（86 个测试函数经参数化展开为 116 项，其中 1 项为已锁定已知局限的 xfail），后续改动请以实跑结果为准并同步更新此处。
+> 测试数随着功能迭代一直在涨（历史出现过 88/92/115/163 等不同数字）；以上 174 为**最新一次全量 `pytest tests` 的实测口径**（含归因决策真Agent与因子分解，其中 1 项为已锁定已知局限的 xfail），后续改动请以实跑结果为准并同步更新此处。
 
 - **无需 API Key、无需外部数据**（内置迷你库 + 同结构样本库），本地与 CI 行为一致。
 - **GitHub Actions**：每次 push/PR 自动跑离线套件（`.github/workflows/ci.yml`，首次 push 后生效）。
