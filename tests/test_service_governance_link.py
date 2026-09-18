@@ -57,9 +57,12 @@ def _answer(db, question="本月各个品类的GMV", hitl_path=None):
 
 
 def test_in_scope_attaches_explain_and_attribution(db):
-    """口径内成功分支应自动附带口径解释 + 异常归因 + 人话点评。"""
+    """口径内成功分支应自动附带口径解释 + 异常归因 + 人话点评 + Supervisor 路由。"""
     a = _answer(db)
     assert a["matched"] and a["mode"] == "metric" and a["ok"]
+    # Supervisor：语义层优先 → direct（无追问不叠加 drill）
+    assert a["supervisor"]["decision"] == "direct"
+    assert a["supervisor"]["reason"]            # 决策理由对用户可见
     assert "metric_explain" in a and a["metric_explain"]["ok"] is True
     assert a["metric_explain"]["metric_expr"] == "SUM(oi.price)"   # 口径可追溯
     assert "attribution" in a and a["attribution"]["ok"] is True

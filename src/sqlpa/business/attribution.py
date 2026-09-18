@@ -215,14 +215,20 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         def _q(start: str, end: str) -> Dict:
             frag = cfg.dimensions[dim].sql_fragment
             wheres = [m.where_core] if m.where_core not in ("", "1=1") else []
-            for p in (path or []):
-                d, v = p.get("dim"), p.get("value")
+            for seg in (path or []):
+                d, v = seg.get("dim"), seg.get("value")
                 if d in cfg.filter_templates:
                     wheres.append(render_filter(cfg, d, v))
             wheres.append(f"o.order_purchase_timestamp >= {start} AND "
                           f"o.order_purchase_timestamp < {end}")
+            # 路径过滤条件可能引用需要 JOIN 的表（如按 category 过滤时 WHERE 里有 p.），
+            # 因此 JOIN 注入必须同时考虑"当前拆分维度 + 路径里被过滤的维度"，
+            # 否则会生成引用了未注入别名（如 p.）的 SQL，被 except 吞掉后错当"没波动"。
+            join_dims = list(dict.fromkeys(
+                [dim] + [seg.get("dim") for seg in (path or [])
+                         if seg.get("dim") in cfg.dimensions]))
             sql = (f"SELECT {frag} AS d, {m.metric_expr} AS v\n"
-                   f"{metric_source(cfg, m, [dim])}\nWHERE " + " AND ".join(wheres) +
+                   f"{metric_source(cfg, m, join_dims)}\nWHERE " + " AND ".join(wheres) +
                    f"\nGROUP BY {frag}")
             return _exec_map(db, sql)
         return _q

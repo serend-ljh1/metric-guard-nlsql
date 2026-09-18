@@ -29,6 +29,7 @@ class AuditRecord:
     create_time: str = ""
     mode: str = "metric"        # metric=口径内(认证) / free=自由查询(未认证)
     certified: bool = False
+    supervisor: str = ""        # Supervisor 路由决策标签：direct/drill/escalate/reject
 
     def to_dict(self) -> dict:
         return asdict(self)

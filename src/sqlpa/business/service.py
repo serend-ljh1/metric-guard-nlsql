@@ -73,6 +73,38 @@ def _engine_run(question: str, db_id: str, schema: Dict, sb, llm, **kw):
         return run_question(question, db_id, schema, sb, llm, **kw)
 
 
+def _supervise(res, llm, question: str, drill_decision: Optional[Dict] = None) -> Dict:
+    """**Supervisor 路由决策**（多 Agent 编排的"最后一块空位"）。
+
+    语义层优先是产品设计约束，因此 Supervisor **不做 50/50 乱选**，只在真实缺口上
+    升级/拒绝，并始终给出可展示给用户的"为什么走这条路"。
+
+       decision ∈ {direct, drill, escalate, reject}
+         - direct   命中口径配置 → 语义层确定性编译（结果已认证）
+         - drill    命中口径 + 归因 Agent 判定需继续下钻/换维/因子分解 → 叠加归因路径
+         - escalate 未命中口径且当前有 LLM → 升级到多 Agent 兜底引擎自由生成（未经认证）
+         - reject   未命中口径且无 LLM（离线）→ 不生成未经认证的结果，明确拒绝
+    有 llm 时归因决策的 reason 已被 LLM 产出（decision_source=llm），此处直接采纳，
+    不额外调 LLM、不改变既有分级放行行为，仅新增"路由+理由"这一可观测层。
+    """
+    if not res.matched:
+        if llm is None:
+            return {"decision": "reject",
+                    "reason": "未命中业务口径配置且当前无 LLM 可做兜底自由查询 → 拒绝生成未经认证的结果。"}
+        return {"decision": "escalate",
+                "reason": "未命中业务口径配置（" + "; ".join(res.reject_reasons) +
+                          "）→ 升级到多 Agent 引擎兜底自由生成，结果标注为未经口径认证。"}
+    # matched：语义层优先；若归因 Agent 有后续动作，则路由进一步标注为 drill 路径。
+    if drill_decision and drill_decision.get("action") not in ("", "none"):
+        act = drill_decision.get("action")
+        rsn = drill_decision.get("reason") or ""
+        return {"decision": "drill",
+                "reason": f"命中语义层口径（指标={res.metric_key}）→ 确定性编译；"
+                          f"叠加归因决策 action={act}：{rsn}"}
+    return {"decision": "direct",
+            "reason": f"命中语义层口径（指标={res.metric_key}）→ 编译器确定性编译，结果已认证。"}
+
+
 def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
            history: Optional[List[Dict]] = None, username: str = "",
            hitl_path: Optional[str] = None) -> Dict:
@@ -89,15 +121,20 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
 
     res = match(q, cfg, llm=llm)
 
+    # Supervisor 路由决策：语义层优先，仅在真实缺口上升级/拒绝；reason 供 UI 展示"为什么走这条路"。
+    sup = _supervise(res, llm, question)
+
     # ================= 口径外 → 自由查询（分级放行，结果降级标注） =================
     if not res.matched:
         if llm is None:
             reason = "; ".join(res.reject_reasons) + "（离线模式无 LLM，不支持自由查询）"
             append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                                      matched_metric="", is_success=False,
-                                     reject_reason=reason, mode="free", certified=False))
+                                     reject_reason=reason, mode="free", certified=False,
+                                     supervisor=sup["decision"]))
             return {"query_id": query_id, "ok": False, "matched": False, "certified": False, "mode": "free",
-                    "reject": reason, "rewritten_question": q, "used_context": used_ctx}
+                    "reject": reason, "rewritten_question": q, "used_context": used_ctx,
+                    "supervisor": sup}
 
         schema = _extract_schema(sb, db_path)
         db_id = schema.get("db_id", "business")
@@ -114,11 +151,13 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
             reason = "权限: " + "; ".join(unauth)
             append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                                      matched_metric="", generated_sql=final_sql,
-                                     is_success=False, reject_reason=reason, mode="free", certified=False))
+                                     is_success=False, reject_reason=reason, mode="free", certified=False,
+                                     supervisor=sup["decision"]))
             enqueue(q, "", final_sql, reason, role=role)
             return {"query_id": query_id, "ok": False, "matched": False, "certified": False, "mode": "free",
                     "reject": reason, "sql": final_sql,
-                    "rewritten_question": q, "used_context": used_ctx}
+                    "rewritten_question": q, "used_context": used_ctx,
+                    "supervisor": sup}
 
         if ok:
             # 按列来源掩码（覆盖 AS 别名绕过）
@@ -126,14 +165,16 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                                sql=final_sql, perms=cfg.permissions, schema=schema)
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                                  matched_metric="", generated_sql=final_sql,
-                                 is_success=ok, result_rows=len(rows), mode="free", certified=False))
+                                 is_success=ok, result_rows=len(rows), mode="free", certified=False,
+                                 supervisor=sup["decision"]))
         return {"query_id": query_id, "ok": ok, "matched": False, "certified": False, "mode": "free",
                 "path": "fallback",       # 口径外 → 多 Agent 兜底（供降级率埋点）
                 "reject": "" if ok else (er.exec_result.get("error") or "引擎未能生成有效查询"),
                 "source": "引擎多Agent自由生成(未经口径认证)",
                 "sql": final_sql, "columns": cols, "rows": rows,
                 "agent_trace": er.agent_trace,
-                "rewritten_question": q, "used_context": used_ctx}
+                "rewritten_question": q, "used_context": used_ctx,
+                "supervisor": sup}
 
     # ================= 口径内 → 语义层确定性编译（**主路径**）=================
     # 架构说明（本轮反转）：命中语义层时，SQL 由 compiler.py 从配置**确定性编译**，
@@ -157,11 +198,12 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role,
                                  user_input=question, matched_metric=res.metric_key,
                                  is_success=False, reject_reason=reason,
-                                 mode="metric", certified=False))
+                                 mode="metric", certified=False,
+                                 supervisor=sup["decision"]))
         return {"query_id": query_id, "ok": False, "matched": True, "certified": False,
                 "mode": "metric", "reject": reason, "metric": res.metric_key,
                 "rewritten_question": q, "used_context": used_ctx,
-                "compile_error": str(e)}
+                "compile_error": str(e), "supervisor": sup}
 
     final_sql = cq.sql
     formula = cq.metric_expr          # 口径来自配置（派生指标则为展开后的表达式）
@@ -179,24 +221,28 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
         reason = "; ".join(issues)
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                                  matched_metric=res.metric_key, generated_sql=final_sql,
-                                 is_success=False, reject_reason=reason, mode="metric", certified=False))
+                                 is_success=False, reject_reason=reason, mode="metric", certified=False,
+                                 supervisor=sup["decision"]))
         enqueue(q, res.metric_key, final_sql, reason, role=role)   # HITL: 公式被改 -> 人工
         return {"query_id": query_id, "ok": False, "matched": True, "certified": True, "mode": "metric",
                 "reject": reason, "metric": res.metric_key,
                 "sql": final_sql, "source": source,
-                "rewritten_question": q, "used_context": used_ctx}
+                "rewritten_question": q, "used_context": used_ctx,
+                "supervisor": sup}
     # 护栏2: 表列权限（传 schema 以解析非限定列名）
     unauth = check_access(role, cfg.permissions, final_sql, schema=schema)
     if unauth:
         reason = "权限: " + "; ".join(unauth)
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                                  matched_metric=res.metric_key, generated_sql=final_sql,
-                                 is_success=False, reject_reason=reason, mode="metric", certified=False))
+                                 is_success=False, reject_reason=reason, mode="metric", certified=False,
+                                 supervisor=sup["decision"]))
         enqueue(q, res.metric_key, final_sql, reason, role=role)   # HITL: 越权 -> 人工
         return {"query_id": query_id, "ok": False, "matched": True, "certified": True, "mode": "metric",
                 "reject": reason, "metric": res.metric_key,
                 "sql": final_sql, "source": source,
-                "rewritten_question": q, "used_context": used_ctx}
+                "rewritten_question": q, "used_context": used_ctx,
+                "supervisor": sup}
 
     if ok:
         # 按列来源掩码（覆盖 AS 别名绕过）
@@ -263,9 +309,13 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
         except Exception:
             pass
 
+    # 归因决策已得出 → 由 Supervisor 并入"drill"路径（direct 升级为 drill），
+    # 让 UI 能展示"走了语义层 + 又自动下钻/分解"。
+    sup = _supervise(res, llm, question, extra.get("drill_decision"))
     append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                              matched_metric=res.metric_key, generated_sql=final_sql,
-                             is_success=ok, result_rows=len(rows), mode="metric", certified=ok))
+                             is_success=ok, result_rows=len(rows), mode="metric", certified=ok,
+                             supervisor=sup["decision"]))
     # metric_name 取编译产物：派生指标（ratio@/share@）不在 cfg.metrics 里，
     # 修复前这里用 cfg.metrics[res.metric_key].name，派生指标会直接 KeyError。
     return {"query_id": query_id, "ok": ok, "matched": True, "certified": True, "mode": "metric",
@@ -276,5 +326,6 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
              "compile": compile_info,      # 口径来源/负责人/版本/派生定义，产品上要展示
              "sql": final_sql, "columns": cols, "rows": rows,
              "agent_trace": agent_trace,
+             "supervisor": sup,            # 路由决策+理由，UI 展示"为什么走这条路"
              "rewritten_question": q, "used_context": used_ctx,
              **extra}

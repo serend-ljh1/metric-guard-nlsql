@@ -154,34 +154,64 @@ def test_service_factorize_wired(db, tmpdir_clean):
     assert a["ok"]
     assert a["drill_decision"]["action"] == "factorize"
     assert a["factor_split"]["ok"] is True and a["factor_split"]["main_factor"] == "order_count"
+    # Supervisor：命中语义层 + 归因 Agent 判定 factorize → 路由升级为 drill
+    assert a["supervisor"]["decision"] == "drill"
+    assert a["supervisor"]["reason"]
 
 
-# ---------------- 决策质量评测（B） ----------------
+# ---------------- 决策质量评测（① 决策命中） ----------------
+
+class _OracleSeq:
+    """按调用顺序返回预设 JSON 决策，模拟 LLM（第 i 次调用回第 i 个回复）。"""
+    def __init__(self, texts): self.texts, self.calls = list(texts), 0
+    def complete(self, prompt):
+        self.calls += 1
+        return self.texts[min(self.calls - 1, len(self.texts) - 1)]
+
 
 def test_eval_decision_rule_baseline():
-    from evaluation.eval_decisions import run
-    r = run(llm=None)
-    assert r["total"] == 3
-    assert r["accuracy"] == 0.6667            # 规则基线 2/3（factorize 这道纯规则做不了）
+    """规则兜底基线：纯规则永远选不出 factorize，故明显低于 LLM oracle。"""
+    from evaluation.eval_decisions import run, ANNOTATED, action_tally, EXPERT_LABELED_BY
+    # 每种动作用例数 ≥ 5（答辩要求：覆盖 4 种 action，不能平均不足一条）
+    tally = action_tally(ANNOTATED)
+    for a in ("drill", "switch_dim", "factorize", "none"):
+        assert tally.get(a, 0) >= 5, f"action {a} 只有 {tally.get(a, 0)} 条"
+    r = run(ANNOTATED, llm=None)
+    assert r["total"] >= 20
+    assert r["decision_accuracy"] == pytest.approx(19 / r["total"], abs=1e-3)
+    assert 0.6 < r["decision_accuracy"] < 0.9      # 规则 ≈2/3，够看但不到家
+    assert r["expert_labeled_by"] == EXPERT_LABELED_BY   # 标注协议：真值由谁标
 
 
 def test_eval_decision_llm_lifts_accuracy():
+    """接 LLM(oracle) 应全中 → 决策命中 1.0，且明显高于纯规则基线（区分度）。"""
     from evaluation.eval_decisions import run, ANNOTATED
     replies = {"drill": '{"action":"drill","dim":"state","value":"SP","reason":"r"}',
                "switch_dim": '{"action":"switch_dim","dim":"category","reason":"r"}',
-               "factorize": '{"action":"factorize","reason":"r"}'}
-    def _llm(action):
-        o = _Oracle(replies[action]); return o
-    # 用 oracle 覆盖三条用例，应全中 → 准确率 100%，证明"Agent 决策"可被评测到 1.0
-    called = {"n": 0}
-    class _Agg:
-        def complete(self, prompt):
-            called["n"] += 1
-            # 根据提示里出现用户追问来选择专家动作（简化 oracle）
-            if "是单量还是客单价" in prompt: return replies["factorize"]
-            if "那为什么呢" in prompt: return replies["switch_dim"]
-            return replies["drill"]
-    r = run(llm=_Agg())
-    assert called["n"] >= 3
+               "factorize": '{"action":"factorize","reason":"r"}',
+               "none": '{"action":"none","reason":"r"}'}
+    oracle = _OracleSeq([replies[c["expert_action"]] for c in ANNOTATED])
+    r = run(ANNOTATED, llm=oracle)
+    assert oracle.calls == len(ANNOTATED)          # 每条用例各问一次 LLM
     assert r["llm_used"] is True
-    assert r["accuracy"] == 1.0
+    assert r["decision_accuracy"] == 1.0
+    base = run(ANNOTATED, llm=None)                 # 纯规则基线，证明提升确实存在
+    assert base["decision_accuracy"] < r["decision_accuracy"]
+
+
+# ---------------- 执行正确性评测（③ exec_accuracy） ----------------
+
+def test_eval_exec_accuracy(tmpdir_clean):
+    """exec_accuracy 与决策命中脱钩：只验'做完之后算得对不对'。
+    factorize 分摊守恒/share≈1/主因方向；drill 沿主因下钻后分支内收敛。"""
+    from evaluation.eval_decisions import run, ANNOTATED
+    r = run(ANNOTATED, llm=None, tmp_dir=tmpdir_clean)
+    e = r["exec"]
+    assert e["total"] >= 3
+    by = {c["check"]: c["ok"] for c in e["checks"]}
+    assert by["factorize-分摊守恒"] is True
+    assert by["factorize-份额合计≈1"] is True
+    assert by["factorize-主因方向合理"] is True      # 样例主因是量(订单量)减少，不是价
+    assert by["drill-主因隔离收敛"] is True
+    assert e["exec_accuracy"] == 1.0
+    assert "exec" in r and "decision_accuracy" in r   # 两个指标分开，不混
