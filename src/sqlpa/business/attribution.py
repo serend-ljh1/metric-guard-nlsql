@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 from .metric_config import BusinessConfig
+from .sqlgen import metric_source
 
 
 def _now() -> datetime.date:
@@ -86,8 +87,8 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
     c0, c1 = _range_spec(current_spec)
     p0, p1 = _range_spec(prev_spec)
 
-    cur_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{m.from_clause}\n{_time_where(m.where_core, c0, c1)}")
-    prev_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{m.from_clause}\n{_time_where(m.where_core, p0, p1)}")
+    cur_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, c0, c1)}")
+    prev_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, p0, p1)}")
     if cur_total is None or prev_total is None:
         return {"ok": False, "reason": "归因查询失败（当期或上期无结果）"}
 
@@ -117,7 +118,7 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
 
     def _split(dim: str, start: str, end: str) -> Dict:
         frag = cfg.dimensions[dim].sql_fragment
-        sql = (f"SELECT {frag} AS d, {m.metric_expr} AS v\n{m.from_clause}\n"
+        sql = (f"SELECT {frag} AS d, {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n"
                f"{_time_where(m.where_core, start, end)}\nGROUP BY {frag}")
         if not db_path:
             return {}
@@ -158,6 +159,13 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                  "pct_of_change": round(top_delta / change, 4) if change else 0.0,
                  "desc": f"{cfg.dimensions[d].name}「{top_key}」变化{top_delta:+.2f}"})
     result["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
+    # 显式暴露"维度拆解不可用"的原因：并行拆解需要按库文件路径独立开只读连接
+    # （sqlite3 连接不能跨线程复用）。内存库（:memory:）没有文件路径，拆解会静默为空——
+    # 这种静默失败最容易被误读成"该维度没波动"，因此在这里标注出来。
+    if dims and not db_path:
+        result["dims_skipped_reason"] = (
+            "维度拆解需要文件型数据库（并行查询按文件路径开新连接）；"
+            "当前连接无文件路径（如 :memory:），故 dims 为空")
     return result
 
 

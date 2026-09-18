@@ -102,37 +102,50 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                                  matched_metric="", generated_sql=final_sql,
                                  is_success=ok, result_rows=len(rows), mode="free", certified=False))
         return {"query_id": query_id, "ok": ok, "matched": False, "certified": False, "mode": "free",
+                "path": "fallback",       # 口径外 → 多 Agent 兜底（供降级率埋点）
                 "reject": "" if ok else (er.exec_result.get("error") or "引擎未能生成有效查询"),
                 "source": "引擎多Agent自由生成(未经口径认证)",
                 "sql": final_sql, "columns": cols, "rows": rows,
                 "agent_trace": er.agent_trace,
                 "rewritten_question": q, "used_context": used_ctx}
 
-    # ================= 口径内 → 配置公式硬约束（原有链路） =================
-    constraint = build_constraint(cfg, res.metric_key, res.dims, res.filters)
-    formula = formula_of(cfg, res.metric_key)
+    # ================= 口径内 → 语义层确定性编译（**主路径**）=================
+    # 架构说明（本轮反转）：命中语义层时，SQL 由 compiler.py 从配置**确定性编译**，
+    # LLM 完全不在 SQL 生成路径上 —— 可审计、零口径漂移、零 token、毫秒级。
+    # 修复前：即便命中语义层也要让 LLM 生成 SQL（只是加个公式约束），既慢又可能被改坏。
+    from sqlpa.business.compiler import compile_spec, QuerySpec, CompileError
     schema = _extract_schema(sb, db_path)
     db_id = schema.get("db_id", "olist")
+    spec = QuerySpec(metric=res.metric_key, dims=list(res.dims or []),
+                     filters=list(res.filters or []),
+                     time_grain=getattr(res, "time_grain", None))
+    trace: List[Dict] = [{"agent": "MetricMatcher", "role": "意图识别",
+                          "detail": f"指标={res.metric_key} 维度={res.dims} "
+                                    f"过滤={res.filters} 方法={res.method}",
+                          "ms": 0}]
+    try:
+        cq = compile_spec(cfg, spec)
+    except CompileError as e:
+        # 规格不合法 → 明确拒绝（不给用户一个口径不明的数字）
+        reason = f"语义层编译失败: {e}"
+        append_audit(AuditRecord(query_id=query_id, username=username, user_role=role,
+                                 user_input=question, matched_metric=res.metric_key,
+                                 is_success=False, reject_reason=reason,
+                                 mode="metric", certified=False))
+        return {"query_id": query_id, "ok": False, "matched": True, "certified": False,
+                "mode": "metric", "reject": reason, "metric": res.metric_key,
+                "rewritten_question": q, "used_context": used_ctx,
+                "compile_error": str(e)}
 
-    # 生成 SQL: 真实=引擎LLM(受公式约束) / 离线=确定性组装
-    if llm is not None:
-        er = _engine_run(q, db_id, schema, sb, llm, gold_sql=None,
-                         metric_constraint=constraint, dialect_hint=_dialect_hint(sb))
-        final_sql = er.final_sql
-        ok = er.final_valid
-        cols = er.exec_result.get("columns", [])
-        rows = er.exec_result.get("rows", []) if ok else []
-        source = "引擎LLM生成(受公式约束)"
-        agent_trace = er.agent_trace
-    else:
-        asm = assemble(cfg, res.metric_key, res.dims, res.filters)
-        final_sql = asm["sql"]
-        r = sb.execute(final_sql)
-        ok = bool(r.ok)
-        cols = r.columns if r.ok else []
-        rows = r.rows if r.ok else []
-        source = "确定性组装(离线)"
-        agent_trace = []
+    final_sql = cq.sql
+    formula = cq.metric_expr          # 口径来自配置（派生指标则为展开后的表达式）
+    r = sb.execute(final_sql)
+    ok = bool(r.ok)
+    cols = r.columns if r.ok else []
+    rows = r.rows if r.ok else []
+    source = "语义层确定性编译(口径已认证)"
+    agent_trace = trace
+    compile_info = cq.to_dict()
 
     # 护栏1: 公式校验
     issues = verify_formula(final_sql, formula)
@@ -195,11 +208,15 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                              matched_metric=res.metric_key, generated_sql=final_sql,
                              is_success=ok, result_rows=len(rows), mode="metric", certified=ok))
+    # metric_name 取编译产物：派生指标（ratio@/share@）不在 cfg.metrics 里，
+    # 修复前这里用 cfg.metrics[res.metric_key].name，派生指标会直接 KeyError。
     return {"query_id": query_id, "ok": ok, "matched": True, "certified": True, "mode": "metric",
-            "metric": res.metric_key,
-            "metric_name": cfg.metrics[res.metric_key].name,
-            "metric_expr": formula, "dims": res.dims, "source": source,
-            "sql": final_sql, "columns": cols, "rows": rows,
-            "agent_trace": agent_trace,
-            "rewritten_question": q, "used_context": used_ctx,
-            **extra}
+             "path": "semantic",           # 语义层确定性编译（主路径，供命中率埋点）
+             "metric": res.metric_key,
+             "metric_name": cq.metric_name,
+             "metric_expr": formula, "dims": res.dims, "source": source,
+             "compile": compile_info,      # 口径来源/负责人/版本/派生定义，产品上要展示
+             "sql": final_sql, "columns": cols, "rows": rows,
+             "agent_trace": agent_trace,
+             "rewritten_question": q, "used_context": used_ctx,
+             **extra}

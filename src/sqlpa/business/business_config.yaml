@@ -1,8 +1,18 @@
 # ============================================================================
 # 业务语义层配置（配置化，防 LLM 篡改业务指标公式）
-# 面向「自然语言自助取数」通用业务场景；示例底座为 Olist 真实电商数据。
-# 原则：指标的分子分母公式、JOIN、依赖表全部写在配置里；LLM 只识别"用户要哪个
-#       指标/维度/过滤"，复用这里的预定义片段，不得自行编写业务公式。
+# 面向「可治理的自助分析」场景；示例底座为 Olist 真实电商数据。
+#
+# 原则：
+#   1) 指标的分子分母公式、JOIN、依赖表全部写在配置里；
+#   2) LLM 只识别"用户要哪个指标/维度/过滤"，**SQL 由 compiler.py 确定性编译**；
+#   3) 每个指标带 owner / version —— 口径可追溯，是治理面的基础。
+#
+# 字段说明：
+#   metric_expr  指标表达式（可含 SQL 函数）
+#   from_clause  主表（必须以订单事实表为基准别名 o）
+#   join_clause  额外 JOIN（与 from_clause 分开写，便于编译器判断派生指标是否同源）
+#   where_core   该指标的固有一口径过滤（如"仅已支付"）
+#   support_dims 允许的分组维度；support_filters 允许的过滤类型
 # ============================================================================
 
 # ---------- 1) 业务词典（中文口语别名 -> 表/字段）----------
@@ -11,6 +21,7 @@ business_alias:
   订单明细: {table: order_items}
   明细: {table: order_items}
   客户: {table: customers}
+  买家: {table: customers}
   商品: {table: products}
   产品: {table: products}
   品类: {table: products, col: product_category_name}
@@ -20,85 +31,335 @@ business_alias:
   城市: {table: customers, col: customer_city}
   复购客户: {table: customers, col: customer_unique_id}
   订单状态: {table: orders, col: order_status}
+  评价: {table: reviews}
+  评分: {table: reviews, col: review_score}
 
 # ---------- 2) 业务指标配置（核心，防口径幻觉）----------
 metrics:
+  # ===== 规模类：金额 =====
   - key: gmv
     name: GMV成交总额
     desc: 已支付订单的商品金额总和（不含取消订单）
+    metric_expr: "SUM(oi.price)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
     owner: 数据组-财务线
     version: v3
-    metric_expr: "SUM(oi.price)"
-    from_clause: "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN products p ON oi.product_id=p.product_id"
-    where_core: "o.order_status != 'canceled'"
-    support_dims: [dt, state, category]
-    support_filters: [time_range, state, category]
 
-  - key: order_count
-    name: 订单数
-    desc: 已送达订单数量
-    owner: 数据组-电商线
+  - key: gross_revenue
+    name: 总营收(含运费)
+    desc: 商品金额 + 运费，已支付订单
+    metric_expr: "SUM(oi.price + oi.freight_value)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-财务线
+    version: v1
+
+  - key: item_sales
+    name: 商品销售额
+    desc: 仅商品金额，不含运费
+    metric_expr: "SUM(oi.price)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-财务线
+    version: v1
+
+  - key: freight_cost
+    name: 运费总额
+    desc: 已支付订单的运费合计（成本项）
+    metric_expr: "SUM(oi.freight_value)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-履约线
     version: v2
-    metric_expr: "COUNT(DISTINCT o.order_id)"
-    from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
-    where_core: "o.order_status = 'delivered'"
-    support_dims: [dt, state, category]
-    support_filters: [time_range, state, category]
+
+  - key: avg_freight
+    name: 平均运费
+    desc: 每笔有效订单的平均运费
+    metric_expr: "SUM(oi.freight_value) * 1.0 / NULLIF(COUNT(DISTINCT o.order_id), 0)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-履约线
+    version: v1
 
   - key: aov
     name: 客单价
     desc: GMV / 有效订单数（每笔订单平均商品金额）
-    owner: 数据组-财务线
-    version: v2
     metric_expr: "SUM(oi.price) * 1.0 / NULLIF(COUNT(DISTINCT o.order_id), 0)"
-    from_clause: "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
     where_core: "o.order_status != 'canceled'"
     support_dims: [dt, state]
     support_filters: [time_range, state]
+    owner: 数据组-电商线
+    version: v2
 
+  # ===== 规模类：订单 =====
+  - key: order_count
+    name: 订单数
+    desc: 已送达订单数量
+    metric_expr: "COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o"
+    join_clause: "LEFT JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status = 'delivered'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-电商线
+    version: v2
+
+  - key: paid_order_count
+    name: 已支付订单数
+    desc: 非取消订单数量
+    metric_expr: "COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o"
+    join_clause: "LEFT JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-电商线
+    version: v1
+
+  - key: canceled_order_count
+    name: 取消订单数
+    desc: 已取消的订单数量
+    metric_expr: "COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o"
+    join_clause: "LEFT JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status = 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-电商线
+    version: v1
+
+  - key: item_count
+    name: 商品件数
+    desc: 已支付订单的商品条目数
+    metric_expr: "COUNT(oi.order_item_id)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-电商线
+    version: v1
+
+  # ===== 客户类 =====
+  - key: customer_count
+    name: 下单客户数
+    desc: 去重后的下单客户数（按 customer_id）
+    metric_expr: "COUNT(DISTINCT c.customer_id)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN customers c ON o.customer_id=c.customer_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, status]
+    support_filters: [time_range, state, status]
+    owner: 数据组-增长线
+    version: v1
+
+  - key: unique_customer_count
+    name: 独立买家数
+    desc: 去重后的独立买家数（按 customer_unique_id，可跨订单识别复购）
+    metric_expr: "COUNT(DISTINCT c.customer_unique_id)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN customers c ON o.customer_id=c.customer_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, status]
+    support_filters: [time_range, state, status]
+    owner: 数据组-增长线
+    version: v1
+
+  - key: items_per_order
+    name: 每单件数
+    desc: 商品件数 / 订单数（衡量客单结构）
+    metric_expr: "COUNT(oi.order_item_id) * 1.0 / NULLIF(COUNT(DISTINCT o.order_id), 0)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+    owner: 数据组-电商线
+    version: v1
+
+  # ===== 商品 / 卖家类 =====
+  - key: product_count
+    name: 在售商品数
+    desc: 产生过有效订单的去重商品数
+    metric_expr: "COUNT(DISTINCT oi.product_id)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-商品线
+    version: v1
+
+  - key: seller_count
+    name: 活跃卖家数
+    desc: 产生过有效订单的去重卖家数
+    metric_expr: "COUNT(DISTINCT oi.seller_id)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-商品线
+    version: v1
+
+  # ===== 比率类：风险 =====
   - key: cancellation_rate
     name: 取消率
     desc: 取消订单数 / 全部已创建订单数（公开数据无退款表，用取消率近似退货率）
+    metric_expr: "COUNT(DISTINCT CASE WHEN o.order_status='canceled' THEN o.order_id END) * 1.0 / COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [dt, state, status]
+    support_filters: [time_range, state, status]
     owner: 数据组-品质线
     version: v1
-    metric_expr: "COUNT(DISTINCT CASE WHEN o.order_status='canceled' THEN o.order_id END) * 1.0 / COUNT(DISTINCT o.order_id)"
-    from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
-    where_core: "1=1"
-    support_dims: [dt, state, category]
-    support_filters: [time_range, state, category]
 
   - key: late_delivery_rate
     name: 超时送达率
     desc: 实际送达晚于预计送达的订单占比
     metric_expr: "COUNT(CASE WHEN o.order_delivered_customer_date > o.order_estimated_delivery_date THEN 1 END) * 1.0 / NULLIF(COUNT(CASE WHEN o.order_delivered_customer_date IS NOT NULL THEN 1 END), 0)"
-    from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id"
+    from_clause: "FROM orders o"
+    join_clause: ""
     where_core: "1=1"
     support_dims: [dt, state]
     support_filters: [time_range, state]
+    owner: 数据组-履约线
+    version: v2
 
+  - key: on_time_delivery_rate
+    name: 准时送达率
+    desc: 实际送达不晚于预计送达的订单占比
+    metric_expr: "COUNT(CASE WHEN o.order_delivered_customer_date IS NOT NULL AND o.order_delivered_customer_date <= o.order_estimated_delivery_date THEN 1 END) * 1.0 / NULLIF(COUNT(CASE WHEN o.order_delivered_customer_date IS NOT NULL THEN 1 END), 0)"
+    from_clause: "FROM orders o"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [dt, state]
+    support_filters: [time_range, state]
+    owner: 数据组-履约线
+    version: v1
+
+  - key: avg_delivery_days
+    name: 平均履约天数
+    desc: 下单到送达的平均天数（下单即算，未送达为 NULL 不计）
+    metric_expr: "AVG(julianday(o.order_delivered_customer_date) - julianday(o.order_purchase_timestamp))"
+    from_clause: "FROM orders o"
+    join_clause: ""
+    where_core: "o.order_delivered_customer_date IS NOT NULL"
+    support_dims: [dt, state]
+    support_filters: [time_range, state]
+    owner: 数据组-履约线
+    version: v1
+
+  # ===== 满意度类 =====
   - key: avg_review
     name: 平均评分
     desc: 订单评价星级均值
     metric_expr: "AVG(r.review_score)"
-    from_clause: "FROM orders o JOIN reviews r ON o.order_id=r.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
     where_core: "1=1"
     support_dims: [dt, state, category]
     support_filters: [time_range, state, category]
+    owner: 数据组-品质线
+    version: v2
+
+  - key: positive_review_rate
+    name: 好评率
+    desc: 4 星及以上的评价占比
+    metric_expr: "COUNT(CASE WHEN r.review_score >= 4 THEN 1 END) * 1.0 / NULLIF(COUNT(r.review_score), 0)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "1=1"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+    owner: 数据组-品质线
+    version: v1
+
+  - key: negative_review_rate
+    name: 差评率
+    desc: 2 星及以下的评价占比
+    metric_expr: "COUNT(CASE WHEN r.review_score <= 2 THEN 1 END) * 1.0 / NULLIF(COUNT(r.review_score), 0)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "1=1"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+    owner: 数据组-品质线
+    version: v1
+
+  - key: review_count
+    name: 评价数
+    desc: 收到的评价条数
+    metric_expr: "COUNT(r.review_id)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    where_core: "1=1"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+    owner: 数据组-品质线
+    version: v1
 
 # ---------- 3) 维度配置（分组字段）----------
+# dt 维度可按时间粒度改写（day/week/month/quarter），见 compiler.TIME_GRAINS
 dimensions:
-  - {key: dt, name: 时间,   sql_fragment: "DATE(o.order_purchase_timestamp)"}
-  - {key: state, name: 州,  sql_fragment: "c.customer_state"}
+  - {key: dt, name: 时间, sql_fragment: "DATE(o.order_purchase_timestamp)"}
+  - {key: state, name: 州, sql_fragment: "c.customer_state"}
   - {key: category, name: 品类, sql_fragment: "p.product_category_name"}
+  - {key: status, name: 订单状态, sql_fragment: "o.order_status"}
 
 # ---------- 4) 过滤条件模板（参数化）----------
-# 用户过滤 → SQL 片段。value 由 MetricMatcher/日期解析器给出。
 filter_templates:
   state: "c.customer_state = {value}"
   category: "p.product_category_name = {value}"
+  status: "o.order_status = {value}"
   time_range: "o.order_purchase_timestamp >= {start} AND o.order_purchase_timestamp < {end}"
 
-# ---------- P1 业务护栏：角色表列权限 + 敏感字段掩码 ----------
+# ---------- 5) 派生指标（由 compiler 在编译期展开，不在 LLM 手里）----------
+# 语法：ratio@分子/分母（要求同源）、share@基础指标（占整体比例）
+derived_metrics:
+  - key: freight_rate
+    name: 运费占比
+    desc: 运费总额 / GMV，衡量履约成本压力
+    kind: ratio
+    numerator: freight_cost
+    denominator: gmv
+    owner: 数据组-履约线
+
+  - key: avg_item_price
+    name: 件单价
+    desc: GMV / 商品件数
+    kind: ratio
+    numerator: gmv
+    denominator: item_count
+    owner: 数据组-电商线
+
+  - key: cancel_share_by_category
+    name: 取消订单占比(按维度)
+    desc: 各分组的取消订单数占整体的比例（用于归因定位）
+    kind: share
+    base: canceled_order_count
+    owner: 数据组-品质线
+
+# ---------- 6) 角色表列权限 + 敏感字段掩码 ----------
 permissions:
   roles:
     analyst:            # 业务员：不能访问敏感字段

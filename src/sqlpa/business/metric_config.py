@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.business.metric_config
 ============================
 加载业务语义层配置（业务词典 / 指标 / 维度 / 过滤模板），并提供查询辅助。
@@ -28,6 +28,9 @@ class Metric:
     support_filters: List[str] = field(default_factory=list)
     owner: str = ""
     version: str = "v1"
+    # 可选的额外 JOIN 子句：把 join 从 from_clause 里拆出来，便于编译器
+    # 组合 ratio/share 等派生指标时判断"两个基础指标是否同源"。
+    join_clause: str = ""
 
     def to_dict(self) -> dict:
         return self.__dict__
@@ -47,6 +50,17 @@ class BusinessConfig:
     dimensions: Dict[str, Dimension] = field(default_factory=dict)
     filter_templates: Dict[str, str] = field(default_factory=dict)
     permissions: Dict = field(default_factory=dict)
+    # 派生指标（ratio/share 等）：由 compiler 在编译期展开，配置只声明定义
+    derived_metrics: Dict[str, Dict] = field(default_factory=dict)
+
+    def derived_key(self, d: Dict) -> str:
+        """把派生指标定义转成 compiler 能解析的 key（ratio@a/b 或 share@a）。"""
+        kind = (d.get("kind") or "").strip()
+        if kind == "ratio":
+            return f"ratio@{d.get('numerator')}/{d.get('denominator')}"
+        if kind == "share":
+            return f"share@{d.get('base')}"
+        return ""
 
 
 def load_config(path: str | Path | None = None) -> BusinessConfig:
@@ -62,14 +76,20 @@ def load_config(path: str | Path | None = None) -> BusinessConfig:
                                    support_dims=m.get("support_dims", []),
                                    support_filters=m.get("support_filters", []),
                                    owner=m.get("owner", "未指定"),
-                                   version=m.get("version", "v1"))
+                                   version=m.get("version", "v1"),
+                                   join_clause=m.get("join_clause", ""))
     dims = {d["key"]: Dimension(key=d["key"], name=d.get("name", d["key"]),
                                 sql_fragment=d["sql_fragment"])
             for d in data.get("dimensions", [])}
-    return BusinessConfig(alias=data.get("business_alias", {}),
-                          metrics=metrics, dimensions=dims,
-                          filter_templates=data.get("filter_templates", {}),
-                          permissions=data.get("permissions", {}))
+    cfg = BusinessConfig(alias=data.get("business_alias", {}),
+                         metrics=metrics, dimensions=dims,
+                         filter_templates=data.get("filter_templates", {}),
+                         permissions=data.get("permissions", {}))
+    for d in (data.get("derived_metrics") or []):
+        k = cfg.derived_key(d)
+        if k:
+            cfg.derived_metrics[k] = d
+    return cfg
 
 
 def metric_summary(cfg: BusinessConfig) -> str:
@@ -79,6 +99,8 @@ def metric_summary(cfg: BusinessConfig) -> str:
         lines.append(f"  - {m.key}（{m.name}）: {m.desc}；"
                      f"支持维度[{','.join(m.support_dims)}] "
                      f"支持过滤[{','.join(m.support_filters)}]")
+    for k, d in (cfg.derived_metrics or {}).items():
+        lines.append(f"  - {k}（{d.get('name')}）: {d.get('desc','')}  [派生指标]")
     lines.append("可用维度: " + ", ".join(f"{d.key}({d.name})" for d in cfg.dimensions.values()))
     return "\n".join(lines)
 

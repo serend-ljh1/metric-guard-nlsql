@@ -54,7 +54,7 @@ def test_in_scope_questions_are_matched_and_executed(sb, sample_db, question, me
 @pytest.mark.parametrize("question", [
     "客单价按品类",          # aov 不支持 category
     "超时送达率按品类",       # late_delivery_rate 不支持 category
-    "平均运费是多少",         # 无该指标
+    "每个客服的响应时长是多少",  # 配置里没有这类指标（语义层已覆盖"平均运费"等）
     "今天天气怎么样",         # 完全无关
 ])
 def test_out_of_scope_questions_are_rejected(sb, sample_db, question):

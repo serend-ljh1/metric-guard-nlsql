@@ -42,7 +42,7 @@ def test_query_in_scope(client):
 
 def test_query_out_of_scope_offline(client):
     # 无 Key 时口径外问题被明确拒绝（离线不支持自由查询）
-    r = client.post("/api/query", json={"question": "每个卖家的平均运费是多少"})
+    r = client.post("/api/query", json={"question": "每个客服的响应时长是多少"})
     assert r.status_code == 200
     d = r.json()
     assert not d["ok"] and d["mode"] == "free"

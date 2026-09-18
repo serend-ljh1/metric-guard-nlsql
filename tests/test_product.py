@@ -37,16 +37,32 @@ def test_in_scope_certified(env):
 
 
 def test_out_of_scope_offline_rejected(env):
+    """口径外：语义层覆盖不到 → 离线（无 LLM）时明确拒绝，不做兜底。"""
     sb, cfg, db = env
-    a = answer("每个卖家的平均运费是多少", cfg, sb, db, llm=None)
+    a = answer("每个客服的响应时长是多少", cfg, sb, db, llm=None)
     assert not a["ok"] and "自由查询" in a["reject"]
 
 
 def test_out_of_scope_free_query(env):
+    """口径外 + 有 LLM → 降级到多 Agent 自由生成，并标注未经口径认证。"""
     sb, cfg, db = env
-    a = answer("每个卖家的平均运费是多少", cfg, sb, db, llm=MockLLM())
+    a = answer("每个客服的响应时长是多少", cfg, sb, db, llm=MockLLM())
     assert a["mode"] == "free" and a["ok"]
     assert a["certified"] is False   # 降级标注：未经口径认证
+    assert a.get("path") == "fallback"
+
+
+def test_in_scope_uses_semantic_path_not_llm(env):
+    """架构反转回归：口径内必须走语义层确定性编译（path=semantic），不再让 LLM 写 SQL。
+
+    修复前即便命中语义层也要引擎 LLM 生成 SQL（只加公式约束），既慢又可能被改坏。
+    """
+    sb, cfg, db = env
+    a = answer("各个品类的GMV", cfg, sb, db, llm=MockLLM())
+    assert a["ok"] and a["mode"] == "metric"
+    assert a.get("path") == "semantic"
+    assert a["source"].startswith("语义层确定性编译")
+    assert a["certified"] is True
 
 
 # ---------------- 2) 多轮追问 ----------------
@@ -81,21 +97,21 @@ def cfg_copy(tmpdir_clean):
 def test_metric_crud(cfg_copy):
     from sqlpa.business import metric_store as store
     ok, msg = store.upsert_metric(
-        {"key": "freight_cost", "name": "运费总额", "desc": "订单运费合计",
+        {"key": "demo_freight_x", "name": "演示运费指标", "desc": "CRUD 测试用",
          "metric_expr": "SUM(oi.freight_value)",
          "from_clause": "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
          "where_core": "1=1", "support_dims": ["state"], "support_filters": ["time_range"]},
         path=cfg_copy)
     assert ok, msg
-    assert "freight_cost" in load_config(cfg_copy).metrics
+    assert "demo_freight_x" in load_config(cfg_copy).metrics
 
     ok, msg = store.upsert_metric(
-        {"key": "freight_cost", "name": "x", "desc": "", "metric_expr": "",
+        {"key": "demo_freight_x", "name": "x", "desc": "", "metric_expr": "",
          "from_clause": "FROM orders", "support_dims": [], "support_filters": []},
-        editing_key="freight_cost", path=cfg_copy)
+        editing_key="demo_freight_x", path=cfg_copy)
     assert not ok and "公式" in msg          # 空公式被校验拦截
 
-    ok, _ = store.delete_metric("freight_cost", path=cfg_copy)
+    ok, _ = store.delete_metric("demo_freight_x", path=cfg_copy)
     assert ok
 
 

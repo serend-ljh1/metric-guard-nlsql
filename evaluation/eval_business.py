@@ -64,7 +64,7 @@ CASES = [
      "dims": ["category"], "note": "late_delivery_rate 不支持 category"},
 
     # ---- 口径外：无对应指标（必须拒绝并给可读提示）----
-    {"q": "平均运费是多少", "expect": "reject", "note": "配置里没有运费指标"},
+    {"q": "每个客服的响应时长是多少", "expect": "reject", "note": "配置里没有这类指标"},
     {"q": "今天天气怎么样", "expect": "reject", "note": "完全无关问题"},
 
     # ---- 时间过滤 ----
