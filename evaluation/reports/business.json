@@ -39,7 +39,7 @@
       "reject": "",
       "rows": 2,
       "reject_reasons": [],
-      "latency_ms": 12.0,
+      "latency_ms": 33.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -58,7 +58,7 @@
       "reject": "",
       "rows": 3,
       "reject_reasons": [],
-      "latency_ms": 6.0,
+      "latency_ms": 22.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -75,7 +75,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 6.0,
+      "latency_ms": 21.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -94,7 +94,7 @@
       "reject": "",
       "rows": 2,
       "reject_reasons": [],
-      "latency_ms": 6.5,
+      "latency_ms": 21.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -111,7 +111,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 7.0,
+      "latency_ms": 23.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -130,7 +130,7 @@
       "reject": "",
       "rows": 3,
       "reject_reasons": [],
-      "latency_ms": 6.0,
+      "latency_ms": 23.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -147,7 +147,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 7.0,
+      "latency_ms": 21.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -164,7 +164,7 @@
       "reject": "客单价 不支持按「品类」统计（离线模式无 LLM，不支持自由查询）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 4.1,
+      "latency_ms": 21.7,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -181,7 +181,7 @@
       "reject": "超时送达率 不支持按「品类」统计（离线模式无 LLM，不支持自由查询）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 4.0,
+      "latency_ms": 21.2,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -198,7 +198,7 @@
       "reject": "未识别到业务指标(支持: gmv,order_count,aov,cancellation_rate,late_delivery_rate,avg_review)（离线模式无 LLM，不支持自由查询）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 4.0,
+      "latency_ms": 32.2,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -215,7 +215,7 @@
       "reject": "未识别到业务指标(支持: gmv,order_count,aov,cancellation_rate,late_delivery_rate,avg_review)（离线模式无 LLM，不支持自由查询）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 5.0,
+      "latency_ms": 23.5,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -232,7 +232,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 6.4,
+      "latency_ms": 23.4,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true

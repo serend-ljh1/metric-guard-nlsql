@@ -66,7 +66,7 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
     """对单条问题跑一遍完整链路，返回可观测结果。
 
     want_repair_demo: 若传入某条问题的"故意错误 SQL"，首次会先生成它来触发修复循环。
-    use_critic: 是否启用 Writer↔Critic 闭环（独立评审者审 SQL，写手按意见修订）。
+    use_critic: 是否启用事后 Critic 评审（执行成功但结果不对时，让 Critic 看执行结果判断是否回答了问题）。
     use_schema_link: 是否启用 Schema-Linker（列级裁剪 schema 上下文，省token/降噪）。
     dialect_hint: 目标数据库方言提示（业务模式接 MySQL/PostgreSQL 时注入）。
     """
@@ -175,25 +175,32 @@ def run_question(question: str, db_id: str, schema: Dict, sb: SqlSandbox,
     if want_repair_demo is not None:
         sql = want_repair_demo  # 用于演示自愈：首次强制错误
 
-    # ---- Writer ↔ Critic 闭环（独立评审者审 SQL → 写手按意见修订）----
-    if use_critic:
-        for _rnd in range(max_review_round + 1):
-            t0 = time.time()
-            rev = llm.review_sql(question, sql, schema_text, None)
-            _trace(agent_trace, "ReviewAgent", "独立评审",
-                   f"pass={rev.get('pass')} issues={len(rev.get('issues', []))} {str(rev.get('feedback'))[:28]}", t0)
-            if rev.get("pass"):
-                break
-            sql = generate({"feedback": rev.get("feedback", ""), "sql": sql})
-            if sql is None:
-                trace.append(f"评审修订阶段 LLM 失败: {llm_error}")
-                return fail(f"评审修订阶段 LLM 失败: {llm_error}", "llm_error")
-
     exec_res = execute(sql)
     trace.append(f"attempt1: ok={exec_res['ok']} err={exec_res['error']}")
 
-    # ---- 自愈循环：Diagnose → Writer(修复) → Executor → Validator ----
+    review_rounds = 0
+
+    # ---- 自愈循环：事后评审(Critic看结果) → Diagnose → Writer(修复) → Executor → Validator ----
     while not (exec_res["ok"] and validate(exec_res)):
+        # 执行成功但结果不对，且开了 Critic 且未达评审轮次 → 让 Critic 看结果判断
+        if (exec_res["ok"] and use_critic and review_rounds < max_review_round):
+            review_rounds += 1
+            t0 = time.time()
+            rev = llm.review_sql(question, sql, schema_text, exec_res)
+            _trace(agent_trace, "ReviewAgent", "结果评审(事后)",
+                   f"pass={rev.get('pass')} issues={len(rev.get('issues', []))} {str(rev.get('feedback'))[:28]}", t0)
+            if rev.get("pass"):
+                # Critic 认可结果，但 validate 不通过（评测模式金标准不匹配）→ 不再评审，走 diagnose
+                pass
+            else:
+                sql = generate({"feedback": rev.get("feedback", ""), "sql": sql})
+                if sql is None:
+                    trace.append(f"评审修订阶段 LLM 失败: {llm_error}")
+                    return fail(f"评审修订阶段 LLM 失败: {llm_error}", "llm_error")
+                exec_res = execute(sql)
+                trace.append(f"attempt{attempts}: ok={exec_res['ok']} err={exec_res['error']}")
+                continue  # 重新校验
+
         if repairs >= max_repair_round:
             terminate_reason = "max_retry"
             trace.append(f"达到最大修复轮次({max_repair_round})，终止")

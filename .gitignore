@@ -38,6 +38,7 @@ eval_result*.json
 .pytest_cache/
 data/business_audit.jsonl
 data/hitl_queue.jsonl
+data/demo_hitl.jsonl
 data/datasources.yaml
 data/olist_sample/
 data/app.db

@@ -28,7 +28,10 @@ def test_ex_self_consistent(mini_db):
 def test_pipeline_multiagent_trace(mini_db):
     sb = SqlSandbox(mini_db, ExecConfig(max_rows=2000))
     schema = extract_from_sqlite(mini_db, "mini").to_dict()
-    llm = MockLLM(answer_key={Q: GOLD})
+    # 首次返回"执行成功但结果不对"的 SQL（WHERE 1=0 返回 0 行），
+    # 触发事后 review；review 不通过 → 改写 → 第二次返回正确 SQL。
+    WRONG = "SELECT count(*) FROM singer WHERE 1=0"
+    llm = MockLLM(answer_key={Q: GOLD}, fail_first_map={Q: WRONG}, review_pass=False)
     res = run_question(Q, "mini", schema, sb, llm, gold_sql=GOLD,
                        max_repair_round=3, use_critic=True)
     assert res.final_valid

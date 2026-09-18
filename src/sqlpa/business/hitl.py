@@ -23,11 +23,13 @@ class HITLRecord:
     record_id: str = ""
     user_input: str = ""
     matched_metric: str = ""
+    owner: str = ""
     generated_sql: str = ""
     reject_reason: str = ""
     role: str = "analyst"
     status: str = "pending"        # pending / approved / corrected / dismissed
-    human_note: str = ""
+    human_note: str = ""           # 人工复核意见（人写的才落这里）
+    ai_note: str = ""              # AI 预先生成的分析草稿（如归因总结），供审核人参考
     corrected_sql: str = ""
     create_time: str = ""
     resolve_time: str = ""
@@ -38,13 +40,16 @@ class HITLRecord:
 
 def enqueue(user_input: str, matched_metric: str, generated_sql: str,
             reject_reason: str, role: str = "analyst",
-            path: str | Path | None = None) -> str:
+            path: str | Path | None = None, owner: str = "",
+            ai_note: str = "") -> str:
     p = Path(path or _DEFAULT)
     p.parent.mkdir(parents=True, exist_ok=True)
     rec = HITLRecord(record_id=uuid.uuid4().hex[:8], user_input=user_input,
-                     matched_metric=matched_metric, generated_sql=generated_sql,
+                     matched_metric=matched_metric, owner=owner,
+                     generated_sql=generated_sql,
                      reject_reason=reject_reason, role=role,
-                     status="pending", create_time=time.strftime("%Y-%m-%d %H:%M:%S"))
+                     status="pending", ai_note=ai_note,
+                     create_time=time.strftime("%Y-%m-%d %H:%M:%S"))
     with open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec.to_dict(), ensure_ascii=False) + "\n")
     try:
@@ -52,6 +57,7 @@ def enqueue(user_input: str, matched_metric: str, generated_sql: str,
         storage.insert_hitl({
             "record_id": rec.record_id, "username": role,
             "user_input": user_input, "matched_metric": matched_metric,
+            "owner": owner,
             "generated_sql": generated_sql, "reject_reason": reject_reason,
             "status": "pending",
         })

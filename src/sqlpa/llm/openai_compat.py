@@ -30,12 +30,22 @@ DEFAULT_BASE = os.environ.get("LLM_API_BASE", "https://api.deepseek.com/v1")
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 DEFAULT_TEMP = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
 
-# 模型池：逗号分隔的模型名列表，按顺序尝试，前一个失败/空内容自动切换
+# 模型池：逗号分隔的模型名列表，按顺序尝试，前一个失败/空内容自动切换。
+# 未设置 MODEL_POOL 环境变量时使用以下默认池（qwen3.8-27b 优先，其次 qwen3.8-max）。
 _pool_env = os.environ.get("MODEL_POOL", "").strip()
 DEFAULT_MODEL_POOL = (
     [m.strip() for m in _pool_env.split(",") if m.strip()]
     if _pool_env
-    else [DEFAULT_MODEL]
+    else [
+        "qwen3.8-27b",
+        "qwen3.8-max",
+        "qwen3.8-flash",
+        "deepseek-v4.1-flash",
+        "qwen3.7-flash-2026-07-15",
+        "qwen3.8-max-0902",
+        "qwen3.8-2.4t-a95b",
+        "glm-5.3",
+    ]
 )
 
 
@@ -174,9 +184,13 @@ class OpenAICompatLLM(LLMProvider):
 
     def review_sql(self, question: str, sql: str, schema_text: str,
                    exec_result: Optional[Dict] = None) -> Dict:
-        sys = ("你是 SQL 评审专家（与写SQL者是不同角色）。独立审核给定 SQL 是否准确回答了问题，"
-               "并给出可执行的修改意见。\n"
-               "检查维度：① 语法/schema 是否正确 ② 语义是否匹配问题 ③ 是否违背数据口径/业务规则。\n"
+        sys = ("你是 SQL 结果评审专家（与写SQL者是不同角色）。"
+               "你的任务是基于【执行结果】判断 SQL 是否回答了用户问题，而不是评审 SQL 写法风格。\n"
+               "核心原则：\n"
+               "① 先看执行结果是否合理回答了问题——如果结果数据明显对题，就 pass=True，不要因为写法不够'优雅'就打回；\n"
+               "② 只有当执行结果明显没回答问题（如返回空、返回了无关列、聚合维度错误、数值明显不对）时，才 pass=False 并给出修改建议；\n"
+               "③ 不要做风格改写（如把 JOIN 改成 LEFT JOIN、加 DISTINCT、调换表顺序）——这类改动容易把正确答案改错；\n"
+               "④ 修改建议必须指向'结果为什么不对'，而非'写法可以更好'。\n"
                "只输出 JSON：{\"pass\": bool, \"issues\": [\"...\"], \"feedback\": \"<具体的修改建议>\"}。")
         ctx = (f"【问题】{question}\n【schema】\n{schema_text}\n【待审SQL】\n{sql}\n")
         if exec_result:

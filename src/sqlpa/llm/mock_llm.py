@@ -20,9 +20,11 @@ from .base import LLMProvider
 
 class MockLLM(LLMProvider):
     def __init__(self, answer_key: Optional[Dict[str, str]] = None,
-                 fail_first_map: Optional[Dict[str, str]] = None):
+                 fail_first_map: Optional[Dict[str, str]] = None,
+                 review_pass: bool = True):
         self.answer_key = answer_key or {}
         self.fail_first_map = fail_first_map or {}
+        self._review_pass = review_pass
         self._attempt: Dict[str, int] = {}
 
     def generate_sql(self, question: str, schema_text: str, plan: str = "",
@@ -57,4 +59,5 @@ class MockLLM(LLMProvider):
 
     def review_sql(self, question: str, sql: str, schema_text: str,
                    exec_result=None) -> dict:
-        return {"pass": True, "issues": [], "feedback": ""}
+        return {"pass": self._review_pass, "issues": [],
+                "feedback": "" if self._review_pass else "[mock] 结果未回答问题，建议修正"}

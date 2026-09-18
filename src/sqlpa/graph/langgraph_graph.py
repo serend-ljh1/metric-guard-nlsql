@@ -4,7 +4,10 @@ sqlpa.graph.langgraph_graph
 生产版：真正的 LangGraph StateGraph 多智能体 Text-to-SQL 引擎。
 
 与 `pipeline.py`（确定性参考编排器）**语义等价**，这里的"调度"用 LangGraph 显式建模：
-Supervisor 协调 + 专业化 Agent 节点 + 条件路由 + Writer↔Critic 闭环 + 自愈循环护栏。
+Supervisor 协调 + 专业化 Agent 节点 + 条件路由 + 自愈循环护栏。
+
+Critic 采用事后评审：SQL 先执行，只有"执行成功但结果不对"时才让 Critic 看执行结果
+判断是否回答了问题，避免旧版"事前审写法"导致同模型自评退化为风格改写、把对的改错。
 
 运行前提（在你的 PyCharm 环境）：
   1) pip install -r requirements.txt（含 langgraph）
@@ -152,12 +155,19 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
                                        state["question"][:26], t0)}
 
     def review(state: AgentState) -> Dict:
+        """事后评审：基于【执行结果】判断 SQL 是否回答了问题。
+
+        与旧版"事前审 SQL 写法"的关键区别：这里 review 发生在 execute 之后，
+        Critic 手里有 question + SQL + schema + **执行结果**，可以判断"跑出来的
+        数据到底有没有回答用户问题"，而不是凭写法风格瞎改。
+        """
         t0 = time.time()
-        rev = llm.review_sql(state["question"], state.get("current_sql", ""), schema_text)
+        rev = llm.review_sql(state["question"], state.get("current_sql", ""),
+                             schema_text, exec_result=state.get("exec_result"))
         return {"review_pass": bool(rev.get("pass", True)),
                 "review_feedback": rev.get("feedback", ""),
                 "review_rounds": state.get("review_rounds", 0) + 1,
-                "agent_trace": _logged(state, "ReviewAgent", "独立评审",
+                "agent_trace": _logged(state, "ReviewAgent", "结果评审(事后)",
                                        f"pass={bool(rev.get('pass', True))} issues={len(rev.get('issues', []))}", t0)}
 
     def execute(state: AgentState) -> Dict:
@@ -202,9 +212,18 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
         return "plan" if state.get("route") == "complex" else "write"
 
     def after_review(state: AgentState) -> str:
-        if state.get("review_pass") or state.get("review_rounds", 0) >= max_review_round:
-            return "execute"
-        return "rewrite"
+        """事后评审后的分支：
+        - 通过 → validate（结果被 Critic 认可）
+        - 不通过且未达轮次上限 → rewrite（按反馈改写后重新执行）
+        - 不通过且达轮次上限 → 转入 diagnose 自愈（或 give_up）
+        """
+        if state.get("review_pass"):
+            return "validate"
+        if state.get("review_rounds", 0) < max_review_round:
+            return "rewrite"
+        if state.get("repairs", 0) >= max_repair_round:
+            return "give_up"
+        return "diagnose"
 
     def after_execute(state: AgentState) -> str:
         valid, reason = _check(sb, llm, state, gold_sql, gold_result)
@@ -214,6 +233,14 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
         # 不要去 diagnose 白白修复（修复也救不了一个坏掉的金标准）。
         if reason == "gold_failed":
             return "validate"
+        # 执行失败 → 走 diagnose 自愈（Critic 帮不上忙，因为没有结果可看）
+        if not state["exec_result"].get("ok"):
+            if state.get("repairs", 0) >= max_repair_round:
+                return "give_up"
+            return "diagnose"
+        # 执行成功但结果不对 → 若开了 Critic 且未达评审轮次，交给 Critic 看结果判断
+        if state.get("use_critic") and state.get("review_rounds", 0) < max_review_round:
+            return "review"
         if state.get("repairs", 0) >= max_repair_round:
             return "give_up"
         return "diagnose"
@@ -233,14 +260,16 @@ def build_graph(sb: SqlSandbox, schema: Dict, llm, gold_sql: Optional[str] = Non
     g.add_edge(START, "route")
     g.add_conditional_edges("route", after_route, {"plan": "plan", "write": "write"})
     g.add_edge("plan", "write")
-    # 写完后：开了 Critic 就走评审闭环，否则直接执行
-    g.add_conditional_edges("write", lambda s: "review" if (s.get("use_critic") and max_review_round) else "execute",
-                            {"review": "review", "execute": "execute"})
-    g.add_conditional_edges("review", after_review, {"execute": "execute", "rewrite": "rewrite"})
-    g.add_edge("rewrite", "review")       # 评审→修订→再审（闭环）
+    # 写完直接执行（事前评审已移除，Critic 改为事后看执行结果）
+    g.add_edge("write", "execute")
     g.add_conditional_edges("execute", after_execute,
-                            {"validate": "validate", "diagnose": "diagnose", "give_up": "give_up"})
-    g.add_edge("diagnose", "write")       # 自愈：诊断后写手修复（复用 write，previous_try 带 error）
+                            {"validate": "validate", "review": "review",
+                             "diagnose": "diagnose", "give_up": "give_up"})
+    g.add_conditional_edges("review", after_review,
+                            {"validate": "validate", "rewrite": "rewrite",
+                             "diagnose": "diagnose", "give_up": "give_up"})
+    g.add_edge("rewrite", "execute")    # 评审→改写→重新执行（改写后的 SQL 需重跑才能再审）
+    g.add_edge("diagnose", "write")     # 自愈：诊断后写手修复（复用 write，previous_try 带 error）
     g.add_edge("validate", END)
     g.add_edge("give_up", END)
 

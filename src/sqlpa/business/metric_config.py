@@ -26,6 +26,8 @@ class Metric:
     where_core: str
     support_dims: List[str] = field(default_factory=list)
     support_filters: List[str] = field(default_factory=list)
+    owner: str = ""
+    version: str = "v1"
 
     def to_dict(self) -> dict:
         return self.__dict__
@@ -58,7 +60,9 @@ def load_config(path: str | Path | None = None) -> BusinessConfig:
                                    from_clause=m.get("from_clause", ""),
                                    where_core=m.get("where_core", "1=1"),
                                    support_dims=m.get("support_dims", []),
-                                   support_filters=m.get("support_filters", []))
+                                   support_filters=m.get("support_filters", []),
+                                   owner=m.get("owner", "未指定"),
+                                   version=m.get("version", "v1"))
     dims = {d["key"]: Dimension(key=d["key"], name=d.get("name", d["key"]),
                                 sql_fragment=d["sql_fragment"])
             for d in data.get("dimensions", [])}

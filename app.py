@@ -57,6 +57,12 @@ def _has_key() -> bool:
                 or os.environ.get("OPENAI_API_KEY"))
 
 
+def _default_business_conn():
+    """归因拆解用的原始业务库连接（只读，仅过审计算，不供用户自定义 SQL）。"""
+    import sqlite3
+    return sqlite3.connect(_sample_db())
+
+
 @st.cache_resource
 def _real_llm():
     from sqlpa.llm.openai_compat import OpenAICompatLLM
@@ -76,6 +82,53 @@ def _sandbox_for(ds_id: str, sqlite_path: str):
 # ============================================================================
 # 💼 业务取数（多轮对话 · 分级放行 · 自动图表）
 # ============================================================================
+
+def _fmt(v):
+    """数字安全格式化（可空）。"""
+    try:
+        return f"{v:,.2f}"
+    except Exception:
+        return str(v)
+
+
+def _render_governance(a: dict) -> None:
+    """治理闭环面板：口径解释 → 波动归因 → 归因总结 → 异常转 HITL。
+
+    仅口径内命中（自由查询/离线无这些字段）时增量呈现，其余情况静默跳过。
+    """
+    metric_explain = a.get("metric_explain")
+    att = a.get("attribution")
+    summary = a.get("attribution_summary")
+    if not (metric_explain or att):
+        return
+    with st.expander("🧭 治理与归因闭环（口径可追溯 · 波动可定位 · 异常转人工）", expanded=False):
+        if metric_explain and metric_explain.get("ok"):
+            st.markdown(f"**口径来源**：负责人 `{metric_explain.get('owner')}` ｜ "
+                        f"版本 `{metric_explain.get('version')}` ｜"
+                        f" {metric_explain.get('desc') or ''}")
+        if att and att.get("ok"):
+            pct = f"{att.get('change_pct', 0) * 100:+.1f}%"
+            st.markdown(f"**波动**：当期 **{_fmt(att.get('current_total'))}** "
+                        f"vs 上期 {_fmt(att.get('previous_total'))}（{pct}）")
+            if att.get("is_abnormal"):
+                st.warning(f"⚠️ 波动超过阈值，已按维度拆解：")
+                contribs = att.get("top_contributors") or []
+                if contribs:
+                    st.dataframe([{"维度": c["dim"], "主要贡献项": c["key"],
+                                   "变化": c["desc"],
+                                   "占整体波动": f"{c['pct_of_change'] * 100:.1f}%"}
+                                  for c in contribs], hide_index=True)
+            else:
+                st.caption("波动在阈值内，未展开深层归因。")
+            if summary:
+                st.markdown("**归因总结**")
+                st.info(summary)
+        if a.get("hitl_id"):
+            st.success(f"✅ 异常已自动流转人工复核 → **HITL 工单 #{a['hitl_id']}**。"
+                       f"AI 归因总结已附在工单，可在下方「人工复核」面板采纳 / 驳回。")
+            steps = ["口径可追溯", "波动归因", "异常判定", "HITL 人工复核"]
+            st.markdown("**闭环状态机**：" + " → ".join(f"**{s}**" for s in steps))
+
 
 def _render_answer(a: dict, cfg) -> None:
     """渲染一次回答：认证徽章 / 口径说明 / SQL / 图表 / 表格。"""
@@ -98,6 +151,8 @@ def _render_answer(a: dict, cfg) -> None:
         st.warning("🔓 自由查询 · 未经口径认证：该问题不在指标中心配置范围内，"
                    "结果由多Agent引擎生成，口径请自行核对。")
 
+    _render_governance(a)
+
     with st.expander("生成 SQL", expanded=False):
         st.code(a["sql"], language="sql")
 
@@ -116,7 +171,7 @@ def _render_answer(a: dict, cfg) -> None:
     else:
         chart = build_altair(spec, cols, rows)
         if chart is not None:
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, width="stretch")
 
     st.dataframe([dict(zip(cols, r)) for r in rows[:200]], hide_index=True)
     if len(rows) > 200:
@@ -226,6 +281,8 @@ def _business_mode() -> None:
         for ind, rec in enumerate(q):
             st.markdown(f"**{ind+1}. {rec['user_input']}**  `{rec['matched_metric'] or '—'}`")
             st.caption(f"原因: {rec['reject_reason']}")
+            if rec.get("ai_note"):
+                st.info("🤖 AI 分析草稿（人工复核可直接参考）：\n" + rec["ai_note"])
             if rec.get("generated_sql"):
                 st.code(rec["generated_sql"], language="sql")
             if st.button("✅ 采纳", key=f"acc_{rec['record_id']}"):
@@ -254,14 +311,14 @@ def _metric_center() -> None:
     from sqlpa.business import metric_store as store
 
     cfg = _business_cfg()
-    tab_m, tab_d, tab_a = st.tabs(["📊 指标", "🧭 维度", "🔤 业务别名"])
+    tab_m, tab_d, tab_a, tab_g = st.tabs(["📊 指标", "🧭 维度", "🔤 业务别名", "🛡️ 口径治理"])
 
     # ---------------- 指标 ----------------
     with tab_m:
         rows = [{"key": m.key, "名称": m.name, "公式": m.metric_expr,
-                 "支持维度": ",".join(m.support_dims),
-                 "支持过滤": ",".join(m.support_filters)} for m in cfg.metrics.values()]
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+                 "负责人": m.owner, "版本": m.version,
+                 "支持维度": ",".join(m.support_dims)} for m in cfg.metrics.values()]
+        st.dataframe(rows, hide_index=True, width="stretch")
 
         opts = ["➕ 新建指标"] + list(cfg.metrics.keys())
         sel = st.selectbox("选择要编辑的指标", opts, key="metric_edit_sel")
@@ -274,6 +331,9 @@ def _metric_center() -> None:
                                 disabled=editing is not None)
             name = c2.text_input("名称", value=editing.name if editing else "")
             desc = st.text_input("口径说明", value=editing.desc if editing else "")
+            co, cv = st.columns(2)
+            owner = co.text_input("负责人", value=editing.owner if editing else "未指定")
+            version = cv.text_input("版本号", value=editing.version if editing else "v1")
             metric_expr = st.text_input("计算公式（口径核心，LLM 不可篡改）",
                                         value=editing.metric_expr if editing else "")
             from_clause = st.text_area("数据来源 from_clause（FROM ... JOIN ...）",
@@ -290,7 +350,9 @@ def _metric_center() -> None:
             sub = st.form_submit_button("💾 保存指标", type="primary")
         if sub:
             ok, msg = store.upsert_metric(
-                {"key": key, "name": name, "desc": desc, "metric_expr": metric_expr,
+                {"key": key, "name": name, "desc": desc,
+                 "owner": owner, "version": version,
+                 "metric_expr": metric_expr,
                  "from_clause": from_clause, "where_core": where_core,
                  "support_dims": sd, "support_filters": sf},
                 editing_key=editing.key if editing else "")
@@ -310,7 +372,7 @@ def _metric_center() -> None:
     with tab_d:
         st.dataframe([{"key": d.key, "名称": d.name, "SQL片段": d.sql_fragment}
                       for d in cfg.dimensions.values()],
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
         with st.form("dim_form"):
             c1, c2 = st.columns(2)
             dkey = c1.text_input("维度 key", key="dim_key")
@@ -336,7 +398,7 @@ def _metric_center() -> None:
     with tab_a:
         st.dataframe([{"别名": k, "表": v.get("table", ""), "列": v.get("col", "")}
                       for k, v in cfg.alias.items()],
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
         with st.form("alias_form"):
             c1, c2, c3 = st.columns(3)
             aname = c1.text_input("中文别名", key="alias_name")
@@ -356,6 +418,85 @@ def _metric_center() -> None:
             if ok:
                 _reload_cfg()
                 st.rerun()
+
+    # ---------------- 口径治理（GovernanceAgent + 归因拆解） ----------------
+    with tab_g:
+        st.caption("治理 Agent：口径冲突检测 + 指标口径解释 + 异常归因拆解。"
+                   "不追求全链路血缘，先聚焦「口径可追溯」与「波动可定位」。")
+        from sqlpa.business import governance
+        from sqlpa.business.governance import detect_conflicts, explain_metric
+
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown("**🔍 口径冲突检测**")
+            conflicts = detect_conflicts(cfg)
+            if not conflicts:
+                st.success("未发现语义相近但公式不同的指标对")
+            for c in conflicts:
+                st.warning(c["reason"])
+                st.code(" | ".join(f"{k} = {e}" for k, e in c["exprs"].items()))
+                st.caption("负责人: " + " · ".join(f"{k}:{v}" for k, v in c["owners"].items())
+                           + "  版本: " + " · ".join(f"{k}:{v}" for k, v in c["versions"].items()))
+            if conflicts:
+                if st.button("🤖 用 LLM 解读冲突原因（规则检测 + AI 解释）", key="ai_conflict"):
+                    if _has_key():
+                        llm = _real_llm()
+                        with st.spinner("LLM 解读中…"):
+                            ai = detect_conflicts(cfg, llm=llm)
+                        for c in ai:
+                            if c.get("ai_analysis"):
+                                st.info("🤖 " + c["ai_analysis"])
+                    else:
+                        st.caption("未配置 API Key，跳过 LLM 解读（规则检测仍可用）。")
+        with g2:
+            st.markdown("**📖 指标口径解释**")
+            sel_m = st.selectbox("选择指标", list(cfg.metrics.keys()), key="gov_metric_sel")
+            ex = explain_metric(cfg, sel_m)
+            if ex.get("ok"):
+                st.markdown(f"- 名称：**{ex['name']}**")
+                st.markdown(f"- 口径：{ex['desc']}")
+                st.code(ex["metric_expr"])
+                st.markdown(f"- 负责人：{ex['owner']} ｜ 版本：{ex['version']}")
+                st.markdown(f"- 支持维度：{', '.join(ex['support_dims'])}")
+
+        st.divider()
+        st.markdown("**📉 异常归因拆解（并行维度查询）**")
+        st.caption("选一个指标与时间范围，系统并行查当期/上期并按维度拆解波动来自哪。")
+        ac1, ac2, ac3 = st.columns(3)
+        agg = ac1.selectbox("指标", list(cfg.metrics.keys()), key="attr_metric")
+        aperiod = ac2.text_input("当期（如 本月 / 上月 / 2026-08）", value="上月", key="attr_period")
+        adims = ac3.multiselect("拆解维度", list(cfg.dimensions.keys()),
+                                default=["category", "state"], key="attr_dims")
+        if st.button("🚀 执行归因", key="attr_run"):
+            try:
+                conn = _default_business_conn()
+                from sqlpa.business.attribution import analyze, notify_anomaly
+                r = analyze(cfg, conn, agg, current_spec=aperiod, dims=adims)
+                conn.close()
+                if not r.get("ok"):
+                    st.error(r.get("reason", "归因失败"))
+                else:
+                    pct = f"{r['change_pct'] * 100:+.1f}%"
+                    st.metric(r["metric_name"],
+                              f"{r['current_total']:,.2f}",
+                              delta=f"{pct} vs 上期 {r['previous_total']:,.2f}")
+                    if not r["is_abnormal"]:
+                        st.info("波动在阈值内，无需深入归因。")
+                    else:
+                        st.warning("波动超过阈值，按维度拆解结果：")
+                        st.dataframe([{"维度": r["dim"],
+                                       "主要贡献项": c["key"],
+                                       "变化": c["desc"],
+                                       "占整体波动": f"{c['pct_of_change'] * 100:.1f}%"}
+                                      for c in r["top_contributors"]],
+                                     hide_index=True)
+                        # ClosureAgent：异常 → 推送指标负责人（写入 HITL 队列）
+                        rid = notify_anomaly(cfg, r)
+                        if rid:
+                            st.success(f"已生成待办（HITL 队列 #{rid}），"
+                                       f"推送负责人「{cfg.metrics[agg].owner}」复核。")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"归因执行失败：{e}")
 
 
 # ============================================================================
@@ -455,6 +596,7 @@ def _agent_roles() -> None:
     agents = [
         ("hub", "SupervisorAgent", "调度中枢", "按路由派发任务、设护栏上限、触发终止", "确定性"),
         ("route", "RouterAgent", "难度路由", "判定问题走简单/复杂(跨表/聚合)", "启发式+LLM"),
+        ("join_full", "SchemaLinkerAgent", "模式链接", "从问题锁定位涉及的表/列并补全 JOIN，约束写手范围", "LLM(辅助)"),
         ("code", "SQLWriterAgent", "写手·生成者", "从问题+schema生成SQL(业务模式受公式约束)", "LLM"),
         ("fact_check", "ReviewAgent", "评审者·Critic", "独立审SQL(语法/语义/口径)，给意见让写手修订", "LLM"),
         ("health_and_safety", "DiagnoseAgent", "诊断者", "SQL报错时定位根因、给修复方向", "LLM"),
@@ -462,45 +604,52 @@ def _agent_roles() -> None:
         ("terminal", "ExecutorAgent", "执行工具", "只读沙箱安全执行SQL(SQLite)", "工具,非LLM"),
     ]
     st.markdown("**🤖 多Agent角色（谁 · 干什么）**")
-    half = 4
-    for start in (0, half):
-        cols = st.columns(4 if start == 0 else 3)
-        for col, (icon, name, role, desc, llm) in zip(cols, agents[start:start + half]):
+    for start in range(0, len(agents), 4):
+        cols = st.columns(min(4, len(agents) - start))
+        for col, (icon, name, role, desc, llm) in zip(cols, agents[start:start + 4]):
             with col:
                 with st.container(border=True):
                     st.markdown(f":material/{icon}: **{name}**\n\n**{role}**  ·  {llm}\n\n{desc}")
 
 
 def _benchmark_results() -> None:
-    """展示基准消融数值（读自 data/benchmark_results.json）。
+    """展示引擎消融实测——读取 run_eval.py 的真实可复现产物（eval_results/_summary_arms.json）。
 
-    注意：该文件是**手动维护的展示常量**，没有脚本生成、也没有逐题运行产物，
-    因此不得作为"实测准确率"呈现。
+    每个数字都来自脚本逐题运行并落盘，可用 README「评测框架」里的命令复核。
     """
     import json
-    p = ROOT / "data" / "benchmark_results.json"
+    p = ROOT / "eval_results" / "_summary_arms.json"
+    st.markdown("### 📊 消融实测（Spider-dev · N=50 · run_eval.py）")
     if not p.exists():
+        st.info("`eval_results/_summary_arms.json` 不存在——说明本仓库只随源码分发，"
+                "不含评测产物。请自行运行：`python run_eval.py --dataset spider --split dev "
+                "--sample 50 --seed 42 --engine langgraph --baseline --ablation "
+                "--ablation-rounds 1,3 --out-dir ./eval_results` 后回看本页。")
         return
-    d = json.load(open(p, encoding="utf-8"))
-    st.markdown("### 📊 消融数值（展示用，非可复现实测）")
-    st.warning("以下数值来自 `data/benchmark_results.json` —— 这是一个**手动维护的常量文件**，"
-               "无生成脚本、无逐题运行产物，且对同一配置存在互相矛盾的两组数。"
-               "**请勿作为准确率引用**；跑真实数字请用 `run_eval.py`。详见 README「评测框架」。")
-    st.caption(d.get("source", ""))
-    for key, label in [("self_heal", "自愈深度消融（修复几轮最好）"),
-                       ("critic", "多Agent协作消融（Writer ↔ Critic 评审者）")]:
-        blk = d.get(key)
-        if not blk:
-            continue
-        st.markdown(f"**{label}**")
-        st.caption(blk["note"])
-        data = [{"配置": r["label"],
-                 "总 EX": f"{r['ex']:.2f}",
-                 "simple": f"{r['simple']:.2f}(n={r['simple_n']})",
-                 "complex": f"{r['complex']:.2f}(n={r['complex_n']})"}
-                for r in blk["rows"]]
-        st.dataframe(data, hide_index=True)
-        st.caption("💡 " + blk["conclusion"])
+    arms = json.load(open(p, encoding="utf-8"))
+    arm_label = {
+        "baseline_zeroshot": "L0 单次直出",
+        "baseline_engineL1": "L1 引擎",
+        "ablation_L1": "L1 引擎(复跑)",
+        "ablation_L3": "L3 全自愈",
+    }
+    rows = []
+    for a in arms:
+        rows.append({
+            "配置": arm_label.get(a["arm"], a["arm"]),
+            "EX": f"{a['ex']}/{a['n']} ({a['exr']:.0%})",
+            "EM": f"{a['em']}",
+            "token/题": f"{a['tokq']:.0f}",
+            "成本/题": f"¥{a['costq']:.5f}",
+            "延迟": f"{a['lat']/1000:.1f}s",
+            "修复轮": f"{a['rep']:.2f}",
+        })
+    st.dataframe(rows, hide_index=True)
+    st.caption("同一配置复跑可能差 1~2 题（±2~4pp），故 L1→L3 幅度不作为强结论；"
+               "token 是 EX 之外的明确成本，L3 约为 L0 的 1.69 倍。")
+    st.caption("复核：`python run_eval.py --dataset spider --split dev --sample 50 "
+               "--seed 42 --engine langgraph --baseline --ablation --ablation-rounds 1,3 "
+               "--out-dir ./eval_results`（约 ¥0.16）")
 
 
 def _cost_panel() -> None:
@@ -569,6 +718,9 @@ def _favorites_page() -> None:
 
 def _engine_mode() -> None:
     st.subheader("🧪 引擎评测（多Agent · 真实 LLM 生成 vs 金标准 · EX/EM 对比）")
+    st.caption("本页定位：**SQL 引擎质量的离线评测**（Spider 基准，`run_eval.py` 可复现）。"
+               "业务口径认证、波动归因与异常闭环请到「业务取数」「指标中心」查看——本页只回答"
+               "“引擎生成 SQL 对不对”，不参与业务口径链路。")
     _benchmark_results()
     _cost_panel()
     st.divider()
@@ -580,7 +732,7 @@ def _engine_mode() -> None:
 
     spider = _spider_data()
     if not spider:
-        st.error("未找到 Spider 数据(D:\\ds harness\\spider)，请先下载/确认路径。")
+        st.error(f"未找到 Spider 数据（{SPIDER_DB_ROOT}），请先下载/确认路径（可用环境变量 SQLPA_SPIDER_ROOT 覆盖）。")
         return
     with st.sidebar:
         max_repair = st.slider("最大自愈轮次", 1, 5, 3)

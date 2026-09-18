@@ -26,6 +26,8 @@ metrics:
   - key: gmv
     name: GMV成交总额
     desc: 已支付订单的商品金额总和（不含取消订单）
+    owner: 数据组-财务线
+    version: v3
     metric_expr: "SUM(oi.price)"
     from_clause: "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN products p ON oi.product_id=p.product_id"
     where_core: "o.order_status != 'canceled'"
@@ -35,6 +37,8 @@ metrics:
   - key: order_count
     name: 订单数
     desc: 已送达订单数量
+    owner: 数据组-电商线
+    version: v2
     metric_expr: "COUNT(DISTINCT o.order_id)"
     from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
     where_core: "o.order_status = 'delivered'"
@@ -44,6 +48,8 @@ metrics:
   - key: aov
     name: 客单价
     desc: GMV / 有效订单数（每笔订单平均商品金额）
+    owner: 数据组-财务线
+    version: v2
     metric_expr: "SUM(oi.price) * 1.0 / NULLIF(COUNT(DISTINCT o.order_id), 0)"
     from_clause: "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id"
     where_core: "o.order_status != 'canceled'"
@@ -53,6 +59,8 @@ metrics:
   - key: cancellation_rate
     name: 取消率
     desc: 取消订单数 / 全部已创建订单数（公开数据无退款表，用取消率近似退货率）
+    owner: 数据组-品质线
+    version: v1
     metric_expr: "COUNT(DISTINCT CASE WHEN o.order_status='canceled' THEN o.order_id END) * 1.0 / COUNT(DISTINCT o.order_id)"
     from_clause: "FROM orders o LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
     where_core: "1=1"

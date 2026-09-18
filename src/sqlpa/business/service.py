@@ -15,8 +15,10 @@ sqlpa.business.service
 """
 from __future__ import annotations
 
+import sqlite3
 from typing import Dict, List, Optional
 
+from sqlpa.business import attribution, governance
 from sqlpa.business.audit import append_audit, AuditRecord
 from sqlpa.business.hitl import enqueue
 from sqlpa.business.metric_matcher import match
@@ -46,7 +48,8 @@ def _engine_run(question: str, db_id: str, schema: Dict, sb, llm, **kw):
 
 
 def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
-           history: Optional[List[Dict]] = None, username: str = "") -> Dict:
+           history: Optional[List[Dict]] = None, username: str = "",
+           hitl_path: Optional[str] = None) -> Dict:
     from sqlpa.business.followup import rewrite
     from sqlpa.business.metric_guard import build_constraint, formula_of, verify_formula
     from sqlpa.business.permissions import check_access, mask_result
@@ -162,6 +165,33 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                            sql=final_sql, perms=cfg.permissions, schema=schema)
     else:
         enqueue(q, res.metric_key, final_sql, "引擎执行未通过", role=role)  # HITL: 引擎失败 -> 人工
+
+    # ---- 治理面增强：口径解释 + 异常归因 + HITL 闭环 ----
+    # 把 LLM 从"只写/改 SQL"扩展到治理层（LLM 生成归因总结），打通
+    # "取数 → 口径可追溯 → 波动归因 → 异常闭环"的端到端链路。
+    # 全部 try/except 降级：任何一步失败都不阻塞主取数结果。
+    extra: Dict = {}
+    if ok:
+        try:
+            extra["metric_explain"] = governance.explain_metric(cfg, res.metric_key)
+            time_spec = next((v for ft, v in res.filters if ft == "time_range"), None)
+            if time_spec:
+                _db = sqlite3.connect(db_path)
+                try:
+                    att = attribution.analyze(cfg, _db, res.metric_key,
+                                              current_spec=time_spec, dims=res.dims)
+                    extra["attribution"] = att
+                    extra["attribution_summary"] = attribution.summarize(att, llm)
+                    if att.get("is_abnormal"):
+                        # 把 AI 归因总结一并写入工单 ai_note，人工复核时可直接看 AI 分析草稿
+                        extra["hitl_id"] = attribution.notify_anomaly(
+                            cfg, att, path=hitl_path,
+                            summary=extra.get("attribution_summary") or "")
+                finally:
+                    _db.close()
+        except Exception:
+            pass
+
     append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                              matched_metric=res.metric_key, generated_sql=final_sql,
                              is_success=ok, result_rows=len(rows), mode="metric", certified=ok))
@@ -171,4 +201,5 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
             "metric_expr": formula, "dims": res.dims, "source": source,
             "sql": final_sql, "columns": cols, "rows": rows,
             "agent_trace": agent_trace,
-            "rewritten_question": q, "used_context": used_ctx}
+            "rewritten_question": q, "used_context": used_ctx,
+            **extra}
