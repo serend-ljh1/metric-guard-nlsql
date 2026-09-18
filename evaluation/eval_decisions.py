@@ -16,11 +16,28 @@ evaluation/eval_decisions.py
 **真实 olist 业务语境**的自然追问（州/品类/单量/客单价），而非"那为什么呢"这类人造 case。
 
 用法：
-    - 离线基线（llm=None，纯规则兜底）：
+    - 离线基线（llm=None，纯规则 + 策略门控）：
         python -m evaluation.eval_decisions
-    - 接真实 LLM（把 llm 换成 DeepSeek/OpenAI 兼容客户端）：
-        参考 tests/conftest 的 MockLLM 形式实现 __call__/complete 后传入 run(llm=...)
+    - 接真实 LLM（.env 配好 LLM_API_KEY / LLM_API_BASE）：
+        python -m evaluation.eval_decisions --llm --model qwen3.8-max --out eval_results/decision.json
+      默认**钉死单模型**（不放开模型池），避免额度耗尽时静默换模型、把别人的分数记到它头上。
     - 作为 pytest 用例被 tests/test_attribution_decisions.py 引用，保证不改坏。
+
+--------------------------------------------------------------------
+决策的三层结构 —— "哪一层该出钱、哪一层必须确定性"
+--------------------------------------------------------------------
+  1. **策略门控（确定性，0 token）**：`is_factor_question` 判定用户在不在问
+     "单量 × 客单价"这类乘法因子。只有放行才允许 factorize，且放行后直接由规则
+     给出 factorize —— 这是语义判定，不需要也不应该再问一次 LLM。
+  2. **规则兜底（确定性，0 token）**：主因集中度 → drill / switch_dim；
+     无追问语气 → none。它是"LLM 挂了也不会胡说"的地板。
+  3. **LLM 判断（花 token）**：门控未短路、且规则给不出高分答案时，由 LLM 决定
+     下一步拆哪儿、要不要继续动手。
+
+这个划分的价值是可以被数字验证的：本文件同时输出 `decision_accuracy`（选对动作）、
+`exec_accuracy`（做完算对）、`llm_calls`（这一层实际花了多少次调用）
+与逐条 `source`（rule / llm），因此"门控到底省了多少、LLM 到底带来多少"
+都不靠叙述，靠报告里可核对的计数。
 
 --------------------------------------------------------------------
 标注协议（Annotation Protocol）——"专家真值由谁标 / 判定依据是什么"
@@ -38,8 +55,10 @@ evaluation/eval_decisions.py
                     单量 × 客单价的因子分解，而非继续下钻某个维度。
   - **none**       = 非追问（全新问题）或电子无显著维度贡献 → 无需继续拆，收尾。
 
-规则兜底基线 ≈ 19/26（≈0.73，因为它永远选不出 factorize 这类需要领域判断的动作），
-接 LLM（oracle）→ 26/26（1.0）——保留下显而易见的提升空间，评测有区分度。
+规则兜底基线 ≈ 19/26（≈0.73，因为它永远选不出 factorize 这类需要领域判断的动作）；
+加入 `is_factor_question` 策略门控后，7 条量价问法由规则确定性命中，26/26 ——
+也就是说**这一层已经不需要 LLM**。门控的价值（19/26 → 26/26）与"哪些问法根本
+不该花 token"都由 `--llm` 模式的对照报告直接印出来。
 """
 from __future__ import annotations
 
@@ -340,20 +359,40 @@ def _analyze(cfg, con, db_path, metric_key):
 # ---------------------------------------------------------------- 决策命中（①）
 
 def decision_accuracy(annotated: List[Dict], llm) -> Dict:
-    """跑一遍注解集，返回决策命中率与逐条明细（对应 decision_accuracy）。"""
+    """跑一遍注解集，返回决策命中率与逐条明细（对应 decision_accuracy）。
+
+    逐条记录 `source`（rule=规则/门控确定性给出，llm=LLM 判断给出），
+    这样"哪些问题花了 LLM 的钱、哪些根本不用"是可以被审计的，而不是嘴上说。
+    """
     ann = annotated if annotated is not None else ANNOTATED
     cases: List[Dict] = []
     correct = 0
+    llm_calls = 0
     for c in ann:
+        before = _llm_call_count(llm)
         dec = decide_drill(c["att"], c["question"], llm)
+        after = _llm_call_count(llm)
+        llm_calls += max(0, after - before)
         hit = dec.get("action") == c.get("expert_action")
         correct += int(hit)
         cases.append({"name": c.get("name"), "action": dec.get("action"),
                       "expert": c.get("expert_action"), "source": dec.get("decision_source"),
-                      "hit": hit, "reason": dec.get("reason")})
+                      "hit": hit, "reason": dec.get("reason"),
+                      "gated_from": dec.get("gated_from")})
     return {"total": len(ann), "correct": correct,
             "decision_accuracy": round(correct / len(ann), 4) if ann else 1.0,
-            "llm_used": llm is not None, "cases": cases}
+            "llm_used": llm is not None, "llm_calls": llm_calls, "cases": cases}
+
+
+def _llm_call_count(llm) -> int:
+    """统计 LLM 客户端的调用次数（不同实现计数方式不同，取得到就取，取不到算 0）。"""
+    if llm is None:
+        return 0
+    for attr in ("calls", "n_calls", "call_count"):
+        v = getattr(llm, attr, None)
+        if isinstance(v, int):
+            return v
+    return 0
 
 
 def run(annotated: Optional[List[Dict]] = None, llm=None,
@@ -367,6 +406,101 @@ def run(annotated: Optional[List[Dict]] = None, llm=None,
             "exec": e}
 
 
-if __name__ == "__main__":
+def _build_llm(model: str, pool: bool):
+    """构造真实 LLM。
+
+    默认 `pool=False`：把模型池收成"就这一个模型"。评测必须可复现，
+    若放开模型池，某个模型 403/额度耗尽时会静默换到别的模型，测出来的
+    数字就不再是"这个模型"的成绩（历史踩过：50 例跑分被误当成单模型结果）。
+    """
+    import os
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:  # pragma: no cover
+        pass
+    try:
+        from sqlpa.eval.console import ensure_utf8_console
+        ensure_utf8_console()
+    except ImportError:  # pragma: no cover
+        pass
+    from sqlpa.llm.openai_compat import OpenAICompatLLM
+    return OpenAICompatLLM(model=model, temperature=0.0,
+                           model_pool=[model] if not pool else None, max_retries=0)
+
+
+def _report(r: Dict, tag: str) -> None:
+    """把一次评测打成人能看的结论：命中率、决策来源、被门控拦下的、判错的。"""
+    src: Dict[str, int] = {}
+    for c in r["cases"]:
+        src[c["source"]] = src.get(c["source"], 0) + 1
+    print(f"\n=== {tag} ===")
+    print(f"决策命中 decision_accuracy = {r['correct']}/{r['total']} "
+          f"= {r['decision_accuracy']:.1%}")
+    print(f"执行正确 exec_accuracy      = {r['exec']['passed']}/{r['exec']['total']} "
+          f"= {r['exec']['exec_accuracy']:.1%}")
+    print(f"决策来源 {src}    LLM 实际调用 {r.get('llm_calls', 0)} 次"
+          f"（确定性短路省下的调用不花钱）")
+    gated = [c for c in r["cases"] if c.get("gated_from")]
+    if gated:
+        print(f"被策略门控拦下（LLM 越界选 factorize）{len(gated)} 条："
+              + ", ".join(str(c["name"]) for c in gated))
+    bad = [c for c in r["cases"] if not c["hit"]]
+    if bad:
+        print(f"判错 {len(bad)} 条：")
+        for c in bad:
+            print(f"  x {str(c['name'])[:32]:34s} 判={str(c['action']):11s} "
+                  f"期望={str(c['expert']):11s} 源={c['source']}")
+    else:
+        print("判错 0 条")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """命令行入口：
+
+        python -m evaluation.eval_decisions                    # 离线规则基线（不花钱）
+        python -m evaluation.eval_decisions --llm              # 真实 LLM 参与判断
+        python -m evaluation.eval_decisions --llm --model qwen3.8-max --out eval_results/decision.json
+    """
+    import argparse
     import json
-    print(json.dumps(run(), ensure_ascii=False, indent=2))
+
+    try:  # Windows 控制台默认 GBK，中文/符号会炸 → 统一抬到 UTF-8
+        from sqlpa.eval.console import ensure_utf8_console
+        ensure_utf8_console()
+    except ImportError:  # pragma: no cover
+        pass
+
+    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（26 例，专家标注）")
+    ap.add_argument("--llm", action="store_true", help="接真实 LLM 参与决策（需要 .env 里的 key）")
+    ap.add_argument("--model", default=None, help="指定模型（默认取 .env 的 LLM_MODEL）")
+    ap.add_argument("--pool", action="store_true",
+                    help="允许模型池自动切换（默认关闭：评测必须钉死单模型才可复现）")
+    ap.add_argument("--out", default=None, help="把完整结果写成 JSON 到该路径")
+    args = ap.parse_args(argv)
+
+    llm = None
+    if args.llm:
+        import os
+        model = args.model or os.environ.get("LLM_MODEL") or "qwen3.8-max"
+        llm = _build_llm(model, args.pool)
+        print(f"评测模型：{model}（模型池 {'开' if args.pool else '关'}）")
+
+    r = run(llm=llm)
+    _report(r, "规则 + 策略门控" + ("  + LLM 判断" if llm else "（离线基线）"))
+
+    if llm is not None:
+        base = run(llm=None)
+        _report(base, "对照：不接 LLM（规则 + 门控，全部确定性）")
+        print(f"\nLLM 净增益：{r['decision_accuracy']:.1%} vs 规则 {base['decision_accuracy']:.1%}")
+
+    if args.out:
+        p = Path(args.out)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(r, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\n已写出：{p}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

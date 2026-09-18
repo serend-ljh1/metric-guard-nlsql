@@ -291,6 +291,48 @@ _FACTOR_MAP = {
 }
 
 
+def is_factor_question(question: str) -> bool:
+    """**策略门控**：当前问题是否在问"乘法因子"（量价分解 / 因子贡献）。
+
+    为什么需要门控，而不是把选择权整体交给 LLM：
+    实测（26 场景决策评测）把 factorize 的决定权完全交给 LLM 时，它会把
+    "本月全国GMV是多少"这类**根本没在问量价**的问题也判成 factorize（过度应用），
+    整体命中率反而低于规则基线。根因是当时的 prompt 写了一句
+    "若指标是 gmv/成交/销售额，优先考虑 factorize"——那是指令级偏置。
+
+    正确的分工是：**代码判定"这个动作在此语境下是否可用"（策略），
+    LLM 在允许范围内做语义判断（判断）**。本函数就是那个策略门。
+
+    判据（关键：提到"单量/客单价"**不等于**在问量价因果）：
+      - 显式因子词：因子 / 分解 / 拆解 / 拆开 / 乘积 / 量价
+      - 贡献构成词：贡献 / 构成
+      - 量价二选一：出现"单量类"与"客单价类"两组词之一，且用"还是/哪个"做比较
+        （例如"是订单少了还是客单低了"）
+    反例（应判 False，属 drill 而非 factorize）：
+      - "那订单量下滑主要出在哪个州？"  只在问**按哪个维度**定位，不是量价分解
+      - "最近30天日均订单量多少？"      只是在看一个数
+      - "各月客单价趋势如何？"          只是在看趋势
+      - "本月全国GMV是多少？"           只是在看一个数
+    """
+    q = str(question or "")
+    vol = any(k in q for k in ("单量", "订单量", "销量", "订单数", "订单少了", "订单多"))
+    price = any(k in q for k in ("客单价", "单价", "每单", "客单"))
+    # 显式因子词（"拆解/分解/因子"这类，本身已表达因子意图）
+    if any(k in q for k in ("因子", "分解", "拆解", "乘积", "量价")):
+        return True
+    # 贡献 / 构成
+    if any(k in q for k in ("贡献", "构成")):
+        return True
+    # 量价二选一：需"比较"语义（"是订单少了还是客单低了"）
+    if vol and price and any(k in q for k in ("还是", "哪个", "哪一个", "孰")):
+        return True
+    # "拆" + 因子词共现（"拆开看…单量和客单价"）——注意必须同时有因子词，
+    # 否则"拆开看哪个品类拖累"会被误判（那是 drill，不是量价分解）
+    if "拆" in q and (vol or price):
+        return True
+    return False
+
+
 def _contribution_scattered(att: Dict, spread_frac: float = 0.6) -> bool:
     """判断维度贡献是否"分散"：主因占波动比例低于阈值视为分散，需主动换维度再拆。"""
     top = (att.get("top_contributors") or [])
@@ -309,7 +351,12 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
       - factorize  判断指标可疑由乘法因子构成（单量×客单价）→ 因子分解
       - none       无追问 / 无显著贡献
 
-    代码只做计算与兜底；"要不要下钻、换哪个维度、要不要因子分解"这类**判断**交 LLM。
+    三层职责（见 is_factor_question 与 evaluation/eval_decisions.py 的说明）：
+      1. 策略门控（确定性）：量价问题只可能走 factorize，且由规则直接给出；
+      2. 规则地板（确定性）：**没有追问语气就不是一次追问** —— 用户在看一个数/做对比，
+         不该被"顺手拆一下"，这一层直接 none，不花 token 也不引入 LLM 的抖动；
+      3. LLM 判断（花 token）：真实的追问（"为什么/那…呢/继续/换个角度"）里，
+         "往哪儿拆、要不要换讲法"才是判断力该出场的地方。
     """
     top = (att.get("top_contributors") or [])
     q = str(question or "")
@@ -319,6 +366,13 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
         if not top:
             return {"action": "none", "reason": "无显著维度贡献", "decision_source": "rule"}
         reason = f"贡献主因：{top[0].get('desc')}"
+        # 门控放行 + 确实在问量价 → factorize 是规则就能给出的合法首选。
+        # 注意：此前因子分解只能靠 LLM 自己"想到"，一旦把偏置从 prompt 拿掉，
+        # 规则给出的 none/drill 会直接返回，factorize 分支永远走不到（实测
+        # LLM 完全没被调用、结果等于规则基线）。所以这里必须在规则层也认这个动作。
+        if is_factor_question(q):
+            return {"action": "factorize", "reason": reason + "；用户在问量价/因子，做乘法分解。",
+                    "decision_source": "rule"}
         if followup_tone:
             if _contribution_scattered(att):
                 return {"action": "switch_dim", "dim": top[0].get("dim", ""),
@@ -330,6 +384,17 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
         return {"action": "none", "reason": "无追问语气，不做下钻", "decision_source": "rule"}
 
     rule = _rule()
+    # 确定性短路 1：门控放行 + 规则已认定在问乘法因子 → 直接 factorize，不消耗 LLM。
+    # 这一步是"规则"的地盘（量价判定是确定性语义，不需要 LLM 再判一次）。
+    factor_allowed = is_factor_question(q)
+    if rule.get("action") == "factorize":
+        return rule
+    # 确定性短路 2：没有追问语气 = 用户只是在看数/做对比。
+    # 这类问题规则已经能给出确定答案（none），交给 LLM 只会引入"顺手多拆一层"的
+    # 过拆风险（实测 LLM 会把"本月全国GMV是多少"这类问题主动下钻），
+    # 因此不花这次 token。"要不要继续动手"在无追问语气时不是判断题。
+    if not followup_tone:
+        return rule
     if llm is None:
         return rule
 
@@ -337,17 +402,22 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
         f"- {c.get('desc')}（占 {abs(c.get('pct_of_change', 0)) * 100:.0f}%）"
         for c in top[:4]) or "无显著维度拆分。"
     suggestion = next_drill_suggestion(att)
+    # 策略门控：只有"在问乘法因子"时才允许 factorize（见 is_factor_question 说明）
+    factor_rule = ("- factorize: 仅当用户在问订单量/客单价这类**乘法因子**时可选\n"
+                   if factor_allowed else
+                   "- factorize: 【本问不允许】用户并未在问订单量×客单价这类乘法因子\n")
     prompt = (
         "你是归因分析 Agent。用户上一轮看到某指标波动，现在继续追问。"
         "由你决定'下一步该拆哪儿'。可选动作：\n"
         "- drill: 沿某个维度值下钻一层（给出 dim/value）\n"
         "- switch_dim: 换一个维度重新拆（当前贡献分散时）\n"
-        "- factorize: 若指标可疑由乘法因子构成（如 GMV=订单量×客单价），做因子分解\n"
-        "- none: 无需继续，收尾\n"
+        f"{factor_rule}"
+        "- none: 用户没有要继续分析的意思（例如只是在看某个数/做对比）→ 选 none\n"
         f"指标波动与维度贡献：\n{contrib_lines}\n"
         f"当前下一步建议：{suggestion or '无'}\n"
         f"用户追问：{q}\n"
-        "（若指标是 gmv/成交/销售额，优先考虑 factorize 判断是否单量×客单价所致）\n"
+        "判据提示：不要因为指标是 GMV 就默认做因子分解——要看**用户问的是不是量价/因子**。"
+        "若用户只是要某个数或做对比，应选 none。\n"
         "只输出 JSON：{\"action\":\"drill\"|\"switch_dim\"|\"factorize\"|\"none\","
         "\"dim\":\"维度key\",\"value\":\"维度值\",\"reason\":\"你的判断理由\"}"
     )
@@ -359,6 +429,15 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
     action = obj.get("action")
     if action not in ("drill", "switch_dim", "factorize", "none"):
         return rule
+    # 门控兜底：LLM 若越界选了 factorize，回退到规则建议的动作
+    if action == "factorize" and not factor_allowed:
+        fb = dict(rule)
+        fb["reason"] = (f"[策略门控] 本问未涉及乘法因子（量价），"
+                        f"LLM 的 factorize 判定被拒，回退规则建议。原判据："
+                        f"{(obj.get('reason') or '')[:60]}")
+        fb["decision_source"] = "rule"
+        fb["gated_from"] = "factorize"
+        return fb
     out = {"action": action, "reason": obj.get("reason") or rule.get("reason") or "",
            "decision_source": "llm"}
     if action == "drill":

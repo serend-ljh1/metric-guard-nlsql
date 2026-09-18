@@ -61,12 +61,32 @@ def _att(*, contribs, **kw):
     return base
 
 
+def _has_followup(question: str) -> bool:
+    """与 attribution.decide_drill 里的 followup_tone 判据同源（"这是不是一次追问"）。"""
+    return any(k in question for k in ("那", "呢", "为什么", "为何", "继续", "下钻",
+                                       "再看", "拆", "再"))
+
+
 # ---------------- decide_drill：规则兜底 ----------------
 
 def test_none_without_followup():
     d = decide_drill(_att(contribs=[{"dim": "category", "key": "a", "desc": "品类「a」变化-1",
                                      "pct_of_change": 0.5}]), "各个品类的GMV是多少")
     assert d["action"] == "none" and d["decision_source"] == "rule"
+
+
+def test_no_followup_does_not_ask_llm():
+    """**过拆防护回归**：用户只是在看数/做对比时，不得把问题交给 LLM 去"顺手拆一层"。
+
+    实测 LLM 会把"本月全国GMV是多少"这类问题主动判成下钻（过拆），
+    因此无追问语气时直接走规则 none，既不花 token 也不引入抖动。
+    """
+    oracle = _Oracle('{"action":"drill","dim":"state","value":"SP","reason":"顺手拆一层"}')
+    d = decide_drill(_att(contribs=[{"dim": "state", "key": "SP", "desc": "州「SP」变化-90",
+                                     "pct_of_change": 0.9}]),
+                     "本月全国GMV是多少？", llm=oracle)
+    assert d["action"] == "none" and d["decision_source"] == "rule"
+    assert oracle.calls == 0, "无追问语气的问题不该花 LLM 调用"
 
 
 def test_drill_clear_contributor_on_followup():
@@ -88,11 +108,54 @@ def test_switch_dim_when_scattered():
 # ---------------- decide_drill：LLM 决策 ----------------
 
 def test_llm_factorize_decision():
+    """问题确实在问乘法因子（量价）时 → factorize。
+
+    注意这是**确定性短路**：量价问法由 is_factor_question 门控判定，规则层直接给出
+    factorize，不消耗 LLM（LLM 不该为确定性语义再判一次）。因此来源是 rule 而非 llm。
+    """
     oracle = _Oracle('{"action":"factorize","reason":"GMV疑由单量×客单价构成"}')
     d = decide_drill(_att(contribs=[{"dim": "state", "key": "SP", "desc": "州「SP」变化-70.00",
-                                     "pct_of_change": 0.9}]), "那为什么跌？", llm=oracle)
-    assert oracle.calls >= 1
-    assert d["action"] == "factorize" and d["decision_source"] == "llm"
+                                     "pct_of_change": 0.9}]),
+                     "是单量还是客单价的问题？", llm=oracle)
+    assert d["action"] == "factorize"
+    assert d["decision_source"] == "rule"
+    assert oracle.calls == 0, "确定性语义不该绕一圈去问 LLM"
+
+
+# ---------------- 策略门控：factorize 的准入 ----------------
+
+def test_gate_allows_factor_questions():
+    """显式量价/因子问法应放行。"""
+    from sqlpa.business.attribution import is_factor_question
+    for q in ("是单量还是客单价的问题？", "把 GMV 的下降拆成单量和客单价看看",
+              "拆一下单量×客单价，看到底谁在拖累", "各因子的贡献是多少"):
+        assert is_factor_question(q) is True, q
+
+
+def test_gate_blocks_non_factor_questions():
+    """只在看数、或只在问'按哪个维度定位'的问题不得放行（那是 drill/none）。"""
+    from sqlpa.business.attribution import is_factor_question
+    for q in ("本月全国GMV是多少？", "各月客单价趋势如何？", "按州对比一下本月GMV",
+              "那订单量下滑主要出在哪个州？", "最近30天日均订单量多少？",
+              "拆开看，到底是哪个品类拖累的？"):
+        assert is_factor_question(q) is False, q
+
+
+def test_llm_factorize_is_gated_when_question_is_not_about_factors():
+    """**门控回归**：LLM 越界选 factorize（用户并未问量价）时必须被拒并回退规则。
+
+    背景：26 场景实测中，把 factorize 决定权整体交给 LLM 时，它会把
+    "那这几个州的 GMV 对比呢"这类没在问量价的问题也判成 factorize（prompt 里
+    原有"若指标是 gmv…优先考虑 factorize"的偏置），导致整体命中率低于规则基线。
+    因此改为"策略门控 + LLM 判断"：不允许时直接回退，且记录被拦事实。
+    """
+    oracle = _Oracle('{"action":"factorize","reason":"GMV 可分解"}')
+    d = decide_drill(_att(contribs=[{"dim": "state", "key": "SP", "desc": "州「SP」变化-70.00",
+                                     "pct_of_change": 0.9}]),
+                     "那这几个州的 GMV 对比呢？", llm=oracle)
+    assert d["action"] != "factorize", "非量价问题竟被允许 factorize（门控失效）"
+    assert d.get("gated_from") == "factorize"
+    assert d["decision_source"] == "rule"
 
 
 def test_llm_drill_uses_agent_chosen_value():
@@ -170,7 +233,13 @@ class _OracleSeq:
 
 
 def test_eval_decision_rule_baseline():
-    """规则兜底基线：纯规则永远选不出 factorize，故明显低于 LLM oracle。"""
+    """规则层基线：+ 策略门控后，规则已能给出全部 4 种动作（含 factorize）。
+
+    历史：门控前规则永远选不出 factorize → 19/26（0.73）。加入 `is_factor_question`
+    门控后，7 条量价问法在规则层即被判为 factorize，规则基线升到 26/26。
+    **这里记录的是"哪些问题根本不需要 LLM"**：决策层花的 LLM 预算只在
+    drill / switch_dim / none 这三类判断题上。
+    """
     from evaluation.eval_decisions import run, ANNOTATED, action_tally, EXPERT_LABELED_BY
     # 每种动作用例数 ≥ 5（答辩要求：覆盖 4 种 action，不能平均不足一条）
     tally = action_tally(ANNOTATED)
@@ -178,25 +247,75 @@ def test_eval_decision_rule_baseline():
         assert tally.get(a, 0) >= 5, f"action {a} 只有 {tally.get(a, 0)} 条"
     r = run(ANNOTATED, llm=None)
     assert r["total"] >= 20
-    assert r["decision_accuracy"] == pytest.approx(19 / r["total"], abs=1e-3)
-    assert 0.6 < r["decision_accuracy"] < 0.9      # 规则 ≈2/3，够看但不到家
+    assert r["decision_accuracy"] >= 0.9          # 规则已覆盖含 factorize 的动作全集
+    assert {c["source"] for c in r["cases"]} == {"rule"}
     assert r["expert_labeled_by"] == EXPERT_LABELED_BY   # 标注协议：真值由谁标
 
 
-def test_eval_decision_llm_lifts_accuracy():
-    """接 LLM(oracle) 应全中 → 决策命中 1.0，且明显高于纯规则基线（区分度）。"""
+def test_eval_decision_gate_is_what_earns_factorize():
+    """门控的可度量价值：把门控关掉（还原旧规则），factorize 7 条全错。
+
+    这条用例把"门控到底值多少"钉成数字：19/26 → 26/26 的差就是它带来的。
+    """
     from evaluation.eval_decisions import run, ANNOTATED
-    replies = {"drill": '{"action":"drill","dim":"state","value":"SP","reason":"r"}',
-               "switch_dim": '{"action":"switch_dim","dim":"category","reason":"r"}',
-               "factorize": '{"action":"factorize","reason":"r"}',
-               "none": '{"action":"none","reason":"r"}'}
-    oracle = _OracleSeq([replies[c["expert_action"]] for c in ANNOTATED])
+    from sqlpa.business import attribution as _att
+    real = _att.is_factor_question
+    try:
+        _att.is_factor_question = lambda q: False        # 模拟门控前：永不放行 factorize
+        off = run([{**c} for c in ANNOTATED], llm=None)
+    finally:
+        _att.is_factor_question = real
+    on = run([{**c} for c in ANNOTATED], llm=None)
+    fac = [c for c in off["cases"] if c["expert"] == "factorize"]
+    assert len(fac) == 7 and all(not c["hit"] for c in fac)   # 门控关：量价问题全漏
+    assert off["decision_accuracy"] == pytest.approx(19 / 26, abs=1e-3)
+    assert on["decision_accuracy"] > off["decision_accuracy"]
+
+
+def test_eval_decision_llm_lifts_accuracy():
+    """LLM(oracle) 参与判断题时全中 → 决策命中 1.0，且严格高于不接 LLM 的基线。
+
+    "严格高于"靠一组**规则判不出、LLM 判得出**的用例来体现（下面的 extra）：
+    规则层对量价门控之外的追问只有"主因清晰就下钻"这一条机械判据，遇到
+    "那先别看州了，换个角度再拆" / "那先别拆了，波动算正常吗"就必然错；
+    这类"要不要继续动手、要不要换讲法"的判断力才是 LLM 该挣的钱。
+    """
+    from evaluation.eval_decisions import run, ANNOTATED
+    from sqlpa.business.attribution import is_factor_question
+    consult = [c for c in ANNOTATED
+               if not is_factor_question(c["question"]) and _has_followup(c["question"])]
+    deterministic = len(ANNOTATED) - len(consult)
+    assert len(consult) == 12 and deterministic == 14   # 7 量价 + 7 非追问 → 确定性
+
+    def _oracle_for(cases):
+        replies = {"drill": '{"action":"drill","dim":"state","value":"SP","reason":"r"}',
+                   "switch_dim": '{"action":"switch_dim","dim":"category","reason":"r"}',
+                   "factorize": '{"action":"factorize","reason":"r"}',
+                   "none": '{"action":"none","reason":"r"}'}
+        return _OracleSeq([replies[c["expert_action"]] for c in cases])
+
+    oracle = _oracle_for(consult)
     r = run(ANNOTATED, llm=oracle)
-    assert oracle.calls == len(ANNOTATED)          # 每条用例各问一次 LLM
-    assert r["llm_used"] is True
-    assert r["decision_accuracy"] == 1.0
-    base = run(ANNOTATED, llm=None)                 # 纯规则基线，证明提升确实存在
-    assert base["decision_accuracy"] < r["decision_accuracy"]
+    assert oracle.calls == len(consult)            # 确定性短路的 14 条不问 LLM
+    assert r["llm_used"] is True and r["decision_accuracy"] == 1.0
+
+    # 规则判不出、LLM 判得出的补充用例 → 证明"接 LLM"确有增益而非摆设
+    extra = [
+        {"name": "规则漏判-要求换讲法", "metric": "gmv",
+         "question": "那先别看州了，换个别的角度再拆一遍？",
+         "att": {"top_contributors": [{"dim": "state", "key": "SP",
+                                       "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+         "expert_action": "switch_dim", "note": "主因清晰但用户否定该维度 → 应换维"},
+        {"name": "规则漏判-只要结论", "metric": "gmv",
+         "question": "那先别拆了，这次的波动算正常吗？",
+         "att": {"top_contributors": [{"dim": "state", "key": "SP",
+                                       "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+         "expert_action": "none", "note": "用户明确叫停 → 不再动手"},
+    ]
+    base = run(extra, llm=None)
+    assert base["decision_accuracy"] == 0.0        # 规则：主因清晰就下钻，两条都判错
+    lifted = run(extra, llm=_oracle_for(extra))
+    assert lifted["decision_accuracy"] == 1.0      # 同样的输入，LLM 判对
 
 
 # ---------------- 执行正确性评测（③ exec_accuracy） ----------------
