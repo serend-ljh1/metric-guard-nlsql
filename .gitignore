@@ -42,6 +42,8 @@ data/demo_hitl.jsonl
 data/datasources.yaml
 data/olist_sample/
 data/app.db
+data/reports/
+data/subscriptions.json
 *.log
 
 # ---- 评测逐题产物（**随仓库发布**）----
