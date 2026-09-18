@@ -1,0 +1,66 @@
+{"q": "各个品类的GMV", "expect": "semantic", "metric": "gmv", "dims": ["category"], "note": "最典型的自助取数"}
+{"q": "每个州的成交总额", "expect": "semantic", "metric": "gmv", "dims": ["state"]}
+{"q": "GMV是多少", "expect": "semantic", "metric": "gmv", "dims": []}
+{"q": "按月看GMV趋势", "expect": "semantic", "metric": "gmv", "dims": ["dt"], "grain": "month", "note": "时间粒度"}
+{"q": "每天的销售额", "expect": "semantic", "metric": "gmv", "dims": ["dt"], "grain": "day"}
+{"q": "各品类的销售额排名", "expect": "semantic", "metric": "gmv", "dims": ["category"]}
+{"q": "每个州的GMV占比", "expect": "semantic", "metric": "gmv", "dims": ["state"]}
+{"q": "总营收是多少", "expect": "semantic", "metric": "gross_revenue", "dims": []}
+{"q": "各州的商品销售额", "expect": "semantic", "metric": "item_sales", "dims": ["state"]}
+{"q": "运费总额", "expect": "semantic", "metric": "freight_cost", "dims": [], "note": "曾因'总额'被误判为GMV"}
+{"q": "各个品类的运费", "expect": "semantic", "metric": "freight_cost", "dims": ["category"]}
+{"q": "平均运费是多少", "expect": "semantic", "metric": "avg_freight", "dims": [], "note": "曾误判为运费总额"}
+{"q": "客单价是多少", "expect": "semantic", "metric": "aov", "dims": []}
+{"q": "各州的客单价", "expect": "semantic", "metric": "aov", "dims": ["state"]}
+{"q": "运费占比", "expect": "semantic", "metric": "ratio@freight_cost/gmv", "dims": [], "note": "派生指标"}
+{"q": "各州的运费占比", "expect": "semantic", "metric": "ratio@freight_cost/gmv", "dims": ["state"]}
+{"q": "件单价", "expect": "semantic", "metric": "ratio@gmv/item_count", "dims": [], "note": "派生指标"}
+{"q": "订单数", "expect": "semantic", "metric": "order_count", "dims": []}
+{"q": "各州的订单数", "expect": "semantic", "metric": "order_count", "dims": ["state"]}
+{"q": "各品类的订单数", "expect": "semantic", "metric": "order_count", "dims": ["category"]}
+{"q": "每天的订单数", "expect": "semantic", "metric": "order_count", "dims": ["dt"], "grain": "day"}
+{"q": "已支付订单数", "expect": "semantic", "metric": "paid_order_count", "dims": []}
+{"q": "取消订单数", "expect": "semantic", "metric": "canceled_order_count", "dims": []}
+{"q": "各州的取消订单数", "expect": "semantic", "metric": "canceled_order_count", "dims": ["state"]}
+{"q": "商品件数", "expect": "semantic", "metric": "item_count", "dims": []}
+{"q": "各品类的商品件数", "expect": "semantic", "metric": "item_count", "dims": ["category"]}
+{"q": "下单客户数", "expect": "semantic", "metric": "customer_count", "dims": []}
+{"q": "各州的客户数", "expect": "semantic", "metric": "customer_count", "dims": ["state"]}
+{"q": "独立买家数", "expect": "semantic", "metric": "unique_customer_count", "dims": []}
+{"q": "每单件数", "expect": "semantic", "metric": "items_per_order", "dims": []}
+{"q": "在售商品数", "expect": "semantic", "metric": "product_count", "dims": []}
+{"q": "各个品类的商品数", "expect": "semantic", "metric": "product_count", "dims": ["category"]}
+{"q": "活跃卖家数", "expect": "semantic", "metric": "seller_count", "dims": []}
+{"q": "取消率", "expect": "semantic", "metric": "cancellation_rate", "dims": []}
+{"q": "各州的取消率", "expect": "semantic", "metric": "cancellation_rate", "dims": ["state"]}
+{"q": "按月看取消率趋势", "expect": "semantic", "metric": "cancellation_rate", "dims": ["dt"], "grain": "month"}
+{"q": "超时送达率", "expect": "semantic", "metric": "late_delivery_rate", "dims": []}
+{"q": "各州的超时送达率", "expect": "semantic", "metric": "late_delivery_rate", "dims": ["state"]}
+{"q": "准时送达率", "expect": "semantic", "metric": "on_time_delivery_rate", "dims": []}
+{"q": "平均履约天数", "expect": "semantic", "metric": "avg_delivery_days", "dims": []}
+{"q": "各州的履约天数", "expect": "semantic", "metric": "avg_delivery_days", "dims": ["state"]}
+{"q": "平均评分", "expect": "semantic", "metric": "avg_review", "dims": []}
+{"q": "各州的平均评分", "expect": "semantic", "metric": "avg_review", "dims": ["state"]}
+{"q": "各品类的评分", "expect": "semantic", "metric": "avg_review", "dims": ["category"]}
+{"q": "好评率", "expect": "semantic", "metric": "positive_review_rate", "dims": []}
+{"q": "差评率", "expect": "semantic", "metric": "negative_review_rate", "dims": []}
+{"q": "评价数", "expect": "semantic", "metric": "review_count", "dims": []}
+{"q": "最近30天的GMV", "expect": "semantic", "metric": "gmv", "dims": [], "filters": ["time_range"]}
+{"q": "上个月的订单数", "expect": "semantic", "metric": "order_count", "dims": [], "filters": ["time_range"]}
+{"q": "各品类上月的GMV", "expect": "semantic", "metric": "gmv", "dims": ["category"], "filters": ["time_range"]}
+{"q": "最近7天的取消率", "expect": "semantic", "metric": "cancellation_rate", "dims": [], "filters": ["time_range"]}
+{"q": "各订单状态的订单数", "expect": "semantic", "metric": "order_count", "dims": ["status"]}
+{"q": "各订单状态的取消订单数", "expect": "semantic", "metric": "canceled_order_count", "dims": ["status"]}
+{"q": "各州的平均运费", "expect": "semantic", "metric": "avg_freight", "dims": ["state"]}
+{"q": "各品类的运费占比", "expect": "semantic", "metric": "ratio@freight_cost/gmv", "dims": ["category"]}
+{"q": "取消占比", "expect": "reject", "metric": "share@canceled_order_count", "dims": [], "note": "占比类需要分组维度，无维度应明确拒绝"}
+{"q": "客单价按品类", "expect": "reject", "note": "aov 不支持 category 维度"}
+{"q": "超时送达率按品类", "expect": "reject", "note": "late_delivery_rate 不支持 category"}
+{"q": "每单件数按州", "expect": "semantic", "note": "items_per_order 支持 dt/state/category", "metric": "items_per_order", "dims": ["state"]}
+{"q": "每单件数按订单状态", "expect": "reject", "note": "items_per_order 不支持 status"}
+{"q": "平均履约天数按品类", "expect": "reject", "note": "avg_delivery_days 不支持 category"}
+{"q": "每个客服的响应时长是多少", "expect": "out_of_scope", "note": "语义层无此指标 → 降级多Agent"}
+{"q": "每个用户的复购周期是多久", "expect": "out_of_scope", "note": "复购周期未配置"}
+{"q": "各品类的库存周转率", "expect": "out_of_scope", "note": "无库存数据"}
+{"q": "今天天气怎么样", "expect": "out_of_scope", "note": "无关问题"}
+{"q": "帮我把这两张表做个关联分析", "expect": "out_of_scope", "note": "非指标化请求"}
