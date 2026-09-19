@@ -42,8 +42,11 @@ evaluation/eval_decisions.py
 --------------------------------------------------------------------
 标注协议（Annotation Protocol）——"专家真值由谁标 / 判定依据是什么"
 --------------------------------------------------------------------
-专家真值来源：`EXPERT_LABELED_BY`（一位熟悉 olist 业务语境的领域专家 SME
-独立标注，标注前不接触 prompt/代码，且不与评测设计同一人，规避循环论证）。
+专家真值来源（诚实口径）：`EXPERT_LABELED_BY` —— **本项目实现者依据下述判定规则自标**，
+不是独立于实现者的第三方真人标注。因此这批 `expert_action` 只承担两个不声称泛化的身份：
+(1) **回归测试**（`pytest tests` 里防改坏），(2) **方法论演示**（展示"决策正确性可以这样量化"）。
+它**不是**泛化准确率的证据——系统级准确率只由公共基准 Spider-dev 支撑（其 gold 由数据源外部定义）。
+若后续引入真正的独立标注第二人，可算出标注一致性并回填到报告，届时再升级本字段。判定规则见下：
 
 对每条用例，`expert_action` 的判定依据（判定只依赖：问题是否追问、`att.top_contributors`
 的集中度、指标是否可乘性分解）：
@@ -55,10 +58,10 @@ evaluation/eval_decisions.py
                     单量 × 客单价的因子分解，而非继续下钻某个维度。
   - **none**       = 非追问（全新问题）或电子无显著维度贡献 → 无需继续拆，收尾。
 
-规则兜底基线 ≈ 19/26（≈0.73，因为它永远选不出 factorize 这类需要领域判断的动作）；
-加入 `is_factor_question` 策略门控后，7 条量价问法由规则确定性命中，26/26 ——
-也就是说**这一层已经不需要 LLM**。门控的价值（19/26 → 26/26）与"哪些问法根本
-不该花 token"都由 `--llm` 模式的对照报告直接印出来。
+纯规则地板（无 `is_factor_question` 门控）在 26 条正例上约为 19/26（≈0.73，因为它永远选
+不出 factorize 这类需要领域判断的动作）；加入门控后，7 条量价问法由规则确定性命中。离线全量
+（26 正例 + 6 判断题）命中 **26/32 ≈ 0.81** —— 那 6 条正是规则判不出、只等 LLM 真判断的
+区分标本。门控的价值与"哪些问法根本不该花 token"都由 `--llm` 模式的对照报告直接印出来。
 """
 from __future__ import annotations
 
@@ -80,7 +83,7 @@ except ImportError:  # pragma: no cover - 独立运行兜底
     from sqlpa.business.metric_config import load_config
 
 # 标注协议三要素：真值由谁标、判据见模块 docstring、动作全集
-EXPERT_LABELED_BY = "domain-expert(SME)，独立于评测设计者标注"
+EXPERT_LABELED_BY = "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）"
 ACTIONS = ("drill", "switch_dim", "factorize", "none")
 
 # ----------------------------------------------------------------------
@@ -580,7 +583,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ImportError:  # pragma: no cover
         pass
 
-    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（专家标注：26 确定性 + 6 判断题）")
+    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（专家自标真值：26 确定性 + 6 判断题；用作回归与演示，非泛化准确率证据）")
     ap.add_argument("--llm", action="store_true", help="接真实 LLM 参与决策（需要 .env 里的 key）")
     ap.add_argument("--model", default=None, help="指定模型（默认取 .env 的 LLM_MODEL）")
     ap.add_argument("--pool", action="store_true",

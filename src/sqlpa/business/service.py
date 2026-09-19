@@ -323,6 +323,7 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
              "metric": res.metric_key,
              "metric_name": cq.metric_name,
              "metric_expr": formula, "dims": res.dims, "source": source,
+             "match_method": res.method,   # 意图识别来源(llm/keyword)：红线边界的可观测点
              "compile": compile_info,      # 口径来源/负责人/版本/派生定义，产品上要展示
              "sql": final_sql, "columns": cols, "rows": rows,
              "agent_trace": agent_trace,
