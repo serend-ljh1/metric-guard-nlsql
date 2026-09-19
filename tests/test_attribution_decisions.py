@@ -318,6 +318,40 @@ def test_eval_decision_llm_lifts_accuracy():
     assert lifted["decision_accuracy"] == 1.0      # 同样的输入，LLM 判对
 
 
+# ---------------- 判断题 BORDERLINE：让评测有区分度（不再自证） ----------------
+
+def test_eval_borderline_proves_llm_value():
+    """判断题集是区分度标本：规则 26/32 判不出、LLM(oracle) 补位到 100%。
+
+    这直接回应"26/26 是自证的"：加入 6 条规则判不出的边界题后，离线命中率
+    掉到 26/32，说明这套评测**确实有会判错的用例**；而 `llm_value` 为正则证明
+    "接 LLM 的判断力"不是摆设——它有可衡量的、正面的题目去挣。
+    """
+    from evaluation.eval_decisions import run, BORDERLINE, FIELD, ANNOTATED
+    from sqlpa.business.attribution import is_factor_question
+    assert len(FIELD) == len(ANNOTATED) + len(BORDERLINE) == 32
+    assert all(c.get("needs_judgment") for c in BORDERLINE)        # 全部标注为判断题
+    assert all(not c.get("needs_judgment") for c in ANNOTATED)     # 确定性集不标
+
+    # (1) 不接 LLM：确定性集 26/26 全对，但 6 条判断题规则判不出 → 26/32，评测不再自证
+    off = run(FIELD, llm=None)
+    assert off["judgment_cases"] == len(BORDERLINE) == 6
+    assert off["decision_accuracy"] == pytest.approx(26 / 32, abs=1e-3)
+
+    # (2) 接 LLM(oracle)：判断题全对 → 全量 100%，llm_value > 0
+    def _reply(a): return f'{{"action":"{a}","dim":"state","value":"SP","reason":"r"}}'
+    consult = [c for c in ANNOTATED
+               if _has_followup(c["question"]) and not is_factor_question(c["question"])]
+    # 调用顺序 = ANNOTATED 的 consult 题(12) 在前，BORDERLINE 题(6) 在后
+    texts = [_reply(c["expert_action"]) for c in consult] + [_reply(c["expert_action"]) for c in BORDERLINE]
+    oracle = _OracleSeq(texts)
+    lifted = run(FIELD, llm=oracle)
+    assert oracle.calls == len(consult) + len(BORDERLINE) == 18
+    assert lifted["judgment_cases"] == 6 and lifted["judgment_accuracy"] == 1.0
+    assert lifted["llm_value"] > 0
+    assert lifted["decision_accuracy"] == pytest.approx(1.0, abs=1e-3)
+
+
 # ---------------- 执行正确性评测（③ exec_accuracy） ----------------
 
 def test_eval_exec_accuracy(tmpdir_clean):

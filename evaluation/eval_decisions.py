@@ -219,6 +219,48 @@ ANNOTATED: List[Dict] = [
 ]
 
 
+# ----------------------------------------------------------------------
+# 6 条"真·判断题"（BORDERLINE）—— 命中率的分水岭
+# ----------------------------------------------------------------------
+# 上面 26 条 ANNOTATED，**规则 + 策略门控能确定性全对**（26/26，0 token）。
+# 但一个评测如果"永远判得对"，就会退化成规格测试、量不出任何判断力。
+# 这 6 条正是"规则判不出、LLM 判得出"的边界题，用来承载 `llm_value`：
+#   - 规则只有"主因清晰就下钻 / 分散就换维 / 无追问就收尾"这条机械判据，
+#     遇到"用户否定主因 / 叫停 / 踩在 0.6 阈值边界"就必然错；
+#   - 这类"要不要继续动手、要不要换讲法"的判断力，才是 LLM 该挣的钱。
+# 它们全部带 `needs_judgment: True`，是评测的**区分标本**；专家真值标注协议同上。
+# 注意：这几条的量价门控均为假 → 不会误进 factorize，只有 drill/switch/none 择一。
+BORDERLINE: List[Dict] = [
+    {"name": "判断-用户否定主因", "metric": "gmv",
+     "question": "那先别看州了，换个别的角度再拆一遍？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+     "expert_action": "switch_dim", "note": "主因清晰但用户否定该维度 → 应换维", "needs_judgment": True},
+    {"name": "判断-用户叫停", "metric": "gmv",
+     "question": "那先别拆了，这次的波动算正常吗？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+     "expert_action": "none", "note": "用户明确叫停 → 不再动手", "needs_judgment": True},
+    {"name": "判断-阈值边界仍应下钻", "metric": "gmv",
+     "question": "那真的只有这一个州在跌吗，再确认下呢？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.58}]},
+     "expert_action": "drill", "note": "pct 略低于 0.6 阈值，但语义上它就是唯一主因 → 仍应下钻", "needs_judgment": True},
+    {"name": "判断-用户转移话题", "metric": "gmv",
+     "question": "那先别管 GMV 了，帮我看看别的指标？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+     "expert_action": "none", "note": "放弃当前指标的追问 → 收尾而非下钻", "needs_judgment": True},
+    {"name": "判断-阈值边界仍应换维", "metric": "gmv",
+     "question": "那是不是其实整块在下滑，不该只盯这一个州？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.62}]},
+     "expert_action": "switch_dim", "note": "pct 略高于 0.6，但语义是整体下滑 → 应换维而非下钻", "needs_judgment": True},
+    {"name": "判断-要结论", "metric": "gmv",
+     "question": "那到底什么结论，一句话总结下呢？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+     "expert_action": "none", "note": "用户要收尾总结 → 不再拆", "needs_judgment": True},
+]
+
+# 全量评测集 = 确定性集(ANNOTATED) + 判断题(BORDERLINE)
+FIELD: List[Dict] = ANNOTATED + BORDERLINE
+
+
 def action_tally(annotated: List[Dict]) -> Dict[str, int]:
     """按 action 统计用例数，用于校验"每种 ≥ 阈值"。"""
     tally: Dict[str, int] = {}
@@ -358,19 +400,30 @@ def _analyze(cfg, con, db_path, metric_key):
 
 # ---------------------------------------------------------------- 决策命中（①）
 
-def decision_accuracy(annotated: List[Dict], llm) -> Dict:
+def decision_accuracy(annotated: List[Dict], llm, freeze_rule_shortcircuit: bool = False) -> Dict:
     """跑一遍注解集，返回决策命中率与逐条明细（对应 decision_accuracy）。
 
     逐条记录 `source`（rule=规则/门控确定性给出，llm=LLM 判断给出），
     这样"哪些问题花了 LLM 的钱、哪些根本不用"是可以被审计的，而不是嘴上说。
+
+    `freeze_rule_shortcircuit=True`：把**策略门控 + 无追问短路**这两条确定性规则
+    钉死（冻结），只让 LLM 在原本就会咨询它的那部分题上判断。用于在**同一条链路**
+    上量 LLM 的边际贡献——否则"不接 LLM 的基线"走的是另一套路由，两个数不可比。
     """
     ann = annotated if annotated is not None else ANNOTATED
     cases: List[Dict] = []
     correct = 0
     llm_calls = 0
     for c in ann:
+        use_llm = llm
+        if freeze_rule_shortcircuit:
+            # 冻结确定性短路：量价题（门控放行）与无追问语气的题**不问 LLM**，
+            # 分别由门控/规则给出 factorize / none；其余题照常咨询 LLM。
+            from sqlpa.business.attribution import is_factor_question
+            if is_factor_question(c["question"]) or not _followup(c["question"]):
+                use_llm = None
         before = _llm_call_count(llm)
-        dec = decide_drill(c["att"], c["question"], llm)
+        dec = decide_drill(c["att"], c["question"], use_llm)
         after = _llm_call_count(llm)
         llm_calls += max(0, after - before)
         hit = dec.get("action") == c.get("expert_action")
@@ -378,10 +431,49 @@ def decision_accuracy(annotated: List[Dict], llm) -> Dict:
         cases.append({"name": c.get("name"), "action": dec.get("action"),
                       "expert": c.get("expert_action"), "source": dec.get("decision_source"),
                       "hit": hit, "reason": dec.get("reason"),
-                      "gated_from": dec.get("gated_from")})
+                      "gated_from": dec.get("gated_from"),
+                      "needs_judgment": bool(c.get("needs_judgment"))})
     return {"total": len(ann), "correct": correct,
             "decision_accuracy": round(correct / len(ann), 4) if ann else 1.0,
             "llm_used": llm is not None, "llm_calls": llm_calls, "cases": cases}
+
+
+def _followup(question: str) -> bool:
+    """与 attribution.decide_drill 的 followup_tone 同源：这一问算不算"追问"。"""
+    return any(k in str(question or "")
+               for k in ("那", "呢", "为什么", "为何", "继续", "下钻", "再看", "拆", "再"))
+
+
+def llm_value(annotated: List[Dict] = ANNOTATED, llm=None) -> Dict:
+    """给一组用例算出"接 LLM 到底值多少"。
+
+    `decision_accuracy`（接 LLM 的整条链路命中率）对标 `rule_accuracy`
+    （**同一条链路**上把 LLM 关掉的确定性命中率），差即 `llm_value`
+    （负 = LLM 反而帮倒忙）。同时单独报判断题集（needs_judgment=True）的
+    命中率 `judgment_accuracy` —— 这才是判断力真正受力的地方。
+
+    `rule_accuracy` 的取法很关键：**不是**另跑一遍 `llm=None`（那会连
+    "有追问语气就问 LLM"这条路由也一起改掉，分母不同、两个数不可比），
+    而是冻结两条确定性短路（门控 + 无追问），只把 LLM 关掉——这样两个数
+    只差"LLM 的贡献"，差值才有意义。代价是基线里 18 条真追问要用规则重算一次，
+    不花 token。
+    """
+    ann = annotated if annotated is not None else ANNOTATED
+    full = decision_accuracy(ann, llm)                                     # 接 LLM
+    base = decision_accuracy(ann, None, freeze_rule_shortcircuit=True)     # 同链路、关 LLM
+    jcases = [c for c in full["cases"] if c.get("needs_judgment")]
+    if jcases:
+        judgment_accuracy = round(sum(1 for c in jcases if c["hit"]) / len(jcases), 4)
+        judgment_llm = sum(1 for c in jcases if c.get("source") == "llm")
+    else:
+        judgment_accuracy, judgment_llm = None, 0
+    return {**full, "rule_accuracy": base["decision_accuracy"],
+            "rule_correct": base["correct"],
+            "llm_value": round(full["decision_accuracy"] - base["decision_accuracy"], 4),
+            "judgment_cases": len(jcases),
+            "judgment_accuracy": judgment_accuracy,
+            "judgment_llm_calls": judgment_llm,
+            "judgment_rule_calls": len(jcases) - judgment_llm}
 
 
 def _llm_call_count(llm) -> int:
@@ -397,13 +489,24 @@ def _llm_call_count(llm) -> int:
 
 def run(annotated: Optional[List[Dict]] = None, llm=None,
         tmp_dir: Optional[Path] = None) -> Dict:
-    """完整评测：decision_accuracy（选对动作）+ exec_accuracy（做完算对）。"""
+    """完整评测：decision_accuracy（选对动作）+ exec_accuracy（做完算对）。
+
+    返回里额外带区分度指标（不接 LLM 也能拿到）：
+      rule_accuracy / llm_value / judgment_accuracy / judgment_cases ——
+      用一套"规则判不出、LLM 判得出"的判断题把 LLM 的价值量化，而不是考自证。
+    """
     ann = annotated if annotated is not None else ANNOTATED
-    d = decision_accuracy(ann, llm)
     e = exec_battery(tmp_dir)
+    if llm is None:
+        d = decision_accuracy(ann, None)              # 离线：全确定性，无 LLM
+        return {**d, "rule_accuracy": d["decision_accuracy"], "llm_value": 0.0,
+                "judgment_cases": sum(1 for c in ann if c.get("needs_judgment")),
+                "judgment_accuracy": None, "judgment_llm_calls": 0,
+                "expert_labeled_by": EXPERT_LABELED_BY,
+                "action_tally": action_tally(ann), "exec": e}
+    d = llm_value(ann, llm)                           # 接 LLM：同时给规则基线与增值
     return {**d, "expert_labeled_by": EXPERT_LABELED_BY,
-            "action_tally": action_tally(ann),
-            "exec": e}
+            "action_tally": action_tally(ann), "exec": e}
 
 
 def _build_llm(model: str, pool: bool):
@@ -437,10 +540,16 @@ def _report(r: Dict, tag: str) -> None:
     print(f"\n=== {tag} ===")
     print(f"决策命中 decision_accuracy = {r['correct']}/{r['total']} "
           f"= {r['decision_accuracy']:.1%}")
+    print(f"确定性基线 rule_accuracy   = {r['decision_accuracy'] - r.get('llm_value', 0):.1%}  "
+          f"(纯规则+门控，0 token)   LLM 增值 llm_value = {r.get('llm_value', 0):+.1%}")
+    if r.get("judgment_cases"):
+        print(f"其中判断题 {r['judgment_cases']} 条（规则判不出）命中 "
+              f"{r.get('judgment_accuracy') or 0:.1%}"
+              f"  → 这是判断力真正受力的地方（花了 {r.get('judgment_llm_calls', 0)} 次 LLM）")
     print(f"执行正确 exec_accuracy      = {r['exec']['passed']}/{r['exec']['total']} "
           f"= {r['exec']['exec_accuracy']:.1%}")
-    print(f"决策来源 {src}    LLM 实际调用 {r.get('llm_calls', 0)} 次"
-          f"（确定性短路省下的调用不花钱）")
+    print(f"决策来源 {src}"
+          f"    LLM 实际调用 {r.get('llm_calls', 0)} 次（确定性短路省下的调用不花钱）")
     gated = [c for c in r["cases"] if c.get("gated_from")]
     if gated:
         print(f"被策略门控拦下（LLM 越界选 factorize）{len(gated)} 条："
@@ -471,7 +580,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ImportError:  # pragma: no cover
         pass
 
-    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（26 例，专家标注）")
+    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（专家标注：26 确定性 + 6 判断题）")
     ap.add_argument("--llm", action="store_true", help="接真实 LLM 参与决策（需要 .env 里的 key）")
     ap.add_argument("--model", default=None, help="指定模型（默认取 .env 的 LLM_MODEL）")
     ap.add_argument("--pool", action="store_true",
@@ -486,13 +595,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         llm = _build_llm(model, args.pool)
         print(f"评测模型：{model}（模型池 {'开' if args.pool else '关'}）")
 
-    r = run(llm=llm)
-    _report(r, "规则 + 策略门控" + ("  + LLM 判断" if llm else "（离线基线）"))
+    # 默认评测全量集 FIELD（确定性 + 判断题），这样才能量出 llm_value 的区分度。
+    r = run(FIELD, llm=llm)
+    _report(r, "规则 + 策略门控" + ("  + LLM 判断" if llm else "（离线基线：判断题判不出）"))
 
     if llm is not None:
-        base = run(llm=None)
+        base = run(FIELD, llm=None)
         _report(base, "对照：不接 LLM（规则 + 门控，全部确定性）")
-        print(f"\nLLM 净增益：{r['decision_accuracy']:.1%} vs 规则 {base['decision_accuracy']:.1%}")
+        print(f"\nLLM 净增益：{r['decision_accuracy']:.1%} vs 规则 {base['decision_accuracy']:.1%}"
+              f"（判定题 {r.get('judgment_cases', 0)} 条是区分度来源）")
 
     if args.out:
         p = Path(args.out)
