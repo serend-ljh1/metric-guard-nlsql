@@ -303,8 +303,8 @@ def _run_factorize_scenario(cfg, real_db: str, cur_spec: str, prev_spec: str,
 def main() -> int:
     ensure_utf8_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "olist" / "olist.db"),
-                    help="真库（拷贝后注入，不污染原始数据）")
+    ap.add_argument("--db", default=None,
+                    help="业务库（默认：真实全量库 > 仓库自带样本库；注入在副本上进行）")
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
     ap.add_argument("--periods", nargs="+", default=["2018-05", "2018-06", "2018-07"],
                     help="当期月份字面量（真实 Olist 窗口 2016-09~2018-10）")
@@ -319,9 +319,21 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config()
-    if not Path(args.db).exists():
-        print(f"[SKIP] 缺少真实 Olist 库 {args.db}：本评测需要在真实数据上注入真因。")
-        print("       复现方式：python tools/build_olist_db.py --src data/olist --out data/olist/olist.db")
+    from sqlpa.config import db_kind_note, resolve_db_path
+    try:
+        args.db, db_kind = resolve_db_path(args.db)
+    except FileNotFoundError as e:
+        print(f"[SKIP] {e}")
+        return 0
+    if db_kind_note(db_kind):
+        print(db_kind_note(db_kind))
+    if db_kind != "full":
+        # 该评测的"真值"是**按当期最大分段注入**构造的，依赖分段规模排名；
+        # 样本库（按天抽样、单段体量小）会让注入段不再占主导，跑出来的命中率不成立。
+        # 宁可不跑，也不给一个会被误读为"系统退化"的数字。
+        print("[SKIP] 归因命中率评测需要**全量数据**（真值由最大分段注入构造，依赖分段规模）。")
+        print("       获取全量数据：python tools/build_olist_db.py --src data/olist "
+              "--out data/olist/olist.db")
         return 0
     factor = 1.0 - args.inject_pct
 

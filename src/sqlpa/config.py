@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.config
 ============
 加载 config/settings.yaml（业务/工程配置），并提供带默认值的取值。
@@ -39,6 +39,52 @@ def get(path: str, default: Any = None) -> Any:
 
 def reset() -> None:
     _CACHE.clear()
+
+
+# ---------------------------------------------------------------- 数据底座解析
+_ROOT = Path(__file__).resolve().parents[2]
+
+# 优先真实全量库，其次仓库自带的样本库（让 clone 之后开箱即跑）
+DB_CANDIDATES = (
+    ("data/olist/olist.db", "full"),
+    ("data/sample/olist_sample.db", "sample"),
+)
+
+
+def resolve_db_path(explicit: str | Path | None = None,
+                    root: str | Path | None = None) -> tuple[str, str]:
+    """定位业务库，返回 (路径, 类型)。
+
+    顺序：显式路径（含环境变量 SQLPA_DB_PATH）→ 真实全量库 → 仓库自带样本库。
+    类型为 "full" / "sample"：调用方据此提示"当前跑在样本库上，指标值仅示意"。
+    两者都不存在时抛 FileNotFoundError，并给出获取数据的命令。
+    """
+    base = Path(root or _ROOT)
+    if explicit:
+        p = Path(explicit)
+        if not p.is_absolute():
+            p = base / p
+        if p.exists():
+            return str(p), ("full" if "olist.db" in p.name and "sample" not in str(p) else "sample")
+        raise FileNotFoundError(f"指定的业务库不存在: {p}")
+    for rel, kind in DB_CANDIDATES:
+        p = base / rel
+        if p.exists():
+            return str(p), kind
+    raise FileNotFoundError(
+        "找不到业务库。两种选择：\n"
+        "  1) 直接用仓库自带样本库（应存在于 data/sample/olist_sample.db）——"
+        "若缺失请 `python tools/build_olist_sample.py`（需先有全量库）；\n"
+        "  2) 导入真实 Olist 全量数据：`python tools/build_olist_db.py --src data/olist "
+        "--out data/olist/olist.db`")
+
+
+def db_kind_note(kind: str) -> str:
+    """给样本库运行加一句显式提示（避免把示意值当成全量口径的结论）。"""
+    if kind == "sample":
+        return ("⚠ 当前使用**仓库自带样本库**（按月抽样，非全量数据窗口）："
+                "用于跑通流程与看结构，具体数值不代表全量口径结果。")
+    return ""
 
 
 def ensure_utf8_console() -> None:

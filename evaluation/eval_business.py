@@ -81,8 +81,8 @@ def _build_sandbox(db: str):
 def main() -> int:
     ensure_utf8_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "olist" / "olist.db"),
-                    help="业务库（默认真实 Olist data/olist/olist.db）")
+    ap.add_argument("--db", default=None,
+                    help="业务库（默认：真实全量库 > 仓库自带样本库）")
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
     args = ap.parse_args()
 
@@ -91,16 +91,16 @@ def main() -> int:
     from sqlpa.business.permissions import check_access, mask_result
     from sqlpa.business.service import answer
     from sqlpa.business import storage
+    from sqlpa.config import db_kind_note, resolve_db_path
 
     cfg = load_config()
-    db = args.db
-    if not Path(db).exists():
-        # 真实 Olist 库（data/olist）不进版本库，公开 CI 上必然缺失。
-        # 这里**大声跳过**而不是让流水线红：离线回归由 `pytest tests -q` 承担
-        # （那套用例自带同结构小库，无需外部数据）。
-        print(f"[SKIP] 缺少业务库 {db}：本评测需要真实 Olist 数据。")
-        print("       复现方式：python tools/build_olist_db.py --src data/olist --out data/olist/olist.db")
+    try:
+        db, db_kind = resolve_db_path(args.db)
+    except FileNotFoundError as e:
+        print(f"[SKIP] {e}")
         return 0
+    if db_kind_note(db_kind):
+        print(db_kind_note(db_kind))
     sb = _build_sandbox(db)
 
     print("=" * 64)

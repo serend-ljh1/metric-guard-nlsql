@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import Optional
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,29 +45,35 @@ def _pct(a: int, b: int) -> float:
     return round(a / b, 4) if b else 0.0
 
 
-def _require_db(db: str) -> bool:
-    """业务库缺失时**大声跳过**（而不是让 CI 红）。
+def _require_db(db: Optional[str]) -> tuple[Optional[str], str]:
+    """定位业务库：真实全量库 > 仓库自带样本库；都没有则大声跳过（不让 CI 红）。
 
-    这两个评测需要真实 Olist 库（data/olist 已 gitignore），公开 CI 上必然没有；
-    语义层/治理护栏的回归由 `pytest tests` 承担（那套用例自带小库，无需外部数据）。
+    跑在样本库上时会打印提示并在报告里记 `db_kind`，避免把示意值当成全量口径结论。
     """
-    if Path(db).exists():
-        return True
-    print(f"[SKIP] 缺少业务库 {db}：本评测需要真实 Olist 数据。")
-    print("       复现方式：python tools/build_olist_db.py --src data/olist --out data/olist/olist.db")
-    print("       离线回归请跑：pytest tests -q")
-    return False
+    from sqlpa.config import db_kind_note, resolve_db_path
+    try:
+        path, kind = resolve_db_path(db)
+    except FileNotFoundError as e:
+        print(f"[SKIP] {e}")
+        print("       离线回归请跑：pytest tests -q")
+        return None, "none"
+    if db_kind_note(kind):
+        print(db_kind_note(kind))
+    return path, kind
 
 
 def main() -> int:
     ensure_utf8_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "olist" / "olist.db"))
+    ap.add_argument("--db", default=None,
+                    help="业务库（默认：真实全量库 > 仓库自带样本库）")
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
     args = ap.parse_args()
 
-    if not _require_db(args.db):
+    db, db_kind = _require_db(args.db)
+    if not db:
         return 0
+    args.db = db
 
     cfg = load_config()
     sb = SqlSandbox(args.db, ExecConfig.from_settings(max_rows=200))
@@ -138,6 +145,7 @@ def main() -> int:
     n_out_of_scope = sum(1 for c in cases if c["expect"] == "out_of_scope")
     report = {
         "n_cases": total,
+        "db_kind": db_kind,
         "engine": "semantic-first (compiler)",
         "offline_note": (
             "本评测离线运行（llm=None），因此**降级路径未被实际触发**：口径外问题在离线时"

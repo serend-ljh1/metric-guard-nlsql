@@ -46,17 +46,25 @@ def _month_pairs(start: str, n: int):
 def main() -> int:
     ensure_utf8_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "olist" / "olist.db"))
+    ap.add_argument("--db", default=None,
+                    help="业务库（默认：真实全量库 > 仓库自带样本库）")
     ap.add_argument("--start", default="2017-01", help="起始月（该月作为上期）")
     ap.add_argument("--months", type=int, default=18)
     ap.add_argument("--threshold", type=float, default=0.05)
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
     args = ap.parse_args()
 
-    if not Path(args.db).exists():
-        print(f"[SKIP] 缺少业务库 {args.db}：本评测需要真实 Olist 数据。")
-        print("       复现方式：python tools/build_olist_db.py --src data/olist --out data/olist/olist.db")
+    from sqlpa.config import db_kind_note, resolve_db_path
+    try:
+        args.db, db_kind = resolve_db_path(args.db)
+    except FileNotFoundError as e:
+        print(f"[SKIP] {e}")
         return 0
+    if db_kind_note(db_kind):
+        print(db_kind_note(db_kind))
+        if db_kind == "sample":
+            print("   （README 中的 56 个阈值告警 / 抑制 32 个，是全量库上的实测值；"
+                  "样本库上告警率与抑制率都会不同。）")
 
     import sqlite3
     cfg = load_config()
@@ -98,7 +106,7 @@ def main() -> int:
     confirmed = [r for r in tested if r["significant"] is True]
 
     report = {
-        "db": args.db, "threshold": args.threshold, "months": len(pairs),
+        "db": args.db, "db_kind": db_kind, "threshold": args.threshold, "months": len(pairs),
         "n_cases": len(valid),
         "n_threshold_alerts": len(alerts),
         "n_significance_tested": len(tested),

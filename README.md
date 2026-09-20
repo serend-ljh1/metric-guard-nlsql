@@ -1,4 +1,4 @@
-# 多 Agent 协作数据分析系统（语义层优先 · 归因下钻 · 决策闭环）
+﻿# 多 Agent 协作数据分析系统（语义层优先 · 归因下钻 · 决策闭环）
 
 > 面向**业务人员**的**多智能体协作数据分析系统**：问一句「为什么」，系统像一支分析团队那样分工协作——
 > **归因往下钻到底，输出「诊断结论 + 依据 + 建议动作」，并由决策 Agent 决定该不该告警、推给谁、写进 HITL 工单**。
@@ -92,6 +92,7 @@
 | DecisionAgent | 是否告警 → 推负责人 → 写 HITL 工单（带 AI 归因草稿） | 确定性 |
 
 - **会话级 Agent 记忆**：每轮把主因建议写回一份工作记忆；下一轮「那 SP 呢？」这类省略式追问，靠记忆补全口径并沿上轮主因续钻（无需向量库，几个字段的 dict 足够）。
+- **口径待确认（HITL 前置，可信闭环）**：链路铁律是「**确定性保底、LLM 兜底、越界即拒绝**」。指标公式/维度/过滤全部取自配置；SQL 由编译器**确定性编译**，LLM 不碰 SQL。LLM 只做两件**兜底**：识别口径（从**已登记**的官方口径里选，不能即兴造新指标）、把归因翻成人话。当 MetricMatcher 用 LLM 推断口径（`method=llm`）而非确定性关键词命中时，**先停在确认门**：回显系统猜的口径 + 官方候选清单，等你确认/改选后才拉数并归因；而关键词命中、已确认、追问续钻都是确定性锁定，直接放行。这样既保留 LLM 对"新说法"的识别能力，又用**人工确认**兜住它可能猜错，杜绝"没问清楚就列一堆数"的失真。
 - **SSE 流式**：`/api/analyze/stream` 把 6 个 Agent 的 start/step/done 一个事件一个事件推给前端，逐卡片渲染。
 - **归因可视化**：驱动瀑布 / 主因贡献条形 / 因子占比环形 / 下钻树，Vue3 + ECharts 呈现。
 
@@ -265,6 +266,18 @@ flowchart TD
 
 ## 快速开始
 
+> **开箱即跑**：仓库自带一份**样本库** `data/sample/olist_sample.db`（2.2MB，按天抽样覆盖 634 天）。
+> `git clone` 之后**不需要下载 66MB 真实数据**，`pytest` 与前端演示都能直接跑。
+> 需要全量口径时再按文末说明导入真实 Olist（评测数字以全量库为准）。
+
+```bash
+git clone <repo> && cd <repo>
+pip install -r requirements.txt
+pytest tests -q            # 274 项离线测试（无需 Key、无需外部数据）
+python evaluation/eval_business.py   # 语义层/治理护栏评测（样本库即可）
+python evaluation/eval_product.py    # 产品指标评测（样本库即可）
+```
+
 ### 方式一：一键启动（推荐）
 
 ```bat
@@ -272,9 +285,9 @@ start_api.bat    # 后端 http://localhost:8000/docs （需先有 venv）
 start_web.bat    # 前端 http://localhost:5173
 ```
 或手动：`.venv\Scripts\python.exe -m uvicorn api:app --port 8000` + 在 `web/` 下 `npm run dev`。
-前端在 **5173** 打开后，输入「本月 GMV 为什么跌？」即可看到六 Agent 流式执行 + 归因可视化 + 决策闭环。
+前端在 **5173** 打开后，输入「2018年6月 GMV 为什么比上月跌？」即可看到六 Agent 流式执行 + 归因可视化 + 决策闭环。
 
-### 方式二：本地
+### 方式二：本地（完整）
 
 ```bash
 pip install -r requirements.txt
@@ -289,7 +302,7 @@ cd web && npm install && npm run dev   # http://localhost:5173
 # FastAPI 后端
 uvicorn api:app --port 8000
 
-# 真实 LLM 联调冒烟（真实 Olist 上走完整六 Agent 分析链；无 Key 可加 --dry）
+# 真实 LLM 联调冒烟（在 Olist 上走完整六 Agent 分析链；无 Key 可加 --dry）
 py tools/verify_real_llm.py
 
 # 归因命中率评测（注入式真因，Ground Truth by Construction）
@@ -373,13 +386,23 @@ curl -X POST http://localhost:8000/api/query \
 - schema 通过 information_schema 自动提取（含外键），注入 LLM 上下文时附带方言提示。
 - 驱动惰性导入：仅用 SQLite 可不装 pymysql/psycopg2。
 
-**业务数据底座：Olist 真实公开电商数据集（~10万订单）**
+**业务数据底座：自带样本库（开箱即跑）+ 可选全量 Olist（~10万订单）**
 ```bash
-# 你下载 Olist CSV 放到 data/olist/ 后：
+# 默认就用仓库自带样本库：data/sample/olist_sample.db（2.2MB / 634 天）
+# 需要全量口径时，下载 Olist CSV 放到 data/olist/ 后：
 python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
+
+# 想重建样本库（从全量库按天抽样）：
+python tools/build_olist_sample.py            # 默认每天抽 5 单
 ```
-> 说明：业务层用**真实公开数据 Olist**（2016-09~2018-10 窗口，约 9.9 万订单）。演示/评测提问请落在该窗口内，
-> 如"2018-06 GMV 为什么比上月跌"；不要再问"本月/最近30天"——相对今天的日期在窗口外必然无数据。
+> **数据解析顺序**：`SQLPA_DB_PATH` > `data/olist/olist.db`（全量） > `data/sample/olist_sample.db`（样本）。
+> 跑在样本库上时，接口/评测会打印明确提示并在报告里记 `db_kind=sample`。
+>
+> **评测对数据的要求**：`eval_business` / `eval_product` 在样本库上即可跑；
+> `eval_attribution`（注入真因依赖分段规模）与 `eval_alert_quality` 的**README 数字来自全量库**——
+> 前者在样本库上会明确拒绝运行，后者会打印"数值不代表全量口径结果"。
+> 业务层用**真实公开数据 Olist**（2016-09~2018-10 窗口）。演示/评测提问请落在该窗口内，
+> 如"2018-06 GMV 为什么比上月跌"；不要问"本月/最近30天"——相对今天的日期在窗口外必然无数据。
 
 ### 验收指标（衡量产品价值，而非 SQL 准确率）
 
@@ -497,12 +520,12 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 ## 测试与 CI
 
 ```bash
-pytest tests -q    # 267 项离线测试（267 passed，0 xfail）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/权限与掩码/行级权限/业务语义层/治理闭环/语义层编译器/语义层红线契约(编译确定性与生成区零LLM)/口径真值对照/归因可加性与日历口径/量价分解/统计门控/审计与可观测性/凭据加固/指标版本历史/订阅告警/归因下钻/归因决策/因子分解/交付物
+pytest tests -q    # 274 项离线测试（274 passed，0 xfail）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/权限与掩码/行级权限/业务语义层/治理闭环/语义层编译器/语义层红线契约(编译确定性与生成区零LLM)/口径真值对照/归因可加性与日历口径/量价分解/统计门控/审计与可观测性/凭据加固/指标版本历史/订阅告警/归因下钻/归因决策/因子分解/交付物
 ```
-> **测试数口径**：267 = 历史 176 项 + 两轮新增 91 项回归（口径真值对照 `test_metric_correctness.py`、
+> **测试数口径**：274 = 历史 176 项 + 两轮新增 98 项回归（口径真值对照 `test_metric_correctness.py`、
 > 归因可加性与日历 `test_attribution_additivity.py`、量价分解与显著性门控 `test_significance_gate.py`、
 > 安全加固 `test_security_hardening.py`、可观测性 `test_observability.py`、凭据 `test_credentials.py`、
-> 指标版本 `test_metric_versions.py`、行级权限 `test_row_level_security.py`、订阅告警 `test_subscriptions.py`）。
+> 指标版本 `test_metric_versions.py`、行级权限 `test_row_level_security.py`、订阅告警 `test_subscriptions.py`、数据底座回退 `test_db_fallback.py`）。
 > 此前唯一的 xfail（公式子串校验可绕过）已随结构绑定修复转为**通过**，因此不再有 xfail。
 > 依赖真实 Olist 库的用例在缺数据时**跳过**（`real_olist_db` / `sample_db` fixture），
 > 因此公开 CI 上不会把"环境缺数据"误报成"代码回归"。

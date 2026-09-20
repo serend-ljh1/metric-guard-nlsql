@@ -16,6 +16,9 @@ const events = ref([])                 // 原始 SSE 事件（面板 + 时间线
 const agents = ref([])                 // 归并后的 Agent 卡片（start/done 生命周期）
 const final = ref(null)                // 最终聚合（结论/依据/决策/chart）
 const streaming = ref(false)
+// 口径待确认（HITL 前置）：LLM 推断的口径需要用户确认后才拉数归因
+const confirmState = ref(null)         // { proposed, candidates }
+const selectedMetric = ref('')
 
 const SAMPLE = [
   '2018年6月 GMV 为什么比上月跌？',
@@ -45,7 +48,7 @@ function reduceAgents(evts) {
   return Array.from(map.values())
 }
 
-async function runAnalysis() {
+async function runAnalysis(confirmMetric) {
   if (!question.value.trim()) return
   running.value = true
   streaming.value = true
@@ -53,13 +56,17 @@ async function runAnalysis() {
   events.value = []
   agents.value = []
   final.value = null
+  confirmState.value = null
 
   try {
     // 后端 /api/analyze/stream 是 SSE（text/event-stream），用 fetch 读流逐行解析。
+    const body = { question: question.value, role: 'analyst', session_id: sessionId.value }
+    // 确认口径后重跑到"部分携带 confirm_metric"，后端按该口径确定性放行
+    if (confirmMetric) body.confirm_metric = confirmMetric
     const resp = await fetch('/api/analyze/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: question.value, role: 'analyst', session_id: sessionId.value }),
+      body: JSON.stringify(body),
     })
     if (!resp.ok || !resp.body) throw new Error('流式请求失败 HTTP ' + resp.status)
 
@@ -90,12 +97,23 @@ async function runAnalysis() {
       agents.value = reduceAgents(events.value)
     }
     final.value = lastDone
+    // 口径待确认：回显 proposed 口径 + 候选，供用户确认/改选后重跑
+    if (lastDone && lastDone.need_confirm) {
+      confirmState.value = { proposed: lastDone.proposed, candidates: lastDone.candidates || [] }
+      selectedMetric.value = lastDone.proposed?.metric || ''
+    }
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
     streaming.value = false
     running.value = false
   }
+}
+
+// 确认（或改选）口径后，携带 confirm_metric 重新发起同一分析
+function confirmAndRun() {
+  if (!selectedMetric.value || running.value) return
+  runAnalysis(selectedMetric.value)
 }
 </script>
 
@@ -125,7 +143,27 @@ async function runAnalysis() {
 
     <AgentPanel :agents="agents" :streaming="streaming" />
 
-    <div v-if="final" class="results">
+    <!-- 口径待确认（HITL 前置）：LLM 推断的口径需人工确认后才拉数归因 -->
+    <div v-if="final && final.need_confirm" class="outcome card confirm-card">
+      <h2>口径待确认</h2>
+      <p class="conclusion">
+        系统由 LLM 把问题解析为口径「<b>{{ confirmState?.proposed?.metric_name || final.metric_name }}</b>」
+        （{{ confirmState?.proposed?.metric || final.metric }}）。
+        确认口径后才会拉取并归因；也可在下拉中改选其他官方口径。
+      </p>
+      <div class="confirm-row">
+        <select v-model="selectedMetric" class="q" :disabled="running">
+          <option v-for="c in confirmState?.candidates || []" :key="c.key" :value="c.key">
+            {{ c.name }}（{{ c.key }}）
+          </option>
+        </select>
+        <button class="run" :disabled="running || !selectedMetric" @click="confirmAndRun">
+          {{ running ? '确认并分析中…' : '确认口径，开始分析' }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="final && !final.need_confirm" class="results">
       <section class="outcome card">
         <h2>诊断结论</h2>
         <p class="conclusion">{{ final.conclusion }}</p>
@@ -188,6 +226,11 @@ async function runAnalysis() {
        background: #7c6bff22; color: var(--brand-2); }
 .action-box { margin-top: 16px; padding: 12px 14px; border-radius: 10px;
               background: #22d3ee11; border: 1px solid #22d3ee44; font-size: 14px; }
+
+.confirm-card { border-color: #fbbf2444; background: linear-gradient(180deg, #fbbf2410, var(--surface)); }
+.confirm-card h2 { color: #fbbf24; }
+.confirm-row { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
+.confirm-row .q { flex: 1; padding: 12px 14px; }
 
 .foot { margin-top: 30px; color: var(--text-muted); font-size: 13px; text-align: center; }
 </style>

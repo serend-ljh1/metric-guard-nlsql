@@ -66,16 +66,27 @@ def _cfg():
 
 
 def _db_path() -> str:
-    # 默认使用**真实 Olist 数据**（data/olist/olist.db，2016-09~2018-10 窗口）；
-    # SQLPA_DB_PATH 可显式覆盖。业务问题请落在该窗口内（如"2018-06 GMV 为什么跌"）。
+    """业务库路径：环境变量 SQLPA_DB_PATH > 真实全量库 > 仓库自带样本库。
+
+    这样 `git clone` 之后不下载 66MB 真实数据也能跑通接口与前端演示
+    （样本库见 data/sample/olist_sample.db，由 tools/build_olist_sample.py 生成）。
+    """
     override = (os.getenv("SQLPA_DB_PATH") or "").strip()
     if override:
         return override
-    real = ROOT / "data" / "olist" / "olist.db"
-    if real.exists():
-        return str(real)
-    raise FileNotFoundError(
-        "缺少真实 Olist 数据 data/olist/olist.db，请先 python tools/build_olist_db.py")
+    from sqlpa.config import resolve_db_path
+    path, kind = resolve_db_path()
+    if kind == "sample":
+        # 只提示一次，避免刷屏
+        global _DB_KIND_WARNED
+        if not _DB_KIND_WARNED:
+            _DB_KIND_WARNED = True
+            print("[数据] 未找到 data/olist/olist.db，使用仓库自带样本库 "
+                  "data/sample/olist_sample.db（按月抽样，数值仅供流程演示）。")
+    return path
+
+
+_DB_KIND_WARNED = False
 
 
 def _sandbox():
@@ -208,6 +219,8 @@ class AnalyzeIn(QueryIn):
     alert_threshold_pct: float = Field(0.05, description="波动告警阈值（0.05 = 5%")
     session_id: Optional[str] = Field(
         None, description="会话 ID：复用则会话级 Agent 记忆（跨轮续下钻）；缺省为一次性无记忆会话")
+    confirm_metric: Optional[str] = Field(
+        None, description="口径待确认时用户确认/改选后的指标 key；携带后按该口径确定性执行，跳过确认门")
 
 
 # 会话级工作记忆：session_id -> {last_drill, metric, ...}
@@ -270,6 +283,7 @@ def api_analyze(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None))
                          role=role,
                          alert_threshold_pct=q.alert_threshold_pct,
                          emit=_emit,
+                         confirm_metric=q.confirm_metric,
                          memory=_session_memory(q.session_id,
                                                 _caller_key(x_api_token, role)))
     return {"events": events, "final": final, "effective_role": role}
@@ -305,6 +319,7 @@ def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default
                 question=q.question, cfg=_cfg(), sb=_sandbox(), db_path=_db_path(),
                 llm=_llm(), role=role,
                 alert_threshold_pct=q.alert_threshold_pct, emit=_emit,
+                confirm_metric=q.confirm_metric,
                 memory=_session_memory(q.session_id, caller))
         except Exception as e:  # noqa: BLE001
             import traceback

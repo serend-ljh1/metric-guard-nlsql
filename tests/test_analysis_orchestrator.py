@@ -235,7 +235,8 @@ def test_conclusion_prompt_carries_the_real_question(tmpdir_clean):
             return '{"metric":"gmv","dims":["state"],"filters":[{"type":"time_range","value":"本月"}]}'
 
     result = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
-                          SpyLLM(), role="analyst", alert_threshold_pct=0.0, emit=None)
+                          SpyLLM(), role="analyst", alert_threshold_pct=0.0, emit=None,
+                          confirm_metric="gmv")
     assert "prompt" in captured, "应走到结论 Agent（归因需成功）"
     p = captured["prompt"]
     assert "本月 GMV 为什么跌？" in p, "prompt 里必须含用户原话"
@@ -303,7 +304,7 @@ def test_analysis_is_langgraph_orchestrated(tmpdir_clean):
     g = graph.get_graph()
     node_names = set(g.nodes.keys())
     assert {"router", "executor", "attribution", "conclusion", "decision",
-            "unmatched", "executor_reject"} <= node_names, \
+            "unmatched", "executor_reject", "confirm"} <= node_names, \
         f"缺少 LangGraph 节点，实际有：{sorted(node_names)}"
 
     # 端到端：同一图驱动完整分析并产出结论（验证状态流收敛正确）
@@ -317,3 +318,66 @@ def test_analysis_is_langgraph_orchestrated(tmpdir_clean):
     assert state["routing"]["route"] == "analyze"
     assert state["conclusion"]["text"]
     assert state["decision"]["alert"] is True
+
+
+# ---------------- 口径确认门（HITL 前置）：LLM 推断口径需人工确认 ----------------
+
+class _JsonMetricLLM:
+    """返回合法指标 JSON：让 match 走 method="llm" 分支（LLM 推断口径）。"""
+    def complete(self, prompt):
+        return '{"metric":"gmv","dims":[],"filters":[]}'
+
+
+def test_confirm_gate_llm_inferred_metric_requires_confirmation(tmpdir_clean):
+    """LLM 推断口径且未确认 → 停在确认门：不执行取数/归因，返回待确认载荷。"""
+    db_path = _make_db(tmpdir_clean)
+    events = []
+
+    def emit(p):
+        events.append(p)
+
+    result = run_analysis("本月 GMV 波动大，为什么跌？", CFG, _sb(db_path), db_path,
+                          _JsonMetricLLM(), role="analyst", alert_threshold_pct=0.0,
+                          emit=emit)
+    # 待确认：ok=False、need_confirm=True、无取数/归因/结论
+    assert result["ok"] is False
+    assert result["need_confirm"] is True
+    assert result["route"] == "confirm"
+    assert result["metric"] == "gmv"
+    assert "GMV" in result["metric_name"]
+    assert result["conclusion"] == ""
+    # 给前端确认卡的回显：proposed 口径 + 可选候选口径
+    assert result["proposed"]["metric"] == "gmv"
+    assert isinstance(result["candidates"], list) and result["candidates"]
+    keys = [c["key"] for c in result["candidates"]]
+    assert "gmv" in keys
+    # 流式事件里带 confirm_required，且绝不该出现 Executor/Attribution（没执行）
+    assert any(e["type"] == "confirm_required" for e in events)
+    names = [e.get("name") for e in events if e.get("type") == "agent_start"]
+    assert "ExecutorAgent" not in names, "口径未确认就不应执行取数"
+    assert "AttributionAgent" not in names, "口径未确认就不应跑归因"
+
+
+def test_confirm_gate_confirmed_metric_runs(tmpdir_clean):
+    """用户在确认窗口选定口径（confirm_metric）→ 确定性放行并完成分析。"""
+    db_path = _make_db(tmpdir_clean)
+    result = run_analysis("本月 GMV 波动大，为什么跌？", CFG, _sb(db_path), db_path,
+                          _JsonMetricLLM(), role="analyst", alert_threshold_pct=0.0,
+                          emit=None, confirm_metric="gmv")
+    assert result["ok"] is True
+    assert result["route"] == "analyze"
+    assert result["metric"] == "gmv"
+    assert result.get("need_confirm", False) is not True
+    # 确认后走确定性执行，方法与指标都已锁定
+    assert result["certified"] is True
+
+
+def test_confirm_gate_keyword_method_auto_runs(tmpdir_clean):
+    """确定性关键词命中（method=keyword）→ 无论如何都直接放行，不打扰用户确认。"""
+    db_path = _make_db(tmpdir_clean)
+    # _MockLLM 返回非 JSON → metric_matcher 落到 keyword 兜底，method="keyword"
+    result = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
+                          _MockLLM(), role="analyst", alert_threshold_pct=0.0, emit=None)
+    assert result["ok"] is True
+    assert result.get("need_confirm", False) is not True
+    assert result["route"] == "analyze"

@@ -1,5 +1,6 @@
 {
   "n_cases": 66,
+  "db_kind": "sample",
   "engine": "semantic-first (compiler)",
   "offline_note": "本评测离线运行（llm=None），因此**降级路径未被实际触发**：口径外问题在离线时会被明确拒绝而不是交给多 Agent 生成。线上有 LLM 时这部分会走 fallback。故这里以 'semantic_hit_rate'(落到已治理口径的比例) 为主指标，降级率仅给出上界（口径外题数占比）。",
   "semantic_layer": {
@@ -34,7 +35,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {
@@ -107,7 +108,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {
@@ -178,7 +179,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {
@@ -303,7 +304,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {
@@ -359,7 +360,7 @@
       "dims": [
         "state"
       ],
-      "rows": 23,
+      "rows": 13,
       "reject": ""
     },
     {
@@ -387,7 +388,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {
@@ -469,7 +470,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {
@@ -637,7 +638,7 @@
       "dims": [
         "category"
       ],
-      "rows": 75,
+      "rows": 66,
       "reject": ""
     },
     {
@@ -790,7 +791,7 @@
       "dims": [
         "category"
       ],
-      "rows": 74,
+      "rows": 65,
       "reject": ""
     },
     {

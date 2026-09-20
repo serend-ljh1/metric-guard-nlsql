@@ -49,32 +49,50 @@ def tmpdir_clean():
 
 @pytest.fixture(scope="session")
 def real_olist_db() -> str:
-    """真实 Olist 库路径（data/olist/olist.db，已 gitignore）。
+    """可用的业务库路径：优先真实全量库，其次**仓库自带样本库**。
 
-    缺数据时**跳过**依赖它的用例：公开 CI 上必然没有这个库，
-    让接口测试硬失败会把"环境缺失"误报成"代码回归"。
+    clone 之后没有 data/olist/olist.db 也能跑（样本库随仓库提交），
+    只有两者都不存在时才 skip——"开箱即跑"是简历项目的第一道门槛。
     """
-    p = ROOT / "data" / "olist" / "olist.db"
-    if not p.exists():
-        pytest.skip("缺少真实 Olist 数据 data/olist/olist.db，跳过依赖真实库的用例")
-    return str(p)
+    from sqlpa.config import resolve_db_path
+    try:
+        path, kind = resolve_db_path()
+    except FileNotFoundError:
+        pytest.skip("既无真实 Olist 库也无样本库，跳过依赖业务数据的用例")
+    if kind == "sample":
+        # 样本库是随仓库提交的**只读资产**：拷一份出来，避免用例写坏它
+        _TMP_BASE.mkdir(parents=True, exist_ok=True)
+        copy = _TMP_BASE / f"sample-{uuid.uuid4().hex[:8]}.db"
+        shutil.copyfile(path, copy)
+        return str(copy)
+    return path
 
 
 @pytest.fixture(scope="session")
 def sample_db() -> str:
-    """真实 Olist 数据的一撮切片库（业务层测试用，非捏造数据）。"""
+    """业务层测试库：有真实全量库就切片，否则退化为**仓库自带样本库**的副本。
+
+    测试不再依赖"捏造日期"的假样本：数据全部来自真实 Olist（2016-09~2018-10），
+    业务语义层的指标/维度因此能真正跑出结果。
+    """
     _TMP_BASE.mkdir(parents=True, exist_ok=True)
-    p = _TMP_BASE / f"olist-{uuid.uuid4().hex[:8]}.db"
-    _build_olist_slice(p)
+    real = ROOT / "data" / "olist" / "olist.db"
+    if real.exists():
+        p = _TMP_BASE / f"olist-{uuid.uuid4().hex[:8]}.db"
+        _build_olist_slice(p)
+        return str(p)
+    # 没有全量库 → 用随仓库提交的样本库（拷副本，避免写坏只读资产）
+    from sqlpa.config import resolve_db_path
+    path, kind = resolve_db_path()
+    if kind != "sample":
+        pytest.skip("既无全量库也无样本库，跳过依赖业务数据的用例")
+    p = _TMP_BASE / f"sample-{uuid.uuid4().hex[:8]}.db"
+    shutil.copyfile(path, p)
     return str(p)
 
 
 def _build_olist_slice(dest: Path) -> None:
-    """从真实 data/olist/olist.db 抽一小撮记录组成测试库（保持外键引用完整）。
-
-    测试不再依赖"捏造日期"的假样本：这里的数据全部来自真实 Olist（2016-09~2018-10），
-    业务语义层的指标/维度因此能真正跑出结果。
-    """
+    """从真实 data/olist/olist.db 抽一小撮记录组成测试库（保持外键引用完整）。"""
     real = ROOT / "data" / "olist" / "olist.db"
     if not real.exists():
         pytest.skip("缺少真实 Olist 数据 data/olist/olist.db，跳过依赖业务库的用例")
