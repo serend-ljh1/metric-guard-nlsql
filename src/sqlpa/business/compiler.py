@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .metric_config import BusinessConfig, Metric
-from .sqlgen import inject_dim_joins, tables_of
+from .sqlgen import JoinInjectionError, inject_dim_joins, tables_of
 
 # 时间粒度：把基础维度 dt 按粒度转成对应 SQL 表达式
 TIME_GRAINS: Dict[str, str] = {
@@ -39,6 +39,11 @@ TIME_GRAINS: Dict[str, str] = {
 
 class CompileError(ValueError):
     """规格不合法（不支持的指标/维度组合等）→ 上层据此走降级或拒绝。"""
+
+
+# JOIN 子句里跟在表名后的"非别名"关键字（用于区分 `JOIN t ON ...` 与 `JOIN t x ON ...`）
+_JOIN_STOPWORDS = {"on", "using", "where", "group", "order", "left", "right", "inner",
+                   "outer", "join", "and", "or", "limit", "having", "as"}
 
 
 @dataclass
@@ -162,13 +167,69 @@ def _tables_of(m: Metric) -> List[str]:
     return tables_of(m)
 
 
+def _check_support(m: Metric, dim_keys: Sequence[str], filter_types: Sequence[str],
+                   cfg: BusinessConfig) -> None:
+    """**编译期**校验维度/过滤是否在该指标声明的支持范围内。
+
+    历史缺陷：支持度只在 matcher 层校验，编译器一律放行。于是一旦有别的入口
+    （指标编辑、派生指标、直接调用 API/脚本）绕过 matcher，就会编译出
+    `cancellation_rate + category` 这种没注入 products JOIN 的 SQL：编译成功、
+    执行报 "no such column: p"，甚至（如 aov+category）执行成功却给出未认证口径。
+    约束必须落在编译器上，否则"认证"只是入口层的君子协定。
+    """
+    bad: List[str] = []
+    for d in dim_keys:
+        if m.support_dims and d not in m.support_dims:
+            dname = cfg.dimensions[d].name if d in cfg.dimensions else d
+            bad.append(f"{m.name} 不支持按「{dname}」统计")
+    for ft in filter_types:
+        if m.support_filters and ft not in m.support_filters:
+            bad.append(f"{m.name} 不支持「{ft}」过滤")
+    if bad:
+        raise CompileError("；".join(bad))
+
+
+def _inject(cfg: BusinessConfig, m: Metric, dim_keys: Sequence[str],
+            filter_types: Sequence[str]) -> str:
+    """注入 JOIN，并把 sqlgen 的注入失败翻译成编译错误（对上层是同一类拒绝）。"""
+    try:
+        return inject_dim_joins(cfg, m, dim_keys, filter_types)
+    except JoinInjectionError as e:
+        raise CompileError(str(e)) from e
+
+
+def _apply_row_filters(join_sql: str, from_clause: str,
+                       row_filters: Sequence[str]) -> List[str]:
+    """把行级过滤谓词并入 WHERE，并**校验谓词的表确实在查询里**（否则拒绝）。
+
+    行级过滤只能收紧权限、不能失效。谓词引用了未加入的表时（例如某指标口径里没有
+    order_items），若放任不管就会生成一条"过滤条件引用未知别名"的 SQL —— 要么报错，
+    要么（更糟）在别的方言里被当成字符串而静默失效，用户于是看到本不该看到的全量数据。
+    """
+    clauses = [c.strip() for c in (row_filters or []) if str(c).strip()]
+    if not clauses:
+        return []
+    from .permissions import missing_row_filter_aliases
+    missing = missing_row_filter_aliases(f"{from_clause} {join_sql}", clauses)
+    if missing:
+        raise CompileError(
+            f"行级权限无法生效：过滤条件引用了查询中不存在的表别名 {missing}。"
+            f"该指标的取数范围里没有这些表，为避免越权返回全量数据，本次请求被拒绝。")
+    return clauses
+
+
 # 标准维度 JOIN 池：维度所需的表如果不在指标自带的 JOIN 里，就自动补上。
 # 这样"支持某维度"与"能查出该维度"不会再脱节（配置声明支持 → 编译器保证可执行）。
-def compile_spec(cfg: BusinessConfig, spec: QuerySpec) -> CompiledQuery:
-    """把 QuerySpec 确定性编译成 SQL。不合法则抛 CompileError（上层据此降级/拒绝）。"""
+def compile_spec(cfg: BusinessConfig, spec: QuerySpec,
+                 row_filters: Sequence[str] = ()) -> CompiledQuery:
+    """把 QuerySpec 确定性编译成 SQL。不合法则抛 CompileError（上层据此降级/拒绝）。
+
+    row_filters：调用方角色的**行级过滤谓词**（RLS-lite）。注入前会校验谓词引用的别名
+    确实出现在 SQL 里；引用了不存在的表 → 明确拒绝，绝不"过滤失效但照样返回全量"。
+    """
     derived = parse_derived(spec.metric)
     if derived:
-        return _compile_derived(cfg, spec, derived)
+        return _compile_derived(cfg, spec, derived, row_filters)
     m = cfg.metrics.get(spec.metric)
     if not m:
         raise CompileError(f"未知指标: {spec.metric}")
@@ -178,6 +239,9 @@ def compile_spec(cfg: BusinessConfig, spec: QuerySpec) -> CompiledQuery:
         unknown = [d for d in (spec.dims or []) if d not in cfg.dimensions]
         raise CompileError(f"未知维度: {unknown}")
 
+    filter_types = [ft for ft, _v in (spec.filters or [])]
+    _check_support(m, dim_keys, filter_types, cfg)
+
     dim_sqls = [dimension_sql(cfg, d, spec.time_grain if d == "dt" else None) for d in dim_keys]
     select_parts = [f"{m.metric_expr} AS {m.key}"]
     select_parts += [f"{frag} AS {d}" for d, frag in zip(dim_keys, dim_sqls)]
@@ -185,9 +249,10 @@ def compile_spec(cfg: BusinessConfig, spec: QuerySpec) -> CompiledQuery:
     where_parts = [m.where_core] if m.where_core and m.where_core not in ("", "1=1") else []
     for ftype, value in (spec.filters or []):
         where_parts.append(render_filter(cfg, ftype, value))
+    join_sql = _inject(cfg, m, dim_keys, filter_types)
+    where_parts += _apply_row_filters(join_sql, m.from_clause, row_filters)
 
-    sql = _build_sql(select_parts, m.from_clause,
-                     inject_dim_joins(cfg, m, dim_keys), where_parts,
+    sql = _build_sql(select_parts, m.from_clause, join_sql, where_parts,
                      dim_sqls, order_expr=m.metric_expr, top=spec.top)
     return CompiledQuery(
         sql=sql, metric_key=m.key, metric_name=m.name, metric_expr=m.metric_expr,
@@ -196,29 +261,86 @@ def compile_spec(cfg: BusinessConfig, spec: QuerySpec) -> CompiledQuery:
     )
 
 
+def _join_alias(clause: str) -> Optional[str]:
+    """取一段 JOIN 子句的别名（支持派生表 `JOIN (SELECT ...) t`）。"""
+    m = re.match(r"(?:LEFT\s+|INNER\s+)?JOIN\s*", clause or "", re.I)
+    if not m:
+        return None
+    body = clause[m.end():]
+    if body.startswith("("):
+        depth = 0
+        for i, ch in enumerate(body):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    am = re.match(r"\s+(?:AS\s+)?([a-zA-Z_][\w]*)", body[i + 1:], re.I)
+                    return am.group(1).lower() if am else None
+        return None
+    tm = re.match(r"([a-zA-Z_][\w]*)", body)
+    if not tm:
+        return None
+    table = tm.group(1).lower()
+    am = re.match(r"\s+(?:AS\s+)?([a-zA-Z_][\w]*)", body[tm.end():], re.I)
+    if am and am.group(1).lower() not in _JOIN_STOPWORDS:
+        return am.group(1).lower()
+    return table
+
+
+def _split_joins(text: str) -> List[str]:
+    """按 JOIN 边界切出各条 JOIN 子句（深度感知，支持派生表与嵌套括号）。
+
+    旧实现用一条正则匹配 `JOIN <表> [别名] ON ...`，遇到派生表（`JOIN (SELECT ...) r`）
+    会整段匹配失败 → 子句被静默丢弃 → ratio 合并 JOIN 时丢表。
+    """
+    out: List[str] = []
+    for m in re.finditer(r"\bJOIN\b", text or "", re.I):
+        start = m.start()
+        pre = re.search(r"(LEFT\s+|INNER\s+)?$", (text or "")[:start], re.I)
+        if pre:
+            start = pre.start()
+        i, depth = m.end(), 0
+        while i < len(text):
+            ch = text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            if depth == 0 and re.match(r"\bJOIN\b", text[i:], re.I):
+                break
+            i += 1
+        out.append(text[start:i].strip())
+    return out
+
+
 def _merge_joins(*clauses: str) -> str:
     """把多段 JOIN 子句**按表别名去重**后合并。
 
     不能只按"子句文本"去重：两个指标可能各自写了 `oi` 的 JOIN（条件写法不同），
     文本去重会留下两条 `JOIN order_items oi`，导致 `ambiguous column name`。
-    以别名为键去重才是正确的合并单位。
+    以别名为键去重才是正确的合并单位；派生表同样按别名处理。
+
+    **同名别名但来源不同 → 明确拒绝**：例如 `avg_review` 的 `r` 是订单粒度派生表、
+    `review_count` 的 `r` 是 reviews 表，合并后只能留一个，另一个指标的列会凭空消失
+    （历史上表现为执行期 `no such column: r.review_id`）。这种"合并即失真"必须拦在编译期。
     """
     seen: Dict[str, str] = {}
     order: List[str] = []
     for clause in clauses:
-        text = clause or ""
-        for part in re.findall(
-                r"(?:LEFT\s+|INNER\s+)?JOIN\s+[a-zA-Z_][\w]*(?:\s+(?:AS\s+)?[a-zA-Z_][\w]*)?\s+ON\s+[^;]*?"
-                r"(?=(?:\s+(?:LEFT\s+|INNER\s+)?JOIN\s)|$)", text, re.I):
-            part = part.strip()
-            m = re.match(r"(?:LEFT\s+|INNER\s+)?JOIN\s+([a-zA-Z_][\w]*)(?:\s+(?:AS\s+)?([a-zA-Z_][\w]*))?",
-                         part, re.I)
-            if not m:
+        for part in _split_joins(clause or ""):
+            alias = _join_alias(part)
+            if not alias:
                 continue
-            alias = (m.group(2) or m.group(1)).lower()
-            if alias not in seen:
+            prev = seen.get(alias)
+            if prev is None:
                 seen[alias] = part
                 order.append(alias)
+            elif re.sub(r"\s+", " ", prev).strip().lower() != \
+                    re.sub(r"\s+", " ", part).strip().lower():
+                raise CompileError(
+                    f"两个指标对别名「{alias}」定义了不同的 JOIN 来源（{prev[:60]}… vs "
+                    f"{part[:60]}…），无法在同一查询内合并；请改用同源指标或各自的派生定义")
     return " ".join(seen[a] for a in order)
 
 
@@ -250,26 +372,36 @@ def _build_sql(select_parts: Sequence[str], from_clause: str, join_clause: str,
     return "\n".join(p for p in parts if p).strip()
 
 
-def _compile_derived(cfg: BusinessConfig, spec: QuerySpec, derived: Dict) -> CompiledQuery:
+def _compile_derived(cfg: BusinessConfig, spec: QuerySpec, derived: Dict,
+                     row_filters: Sequence[str] = ()) -> CompiledQuery:
     """派生指标编译：ratio（两基础指标相除）与 share（占整体比例）。"""
     dim_keys = [d for d in (spec.dims or []) if d in cfg.dimensions]
     if len(dim_keys) != len(spec.dims or []):
         raise CompileError(f"未知维度: {[d for d in (spec.dims or []) if d not in cfg.dimensions]}")
     dim_sqls = [dimension_sql(cfg, d, spec.time_grain if d == "dt" else None) for d in dim_keys]
+    filter_types = [ft for ft, _v in (spec.filters or [])]
 
     if derived["kind"] == "ratio":
         a = cfg.metrics.get(derived["numerator"])
         b = cfg.metrics.get(derived["denominator"])
         if not a or not b:
             raise CompileError(f"ratio 引用了未知指标: {derived}")
+        # 支持度校验必须覆盖派生指标的两个操作数，否则"未认证组合"会从派生入口溜进来。
+        _check_support(a, dim_keys, filter_types, cfg)
+        _check_support(b, dim_keys, filter_types, cfg)
         # 两个基础指标必须能落在同一个查询上下文里：把两者所需的 JOIN 合并。
-        # 不用"from_clause 字符串相等"来判断同源（两指标的 from 常都是 'FROM orders o'，
-        # 这种判断既漏检又脆弱）；合并 JOIN 后由 SQL 引擎裁定别名是否齐备，
-        # 缺表会以 DB 错误暴露，而不是产出悄悄算错的口径。
         if a.from_clause != b.from_clause:
             raise CompileError("ratio 的分子分母主表不同，无法在同一查询内相除")
-        base = _MergeProxy(a, b, inject_dim_joins(cfg, a, dim_keys),
-                           inject_dim_joins(cfg, b, dim_keys))
+        # 同源不仅要看主表，还要看**行级口径（where_core）**：把两个 where 直接 AND
+        # 会让分子分母同时被对方的口径框住。实例：gmv 的 where 是 `status != canceled`、
+        # order_count 的是 `status = delivered`，AND 之后 GMV 被悄悄改成"仅已送达"，
+        # 编译成功、执行成功、数字错——正是本项目要消灭的那类口径漂移。
+        if (a.where_core or "1=1").strip() != (b.where_core or "1=1").strip():
+            raise CompileError(
+                f"ratio 的分子分母行级口径不同（{a.key}: {a.where_core or '1=1'} / "
+                f"{b.key}: {b.where_core or '1=1'}），不能直接相除")
+        base = _MergeProxy(a, b, _inject(cfg, a, dim_keys, filter_types),
+                           _inject(cfg, b, dim_keys, filter_types))
         key = f"{a.key}_per_{b.key}"
         expr = (f"CASE WHEN ({b.metric_expr}) IS NULL OR ({b.metric_expr}) = 0 "
                 f"THEN NULL ELSE ({a.metric_expr}) * 1.0 / ({b.metric_expr}) END")
@@ -279,6 +411,8 @@ def _compile_derived(cfg: BusinessConfig, spec: QuerySpec, derived: Dict) -> Com
                 where_parts.append(m.where_core)
         for ftype, value in (spec.filters or []):
             where_parts.append(render_filter(cfg, ftype, value))
+        # 行级过滤同时作用于分子分母（同一查询上下文，两侧都收紧才不出漏）
+        where_parts += _apply_row_filters(base.join_clause, a.from_clause, row_filters)
         select_parts = [f"{expr} AS {key}"] + [f"{frag} AS {d}" for d, frag in zip(dim_keys, dim_sqls)]
         sql = _build_sql(select_parts, a.from_clause, base.join_clause, where_parts,
                          dim_sqls, order_expr=expr, top=spec.top)
@@ -298,18 +432,27 @@ def _compile_derived(cfg: BusinessConfig, spec: QuerySpec, derived: Dict) -> Com
         raise CompileError(f"share 引用了未知指标: {derived['base']}")
     if not dim_keys:
         raise CompileError("share 需要至少一个维度")
+    _check_support(base, dim_keys, filter_types, cfg)
     where_parts = [base.where_core] if base.where_core and base.where_core not in ("", "1=1") else []
     for ftype, value in (spec.filters or []):
         where_parts.append(render_filter(cfg, ftype, value))
+    # 分母子查询是不分组的整体值：只需注入过滤条件所需的 JOIN（不能带维度 JOIN，
+    # 否则分母会被维度行数放大）；过滤若引用 c./p. 而不注入就会执行期报错。
+    sub_join = _inject(cfg, base, [], filter_types)
+    # 行级过滤必须同时进主查询与分母子查询，否则"占比"会拿全量做分母（越权泄露总量）
+    rf_main_join = _inject(cfg, base, dim_keys, filter_types)
+    where_parts = where_parts + _apply_row_filters(rf_main_join, base.from_clause, row_filters)
+    rf_sub = _apply_row_filters(sub_join, base.from_clause, row_filters)
     where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+    rf_sub_where = (" WHERE " + " AND ".join(rf_sub)) if rf_sub else ""
     total_sub = (f"(SELECT {base.metric_expr} {base.from_clause} "
-                 f"{(base.join_clause or '').strip()}{where_sql})")
+                 f"{sub_join}{where_sql}{rf_sub_where})")
     expr = (f"CASE WHEN {total_sub} IS NULL OR {total_sub} = 0 THEN NULL "
             f"ELSE {base.metric_expr} * 1.0 / {total_sub} END")
     key = f"{base.key}_share"
     select_parts = [f"{expr} AS {key}"] + [f"{frag} AS {d}" for d, frag in zip(dim_keys, dim_sqls)]
     sql = _build_sql(select_parts, base.from_clause,
-                     inject_dim_joins(cfg, base, dim_keys), where_parts,
+                     _inject(cfg, base, dim_keys, filter_types), where_parts,
                      dim_sqls, order_expr=expr, top=spec.top)
     return CompiledQuery(
         sql=sql, metric_key=key, metric_name=f"{base.name}占比", metric_expr=expr,

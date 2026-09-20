@@ -2,7 +2,8 @@
 # 无
 
 # ---- 前端 ----
-streamlit>=1.36.0
+# 前端为 Vue3 + ECharts（见 web/，依赖在 web/package.json）——
+# 此处不再需要 python 前端依赖（Streamlit 已移除）。
 altair
 
 # ---- API 后端 ----
@@ -10,11 +11,9 @@ fastapi
 uvicorn
 httpx
 
-# ---- 生产版 / 真实评测所需（对齐 LangChain / LangGraph 1.x 最新版）----
-langgraph>=1.2.11
-langchain>=1.4.0
-langchain-openai>=1.6.0
-langchain-core>=1.6.1
+# ---- 依赖（确定性核心零外部依赖）----
+# 多 Agent 分析编排由 LangGraph StateGraph 驱动（见 src/sqlpa/analysis/orchestrator.py）
+langgraph
 pydantic>=2.0
 pyyaml
 python-dotenv

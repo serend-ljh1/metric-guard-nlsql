@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.sandbox.dialects
 ======================
 外部数据库方言适配层（MySQL / PostgreSQL）。
@@ -6,10 +6,14 @@ sqlpa.sandbox.dialects
 设计（对齐"推理归 LLM、计算归代码"原则）：
   - 本层只负责「连接 + 只读执行 + schema 提取」；语句级安全校验
     （SELECT-only / 高危关键字拦截）统一由 sql_executor._sanitize 在进入本层之前完成。
-  - 只读双保险：除语句校验外，会话级也强制只读——
-      MySQL     : SET SESSION TRANSACTION READ ONLY
-      PostgreSQL: 连接即 readonly 事务（psycopg2 set_session(readonly=True)）
-    生产部署仍建议配合数据库侧只读账号。
+  - 只读双保险：除语句校验外，会话级也强制只读，并且**不依赖驱动默认值**——
+      MySQL     : 关 autocommit + `SET SESSION TRANSACTION READ ONLY` + 显式只读事务
+      PostgreSQL: 连接参数 default_transaction_read_only=on + set_session(readonly=True)
+  - 查询级超时（与 SQLite 的 progress_handler 对齐）：
+      MySQL     : MAX_EXECUTION_TIME（MariaDB 回退 max_statement_time）
+      PostgreSQL: statement_timeout
+    生产部署仍建议配合数据库侧只读账号——应用层护栏不能替代数据库权限。
+  - 行数上限是**客户端** fetchmany 截断：服务端该扫的仍会扫完，所以超时护栏必须配。
   - 驱动惰性导入：只有真正连接对应数据库时才需要安装 pymysql / psycopg2。
 """
 from __future__ import annotations
@@ -29,7 +33,12 @@ class DbConnector(ABC):
         """打开一个（只读）连接。"""
 
     def run_query(self, sql: str, fetch_limit: int) -> Tuple[List[str], List[tuple]]:
-        """执行只读查询，返回 (列名, 行)。连接用完即关。"""
+        """执行只读查询，返回 (列名, 行)。连接用完即关。
+
+        护栏说明：语句级校验在 sql_executor._sanitize（进入本层之前）；
+        本层再叠会话级只读 + **查询级超时**（见各 _open 实现）。
+        注意 fetch_limit 是**客户端**截断：服务端该扫的仍会扫（因此超时护栏不可省）。
+        """
         conn = self._open()
         try:
             cur = conn.cursor()
@@ -95,7 +104,23 @@ class MySQLConnector(DbConnector):
                                connect_timeout=int(self.timeout),
                                read_timeout=int(max(self.timeout, 5)))
         cur = conn.cursor()
-        cur.execute("SET SESSION TRANSACTION READ ONLY")   # 会话级只读双保险
+        # 只读不能依赖驱动默认的 autocommit 行为：
+        # `SET SESSION TRANSACTION READ ONLY` 只作用于**后续事务**，一旦驱动按语句自动提交
+        # 就形同虚设。这里显式关掉 autocommit 并开启只读事务，让只读保证与驱动默认值无关。
+        try:
+            conn.autocommit(False)
+        except Exception:  # noqa: BLE001
+            pass
+        cur.execute("SET SESSION TRANSACTION READ ONLY")
+        cur.execute("START TRANSACTION READ ONLY")
+        # 查询级超时：read_timeout 只约束网络读，不约束服务端执行时长。
+        for stmt in (f"SET SESSION MAX_EXECUTION_TIME={int(self.timeout * 1000)}",
+                     f"SET SESSION max_statement_time={float(self.timeout)}"):
+            try:
+                cur.execute(stmt)
+                break
+            except Exception:  # noqa: BLE001  不同版本/MariaDB 支持不同，失败即降级
+                continue
         return conn
 
     def extract_schema(self, db_id: Optional[str] = None) -> Dict:
@@ -137,10 +162,14 @@ class PostgresConnector(DbConnector):
             import psycopg2
         except ImportError as e:
             raise RuntimeError("未安装 psycopg2：pip install psycopg2-binary") from e
+        # 服务端也设只读 + 语句超时（connect_timeout 只管建连，不管执行时长）
+        options = (f"-c statement_timeout={int(self.timeout * 1000)} "
+                   f"-c default_transaction_read_only=on")
         conn = psycopg2.connect(host=self.host, port=self.port, user=self.user,
                                 password=self.password, dbname=self.database,
-                                connect_timeout=int(self.timeout))
-        conn.set_session(readonly=True, autocommit=True)   # 会话级只读双保险
+                                connect_timeout=int(self.timeout),
+                                options=options)
+        conn.set_session(readonly=True, autocommit=True)   # 会话级只读第二道
         return conn
 
     def extract_schema(self, db_id: Optional[str] = None) -> Dict:

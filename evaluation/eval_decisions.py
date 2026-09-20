@@ -480,9 +480,25 @@ def llm_value(annotated: List[Dict] = ANNOTATED, llm=None) -> Dict:
 
 
 def _llm_call_count(llm) -> int:
-    """统计 LLM 客户端的调用次数（不同实现计数方式不同，取得到就取，取不到算 0）。"""
+    """统计 LLM 客户端的调用次数。
+
+    历史缺陷：只找 `calls`/`n_calls`/`call_count`，而 `OpenAICompatLLM` 暴露的是
+    `usage`/`stats()` → 计数恒为 0（README 里"花了 N 次 LLM 调用"因此是错的）。
+    现在优先读 `usage["calls"]`。
+    """
     if llm is None:
         return 0
+    usage = getattr(llm, "usage", None)
+    if isinstance(usage, dict) and isinstance(usage.get("calls"), int):
+        return int(usage["calls"])
+    stats = getattr(llm, "stats", None)
+    if callable(stats):
+        try:
+            u = (stats() or {}).get("usage") or {}
+            if isinstance(u.get("calls"), int):
+                return int(u["calls"])
+        except Exception:  # noqa: BLE001
+            pass
     for attr in ("calls", "n_calls", "call_count"):
         v = getattr(llm, attr, None)
         if isinstance(v, int):
@@ -526,7 +542,7 @@ def _build_llm(model: str, pool: bool):
     except ImportError:  # pragma: no cover
         pass
     try:
-        from sqlpa.eval.console import ensure_utf8_console
+        from sqlpa.config import ensure_utf8_console
         ensure_utf8_console()
     except ImportError:  # pragma: no cover
         pass
@@ -578,7 +594,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import json
 
     try:  # Windows 控制台默认 GBK，中文/符号会炸 → 统一抬到 UTF-8
-        from sqlpa.eval.console import ensure_utf8_console
+        from sqlpa.config import ensure_utf8_console
         ensure_utf8_console()
     except ImportError:  # pragma: no cover
         pass

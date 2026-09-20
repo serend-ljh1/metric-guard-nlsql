@@ -1,0 +1,20 @@
+{
+  "name": "metric-guard-analyst",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "多 Agent 协作数据分析系统（档3 主角）：SSE 流式展示 + ECharts 炫可视化",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "echarts": "^5.5.1",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.4.0"
+  }
+}

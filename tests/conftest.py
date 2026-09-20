@@ -48,13 +48,65 @@ def tmpdir_clean():
 
 
 @pytest.fixture(scope="session")
+def real_olist_db() -> str:
+    """真实 Olist 库路径（data/olist/olist.db，已 gitignore）。
+
+    缺数据时**跳过**依赖它的用例：公开 CI 上必然没有这个库，
+    让接口测试硬失败会把"环境缺失"误报成"代码回归"。
+    """
+    p = ROOT / "data" / "olist" / "olist.db"
+    if not p.exists():
+        pytest.skip("缺少真实 Olist 数据 data/olist/olist.db，跳过依赖真实库的用例")
+    return str(p)
+
+
+@pytest.fixture(scope="session")
 def sample_db() -> str:
-    """Olist 同结构小样本库（业务层测试用）。"""
-    from build_olist_sample import build
+    """真实 Olist 数据的一撮切片库（业务层测试用，非捏造数据）。"""
     _TMP_BASE.mkdir(parents=True, exist_ok=True)
     p = _TMP_BASE / f"olist-{uuid.uuid4().hex[:8]}.db"
-    build(p)
+    _build_olist_slice(p)
     return str(p)
+
+
+def _build_olist_slice(dest: Path) -> None:
+    """从真实 data/olist/olist.db 抽一小撮记录组成测试库（保持外键引用完整）。
+
+    测试不再依赖"捏造日期"的假样本：这里的数据全部来自真实 Olist（2016-09~2018-10），
+    业务语义层的指标/维度因此能真正跑出结果。
+    """
+    real = ROOT / "data" / "olist" / "olist.db"
+    if not real.exists():
+        pytest.skip("缺少真实 Olist 数据 data/olist/olist.db，跳过依赖业务库的用例")
+    _SCHEMA = """
+        CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT, order_status TEXT,
+          order_purchase_timestamp TEXT, order_delivered_customer_date TEXT,
+          order_estimated_delivery_date TEXT);
+        CREATE TABLE order_items(order_id TEXT, order_item_id INTEGER, product_id TEXT,
+          seller_id TEXT, price REAL, freight_value REAL);
+        CREATE TABLE customers(customer_id TEXT PRIMARY KEY, customer_unique_id TEXT,
+          customer_zip_code_prefix TEXT, customer_city TEXT, customer_state TEXT);
+        CREATE TABLE products(product_id TEXT PRIMARY KEY, product_category_name TEXT);
+        CREATE TABLE reviews(review_id TEXT, order_id TEXT, review_score REAL);
+    """
+    conn = sqlite3.connect(dest)
+    conn.executescript(_SCHEMA)
+    conn.execute('ATTACH DATABASE ? AS sr', (str(real.resolve()),))
+    conn.execute("""
+        INSERT INTO orders SELECT * FROM sr.orders
+        WHERE order_id IN (SELECT order_id FROM sr.orders
+                           ORDER BY order_purchase_timestamp LIMIT 1200)""")
+    conn.execute("INSERT INTO order_items SELECT * FROM sr.order_items "
+                 "WHERE order_id IN (SELECT order_id FROM orders)")
+    conn.execute("INSERT INTO customers SELECT * FROM sr.customers "
+                 "WHERE customer_id IN (SELECT customer_id FROM orders)")
+    conn.execute("INSERT INTO products SELECT * FROM sr.products "
+                 "WHERE product_id IN (SELECT product_id FROM order_items)")
+    conn.execute("INSERT INTO reviews SELECT * FROM sr.reviews "
+                 "WHERE order_id IN (SELECT order_id FROM orders)")
+    conn.commit()
+    conn.execute("DETACH DATABASE sr")
+    conn.close()
 
 
 @pytest.fixture(scope="session")

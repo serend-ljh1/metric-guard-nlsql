@@ -15,7 +15,7 @@ from sqlpa.business.service import answer
 from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
 
 CFG = load_config()
-DB = "data/olist_sample/sample.db"
+DB = "data/olist/olist.db"
 
 
 @pytest.fixture
@@ -65,11 +65,25 @@ def test_out_of_scope_questions_are_rejected(sb, sample_db, question):
     assert len(a["reject"]) >= 8, "拒绝原因过短，业务人员无法据此调整"
 
 
-# ---------------- 公式防篡改：能拦什么、拦不住什么（如实锁定）----------------
+# ---------------- 公式防篡改：结构绑定的拦截面 ----------------
 
 def test_formula_passes_when_used_verbatim():
     expr = formula_of(CFG, "gmv")
     assert verify_formula(f"SELECT {expr} FROM orders o", expr) == []
+
+
+def test_formula_passes_real_compiler_output(tmpdir_clean, sample_db):
+    """关键回归：编译器真实产物必须通过（否则主路径全线被自己的护栏拦下）。"""
+    from sqlpa.business.compiler import QuerySpec, compile_spec
+
+    for spec in (QuerySpec(metric="gmv", dims=["state"]),
+                 QuerySpec(metric="cancellation_rate", dims=["dt"]),
+                 QuerySpec(metric="ratio@freight_cost/gmv", dims=["state"]),
+                 QuerySpec(metric="review_count", dims=["category"]),
+                 QuerySpec(metric="share@canceled_order_count", dims=["state"])):
+        cq = compile_spec(CFG, spec)
+        assert verify_formula(cq.sql, cq.metric_expr, cq.metric_key) == [], \
+            f"编译器产物被自己的护栏拦截: {spec.metric}"
 
 
 def test_formula_blocks_replaced_metric():
@@ -82,16 +96,34 @@ def test_formula_blocks_shell_query():
     assert verify_formula("SELECT 1 FROM orders WHERE 1=0", expr), "空壳 SQL 未被拦截"
 
 
-@pytest.mark.xfail(
-    reason="已知局限：verify_formula 是子串包含判定，保留 SUM(oi.price) 再乘系数即可绕过。"
-           "修复（改为表达式结构校验）后本用例应转为通过。",
-    strict=False,
-)
-def test_formula_blocks_scaled_expression_BYPASS_KNOWN():
-    """把配置公式乘上系数——当前**拦不住**，如实记录为已知缺口。"""
+def test_formula_blocks_scaled_expression():
+    """把配置公式乘上系数 —— 结构绑定后必须拦截（曾是可以绕过的已知缺口）。"""
     expr = formula_of(CFG, "gmv")
     sql = "SELECT SUM(oi.price)*0.5 FROM orders o JOIN order_items oi ON o.order_id=oi.order_id"
     assert verify_formula(sql, expr), "私自缩放公式未被拦截"
+
+
+def test_formula_blocks_decoy_column():
+    """诱饵列：把配置表达式放在别的列上，口径列却被改。"""
+    expr = formula_of(CFG, "gmv")
+    sql = ("SELECT SUM(oi.price) AS decoy, SUM(oi.price)*0.001 AS gmv "
+           "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id")
+    assert verify_formula(sql, expr, key="gmv"), "诱饵列绕过未被拦截"
+
+
+def test_formula_blocks_expression_in_comment_or_literal():
+    """表达式只出现在注释/字符串里不算使用。"""
+    expr = formula_of(CFG, "gmv")
+    assert verify_formula(f"SELECT 42 AS gmv /* {expr} */ FROM orders o", expr, key="gmv")
+    assert verify_formula(f"SELECT '{expr}' AS note, 1 AS gmv FROM orders o", expr, key="gmv")
+
+
+def test_formula_blocks_tampered_filter_literal():
+    """口径表达式里的过滤字面量也是口径的一部分（canceled 不能变成 delivered）。"""
+    expr = formula_of(CFG, "cancellation_rate")
+    tampered = expr.replace("canceled", "delivered")
+    sql = f"SELECT {tampered} AS cancellation_rate FROM orders o"
+    assert verify_formula(sql, expr, key="cancellation_rate"), "口径内的过滤字面量被改却放行"
 
 
 # ---------------- 权限拦截 ----------------

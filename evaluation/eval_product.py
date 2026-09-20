@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from sqlpa.eval.console import ensure_utf8_console  # noqa: E402
+from sqlpa.config import ensure_utf8_console  # noqa: E402
 from sqlpa.business.metric_config import load_config  # noqa: E402
 from sqlpa.business.service import answer  # noqa: E402
 from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox  # noqa: E402
@@ -44,12 +44,29 @@ def _pct(a: int, b: int) -> float:
     return round(a / b, 4) if b else 0.0
 
 
+def _require_db(db: str) -> bool:
+    """业务库缺失时**大声跳过**（而不是让 CI 红）。
+
+    这两个评测需要真实 Olist 库（data/olist 已 gitignore），公开 CI 上必然没有；
+    语义层/治理护栏的回归由 `pytest tests` 承担（那套用例自带小库，无需外部数据）。
+    """
+    if Path(db).exists():
+        return True
+    print(f"[SKIP] 缺少业务库 {db}：本评测需要真实 Olist 数据。")
+    print("       复现方式：python tools/build_olist_db.py --src data/olist --out data/olist/olist.db")
+    print("       离线回归请跑：pytest tests -q")
+    return False
+
+
 def main() -> int:
     ensure_utf8_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "olist_sample" / "sample.db"))
+    ap.add_argument("--db", default=str(ROOT / "data" / "olist" / "olist.db"))
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
     args = ap.parse_args()
+
+    if not _require_db(args.db):
+        return 0
 
     cfg = load_config()
     sb = SqlSandbox(args.db, ExecConfig.from_settings(max_rows=200))
@@ -90,7 +107,9 @@ def main() -> int:
         else:
             n_reject += 1
         n_ok += int(row["ok"])
-        n_certified += int(row["certified"])
+        # 只统计**成功结果**里的认证率：被拒的查询不是"口径已认证"。
+        # （否则分子会包含拒绝分支，出现 >100% 这种不可能的数字——曾实测 101.8%。）
+        n_certified += int(row["ok"] and row["certified"])
 
         flag = ""
         if c["expect"] == "semantic":

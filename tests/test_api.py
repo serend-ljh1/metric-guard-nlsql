@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_api.py
 =================
 FastAPI 薄后端接口测试（离线、无需 API Key）：
@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture(scope="module")
-def client(monkeypatch_module):
+def client(monkeypatch_module, real_olist_db):
     import api   # 先导入（其 load_dotenv 可能从 .env 载入 Key）
     # 再强制离线：清掉 LLM Key，避免测试打到真实 API（保证确定性 + 零成本）
     for k in ("LLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
@@ -41,11 +41,12 @@ def test_query_in_scope(client):
 
 
 def test_query_out_of_scope_offline(client):
-    # 无 Key 时口径外问题被明确拒绝（离线不支持自由查询）
+    # 口径外问题被明确拒绝（可信归因诊断：仅支持口径内指标，不生成未经认证结果）
     r = client.post("/api/query", json={"question": "每个客服的响应时长是多少"})
     assert r.status_code == 200
     d = r.json()
-    assert not d["ok"] and d["mode"] == "free"
+    assert not d["ok"] and d["mode"] == "metric"
+    assert "口径内指标" in d["reject"]
 
 
 def test_metrics_endpoint(client):

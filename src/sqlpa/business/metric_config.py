@@ -31,6 +31,17 @@ class Metric:
     # 可选的额外 JOIN 子句：把 join 从 from_clause 里拆出来，便于编译器
     # 组合 ratio/share 等派生指标时判断"两个基础指标是否同源"。
     join_clause: str = ""
+    # 该指标在维度上是否**可加**（分段变化之和 == 总变化）。
+    #   True  → 允许用"占波动 X%"表述维度贡献；
+    #   False → 比率/均值类，分段 delta 之和天然不等于总变化（用 percentages 就是错的）；
+    #   None  → 未显式声明，按表达式启发式推断（含 "/" 或 AVG( 视为不可加）。
+    # 归因层还有一次**数据侧守恒自检**兜底：即使声明为可加，只要分段之和对不上总变化，
+    # 也会自动降级为"仅供参照"，不会把错误占比写进结论与报告。
+    additive: Optional[bool] = None
+    # 比率类指标的**权重指标**（用于 rate/mix 量价分解）：应填"该比率的分母"对应指标，
+    # 例如 aov = GMV/paid_order_count → weight_metric=paid_order_count。
+    # 归因层会先用它**重建总值**校验：对不上就拒绝分解（避免给出看似精致的错结论）。
+    weight_metric: str = ""
 
     def to_dict(self) -> dict:
         return self.__dict__
@@ -77,7 +88,10 @@ def load_config(path: str | Path | None = None) -> BusinessConfig:
                                    support_filters=m.get("support_filters", []),
                                    owner=m.get("owner", "未指定"),
                                    version=m.get("version", "v1"),
-                                   join_clause=m.get("join_clause", ""))
+                                   join_clause=m.get("join_clause", ""),
+                                   additive=(None if m.get("additive") is None
+                                             else bool(m.get("additive"))),
+                                   weight_metric=(m.get("weight_metric") or "").strip())
     dims = {d["key"]: Dimension(key=d["key"], name=d.get("name", d["key"]),
                                 sql_fragment=d["sql_fragment"])
             for d in data.get("dimensions", [])}

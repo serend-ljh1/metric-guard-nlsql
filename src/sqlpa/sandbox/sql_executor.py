@@ -50,6 +50,9 @@ class ExecConfig:
     """沙箱资源护栏参数。"""
     timeout_seconds: float = 5.0
     max_rows: int = 500           # 结果集行数上限（防无 LIMIT 爆表）
+    # 历史遗留字段：`_sanitize` **始终**只接受单条查询（见下），因此该开关不生效。
+    # 原因：SQLite 的 `conn.execute` 与 pymysql 默认都不支持多语句，放开也执行不了，
+    # 只会让拦截规则看起来"可配置"。已从 config/settings.yaml 移除该键（避免死配置）。
     allow_multi_statement: bool = False
     extra_blocked_keywords: frozenset = frozenset()
 
@@ -57,9 +60,7 @@ class ExecConfig:
     def from_settings(cls, max_rows: Optional[int] = None) -> "ExecConfig":
         """按 config/settings.yaml 构造（改规则不改代码）。
 
-        读取 security.timeout_seconds / security.allow_multi_statement /
-        security.forbid_keywords 与 eval.max_rows。
-        修复前这些键**从未被读取**，属"文档声称可配置、实际是死配置"。
+        读取 security.timeout_seconds / security.forbid_keywords 与 eval.max_rows。
         """
         try:
             from sqlpa.config import get as cfg_get
@@ -70,7 +71,6 @@ class ExecConfig:
             timeout_seconds=float(cfg_get("security.timeout_seconds", 5.0) or 5.0),
             max_rows=int(max_rows if max_rows is not None
                          else (cfg_get("eval.max_rows", 500) or 500)),
-            allow_multi_statement=bool(cfg_get("security.allow_multi_statement", False)),
             extra_blocked_keywords=frozenset(str(k).upper() for k in kws),
         )
 
@@ -107,13 +107,10 @@ def _sanitize(sql: str, cfg: ExecConfig) -> str:
     if not cleaned:
         raise SqlSecurityError("空语句", "empty")
 
-    if cfg.allow_multi_statement:
-        # 仍要防止分号后跟写语句
-        if len(_split_statements(cleaned)) > 1:
-            raise SqlSecurityError("仅允许单条语句", "multi_statement")
-    else:
-        if len(_split_statements(cleaned)) > 1:
-            raise SqlSecurityError("仅允许单条语句", "multi_statement")
+    # 只允许单条查询：SQLite 的 `conn.execute` 与 pymysql 默认都不支持一次执行多条语句，
+    # 因此这里始终拦截（ExecConfig.allow_multi_statement 不改变该行为，字段仅作兼容保留）。
+    if len(_split_statements(cleaned)) > 1:
+        raise SqlSecurityError("仅允许单条语句", "multi_statement")
 
     # 首关键字必须是查询类（WITH 用于 CTE，其后仍应是 SELECT）
     head = re.match(r"\s*(select|with)\b", cleaned, re.I)

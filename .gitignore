@@ -9,6 +9,11 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# ---- 前端（web/ 源码要进仓库，依赖与构建产物不进）----
+node_modules/
+web/dist/
+.vite/
+
 # ---- 密钥（绝不提交）----
 .env
 .env.local
@@ -45,6 +50,7 @@ data/business_audit.jsonl
 data/hitl_queue.jsonl
 data/demo_hitl.jsonl
 data/datasources.yaml
+data/.datasource_key
 data/olist_sample/
 data/app.db
 data/reports/

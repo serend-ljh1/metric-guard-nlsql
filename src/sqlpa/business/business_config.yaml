@@ -92,10 +92,13 @@ metrics:
     from_clause: "FROM orders o"
     join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
     where_core: "o.order_status != 'canceled'"
+    # 比率类指标的**权重指标**（= 该比率的分母）：归因用于 rate/mix 量价分解。
+    # 分解前会先用它重建总值校验，对不上就拒绝给分解（避免"精致的错结论"）。
+    weight_metric: paid_order_count
     support_dims: [dt, state, category, status]
     support_filters: [time_range, state, category, status]
     owner: 数据组-履约线
-    version: v1
+    version: v2
 
   - key: aov
     name: 客单价
@@ -104,6 +107,7 @@ metrics:
     from_clause: "FROM orders o"
     join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
     where_core: "o.order_status != 'canceled'"
+    weight_metric: paid_order_count
     support_dims: [dt, state]
     support_filters: [time_range, state]
     owner: 数据组-电商线
@@ -129,6 +133,18 @@ metrics:
     from_clause: "FROM orders o"
     join_clause: "LEFT JOIN order_items oi ON o.order_id=oi.order_id"
     where_core: "o.order_status != 'canceled'"
+    support_dims: [dt, state, category, status]
+    support_filters: [time_range, state, category, status]
+    owner: 数据组-电商线
+    version: v1
+
+  - key: total_order_count
+    name: 全部订单数
+    desc: 已创建的全部订单数（不按状态过滤）——取消率等比率指标的天然分母
+    metric_expr: "COUNT(DISTINCT o.order_id)"
+    from_clause: "FROM orders o"
+    join_clause: "LEFT JOIN order_items oi ON o.order_id=oi.order_id"
+    where_core: "1=1"
     support_dims: [dt, state, category, status]
     support_filters: [time_range, state, category, status]
     owner: 数据组-电商线
@@ -190,10 +206,11 @@ metrics:
     from_clause: "FROM orders o"
     join_clause: "JOIN order_items oi ON o.order_id=oi.order_id"
     where_core: "o.order_status != 'canceled'"
+    weight_metric: paid_order_count
     support_dims: [dt, state, category]
     support_filters: [time_range, state, category]
     owner: 数据组-电商线
-    version: v1
+    version: v2
 
   # ===== 商品 / 卖家类 =====
   - key: product_count
@@ -228,10 +245,11 @@ metrics:
     from_clause: "FROM orders o"
     join_clause: ""
     where_core: "1=1"
+    weight_metric: total_order_count
     support_dims: [dt, state, status]
     support_filters: [time_range, state, status]
     owner: 数据组-品质线
-    version: v1
+    version: v2
 
   - key: late_delivery_rate
     name: 超时送达率
@@ -270,53 +288,63 @@ metrics:
     version: v1
 
   # ===== 满意度类 =====
+  # ⚠️ 评价类指标的 JOIN 口径（2026-09 修复，附真值回归测试）：
+  #   reviews 与 orders 是 1:1，但 reviews × order_items 是 1:多。旧配置把
+  #   `LEFT JOIN order_items oi / products p` 写死在 join_clause 里 → 无条件 fan-out，
+  #   实测 review_count 114,100（真值 100,000）、avg_review 3.9998（真值 4.0709）、
+  #   好评率 0.7460（真值 0.7662）。而现在只保留与 orders 的 1:1 JOIN，
+  #   维度/过滤所需的 JOIN 由编译器按需注入（sqlgen.inject_dim_joins）。
+  #   仍会 fan-out 的聚合必须写成 DISTINCT 形式（见下方表达式），否则不声明 category 维度。
   - key: avg_review
     name: 平均评分
-    desc: 订单评价星级均值
+    desc: 订单维度平均评分（同一订单的多条评价先取订单均值，故品类维度下不会被条目数放大）
     metric_expr: "AVG(r.review_score)"
     from_clause: "FROM orders o"
-    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN customers c ON o.customer_id=c.customer_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    # 用**派生表**先在订单粒度把评价聚合掉：reviews × order_items 是 1:多，
+    # 直接把 reviews 表 JOIN 进来再按品类分组会把"多条目订单"的评价重复计入。
+    # 订单粒度预聚合后，同一评价值被重复多少次都不改变 AVG，因此 category 维度可认证。
+    join_clause: "JOIN (SELECT order_id, AVG(review_score) AS review_score FROM reviews GROUP BY order_id) r ON r.order_id=o.order_id"
+    where_core: "1=1"
+    support_dims: [dt, state, category]
+    support_filters: [time_range, state, category]
+    owner: 数据组-品质线
+    version: v4
+
+  - key: positive_review_rate
+    name: 好评率
+    desc: 4 星及以上的评价占比（按评价条数去重，品类维度下不重复计数）
+    metric_expr: "COUNT(DISTINCT CASE WHEN r.review_score >= 4 THEN r.review_id END) * 1.0 / NULLIF(COUNT(DISTINCT r.review_id), 0)"
+    from_clause: "FROM orders o"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id"
     where_core: "1=1"
     support_dims: [dt, state, category]
     support_filters: [time_range, state, category]
     owner: 数据组-品质线
     version: v2
 
-  - key: positive_review_rate
-    name: 好评率
-    desc: 4 星及以上的评价占比
-    metric_expr: "COUNT(CASE WHEN r.review_score >= 4 THEN 1 END) * 1.0 / NULLIF(COUNT(r.review_score), 0)"
-    from_clause: "FROM orders o"
-    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
-    where_core: "1=1"
-    support_dims: [dt, state, category]
-    support_filters: [time_range, state, category]
-    owner: 数据组-品质线
-    version: v1
-
   - key: negative_review_rate
     name: 差评率
-    desc: 2 星及以下的评价占比
-    metric_expr: "COUNT(CASE WHEN r.review_score <= 2 THEN 1 END) * 1.0 / NULLIF(COUNT(r.review_score), 0)"
+    desc: 2 星及以下的评价占比（按评价条数去重，品类维度下不重复计数）
+    metric_expr: "COUNT(DISTINCT CASE WHEN r.review_score <= 2 THEN r.review_id END) * 1.0 / NULLIF(COUNT(DISTINCT r.review_id), 0)"
     from_clause: "FROM orders o"
-    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id"
     where_core: "1=1"
     support_dims: [dt, state, category]
     support_filters: [time_range, state, category]
     owner: 数据组-品质线
-    version: v1
+    version: v2
 
   - key: review_count
     name: 评价数
-    desc: 收到的评价条数
-    metric_expr: "COUNT(r.review_id)"
+    desc: 收到的评价条数（DISTINCT，避免维度 JOIN 放大）
+    metric_expr: "COUNT(DISTINCT r.review_id)"
     from_clause: "FROM orders o"
-    join_clause: "JOIN reviews r ON o.order_id=r.order_id LEFT JOIN order_items oi ON o.order_id=oi.order_id LEFT JOIN products p ON oi.product_id=p.product_id"
+    join_clause: "JOIN reviews r ON o.order_id=r.order_id"
     where_core: "1=1"
     support_dims: [dt, state, category]
     support_filters: [time_range, state, category]
     owner: 数据组-品质线
-    version: v1
+    version: v2
 
 # ---------- 3) 维度配置（分组字段）----------
 # dt 维度可按时间粒度改写（day/week/month/quarter），见 compiler.TIME_GRAINS
@@ -366,6 +394,14 @@ permissions:
       allowed_tables: [orders, order_items, customers, products, reviews]
       allowed_columns:
         customers: [customer_id, customer_unique_id, customer_city, customer_state]
+    seller:             # 行级权限示例（RLS-lite）：商家只看自己的订单
+      allowed_tables: [orders, order_items, customers, products, reviews]
+      allowed_columns:
+        customers: [customer_id, customer_unique_id, customer_city, customer_state]
+      # 行级过滤谓词会注入编译后的 WHERE；谓词引用的表不在该指标取数范围时**编译期拒绝**
+      # （行级权限只能收紧、不能失效）。seller_id 取 Olist 真实数据中的头部商家。
+      row_filters:
+        - "oi.seller_id = '6560211a19b47992c3666cc44a7e94c0'"
     admin:              # 管理员：全放行
       allowed_tables: "*"
       allowed_columns: "*"

@@ -19,7 +19,7 @@ from sqlpa.business.metric_config import load_config
 from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
 
 CFG = load_config()
-DB = "data/olist_sample/sample.db"
+DB = "data/olist/olist.db"
 
 
 @pytest.fixture
@@ -118,14 +118,30 @@ def test_ratio_compiles_and_executes(sb):
 
 
 def test_ratio_merges_joins_across_metrics(sb):
-    """分子分母各自的 JOIN 会被合并，因此同主表、不同 JOIN 的指标也能相除。
+    """分子分母各自的 JOIN 会被合并（同主表、同行级口径下，来源表不同也能相除）。
 
-    （早前以为"来源不同就该拒绝"，实测两个指标都以 orders 为主表，合并 JOIN 后
-    是合法查询——拒绝反而会误伤合理用法。）
+    注意：这里必须构造**行级口径相同**的一对指标。旧用例用的是
+    ratio@avg_review/gmv —— 那对指标 where_core 不同（评价算全量订单、GMV 排除
+    canceled），相除会把 GMV 悄悄改成"含取消订单"，属于口径漂移；现在编译器
+    会拒绝它（见 test_ratio_rejects_mismatched_row_level_scope）。
     """
-    cq = compile_spec(CFG, QuerySpec(metric="ratio@avg_review/gmv"))
-    assert "reviews r" in cq.sql and "order_items oi" in cq.sql
+    from dataclasses import replace
+
+    cfg2 = load_config()
+    cfg2.metrics["r_any"] = replace(cfg2.metrics["avg_review"], key="r_any", where_core="1=1")
+    cfg2.metrics["i_any"] = replace(cfg2.metrics["item_count"], key="i_any", where_core="1=1")
+    cq = compile_spec(cfg2, QuerySpec(metric="ratio@r_any/i_any"))
+    # avg_review 现在是"订单粒度预聚合的派生表"，因此检查子查询里引用的 reviews
+    # 与合并进来的 order_items 都在同一条 SQL 里（等价于旧断言的两表齐备）。
+    assert "FROM reviews" in cq.sql and "order_items oi" in cq.sql
     assert sb.execute(cq.sql).ok
+
+
+def test_ratio_rejects_mismatched_row_level_scope():
+    """行级口径不同 → 明确拒绝，不允许"编译成功但分子分母被对方口径框住"。"""
+    with pytest.raises(CompileError) as e:
+        compile_spec(CFG, QuerySpec(metric="ratio@gmv/order_count"))
+    assert "行级口径" in str(e.value)
 
 
 def test_ratio_rejects_different_main_table():

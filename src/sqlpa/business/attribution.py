@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import re
 import sqlite3
+import statistics
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .metric_config import BusinessConfig
 from .sqlgen import metric_source
@@ -29,6 +31,27 @@ from .sqlgen import metric_source
 
 def _now() -> datetime.date:
     return datetime.date.today()
+
+
+def _default_previous_spec(current_spec: str) -> str:
+    """取「上一期」的默认写法。
+
+    关键：禁止把显式月份（如 "2018-06"）的上期默认成相对今天的 "上月" —— 那会解析成
+    当前真实月（如 2026），在真实数据窗口（Olist 2016-09~2018-10）内必然查不到上期，
+    归因会误报"当期或上期无结果"。对显式月份，上期应取**该月的前一个月**（字面量），
+    时间语义始终落在同一数据窗口内。
+    """
+    s = str(current_spec or "")
+    m = re.fullmatch(r"(\d{4})[年\-](\d{1,2})月?", s)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        prev = datetime.date(y, mo, 1) - datetime.timedelta(days=1)  # 退一个月
+        return f"{prev.year:04d}-{prev.month:02d}"
+    if "上月" in s or "上个月" in s:
+        return "上月"
+    if "本月" in s or "这个月" in s:
+        return "上月"
+    return "上一期"
 
 
 def _range_spec(spec: str) -> Tuple[str, str]:
@@ -65,10 +88,171 @@ def _scalar(db: sqlite3.Connection, sql: str) -> Optional[object]:
         return None
 
 
+def _calendar_note(cur: Tuple[str, str], prev: Tuple[str, str],
+                   change: float, change_pct: float) -> Optional[Dict]:
+    """当月天数差异提示（不静默改判，只把"这段波动的多少来自天数"摆出来）。
+
+    为什么必须有：单期环比在月度上天然受**月份长度**影响。README 曾引以为据的
+    "2018-03 vs 2018-02 GMV +17.1% 超阈值"就是 2 月 28 天 vs 3 月 31 天造成的假象。
+    这里给出按日均值归一后的波动与"天数可解释比例"，让使用者自己决定要不要告警，
+    而不是由代码偷偷改阈值口径（那样会引入新的口径不透明）。
+    """
+    try:
+        cs = datetime.date.fromisoformat(str(cur[0]).strip("'"))
+        ce = datetime.date.fromisoformat(str(cur[1]).strip("'"))
+        ps = datetime.date.fromisoformat(str(prev[0]).strip("'"))
+        pe = datetime.date.fromisoformat(str(prev[1]).strip("'"))
+    except Exception:  # noqa: BLE001
+        return None
+    cur_days = (ce - cs).days
+    prev_days = (pe - ps).days
+    if cur_days <= 0 or prev_days <= 0:
+        return None
+    # 日均口径下的波动（天数差异被消掉）
+    cur_total = 1.0 + change_pct
+    per_day_ratio = (cur_total / cur_days) / (1.0 / prev_days)
+    per_day_pct = per_day_ratio - 1.0
+    explained = 0.0
+    if abs(change_pct) > 1e-9:
+        explained = (change_pct - per_day_pct) / change_pct
+    out = {
+        "current_days": cur_days, "previous_days": prev_days,
+        "per_day_change_pct": round(per_day_pct, 4),
+        "explained_by_calendar": round(explained, 3),
+    }
+    if cur_days == prev_days:
+        return out
+    if explained >= 0.5:
+        out["note"] = (
+            f"当期 {cur_days} 天 vs 上期 {prev_days} 天：总波动 {change_pct * 100:+.1f}%，"
+            f"按日均只有 {per_day_pct * 100:+.1f}% —— 该波动的大部分可由月份天数差异解释，"
+            f"建议按日均或同比复核后再决定是否告警")
+    elif explained <= -0.5:
+        out["note"] = (
+            f"当期 {cur_days} 天 vs 上期 {prev_days} 天：总波动 {change_pct * 100:+.1f}%，"
+            f"但按日均是 {per_day_pct * 100:+.1f}% —— 天数差异**掩盖**了更大的日均波动，"
+            f"不要因为总波动看起来小而忽略")
+    return out
+
+
+def _segment_values(cfg, db_path: str, metric, dim: str, start: str, end: str) -> Dict:
+    """按某维度取"指标按分段的取值"（每个分段一条；供权重指标复用）。"""
+    frag = cfg.dimensions[dim].sql_fragment
+    sql = (f"SELECT {frag} AS d, {metric.metric_expr} AS v\n"
+           f"{metric_source(cfg, metric, [dim])}\n"
+           f"{_time_where(metric.where_core, start, end)}\nGROUP BY {frag}")
+    conn = sqlite3.connect(db_path)
+    try:
+        return {row[0]: row[1] for row in conn.execute(sql).fetchall()}
+    except Exception:  # noqa: BLE001
+        return {}
+    finally:
+        conn.close()
+
+
+def _ratio_decomposition(cfg, db_path: Optional[str], m, dims: List[str],
+                         cur: Tuple[str, str], prev: Tuple[str, str],
+                         prev_total, cur_total) -> Optional[Dict]:
+    """比率类指标的 **rate/mix 量价分解**（先验证再给结论）。
+
+    比率 R = Σ(w_i·r_i)/Σ(w_i)：变化可拆成
+      - rate effect：各分段自身比率的变化（权重取上期结构）
+      - mix  effect：分段结构（权重占比）的变化（比率取上期值）
+      - interaction：其余交叉项
+    为什么必须**自校验**：权重指标一旦与该比率的分母不一致（where 口径不同、粒度不同），
+    重建出的总值就对不上真实值；此时任何分解都是精致的错误，直接拒绝而不是给出去。
+    """
+    if not db_path or not getattr(m, "weight_metric", ""):
+        return None
+    wm = cfg.metrics.get(m.weight_metric)
+    if wm is None:
+        return None
+    out: Dict = {}
+    for dim in dims:
+        r0 = _segment_values(cfg, db_path, m, dim, *prev)
+        r1 = _segment_values(cfg, db_path, m, dim, *cur)
+        w0 = _segment_values(cfg, db_path, wm, dim, *prev)
+        w1 = _segment_values(cfg, db_path, wm, dim, *cur)
+        if not r0 or not r1 or not w0 or not w1:
+            out[dim] = {"valid": False, "reason": "分段数据不足，无法分解"}
+            continue
+        W0, W1 = sum(v or 0 for v in w0.values()), sum(v or 0 for v in w1.values())
+        if not W0 or not W1:
+            out[dim] = {"valid": False, "reason": "权重合计为 0，无法分解"}
+            continue
+        keys = set(r0) | set(r1) | set(w0) | set(w1)
+        rec0 = sum((w0.get(k) or 0) * (r0.get(k) or 0) for k in keys) / W0
+        rec1 = sum((w1.get(k) or 0) * (r1.get(k) or 0) for k in keys) / W1
+        tol = max(1e-6, abs(float(prev_total or 0)) * 1e-3, abs(float(cur_total or 0)) * 1e-3)
+        if abs(rec0 - float(prev_total or 0)) > tol or abs(rec1 - float(cur_total or 0)) > tol:
+            out[dim] = {"valid": False, "weight_metric": wm.key,
+                        "reason": f"权重指标「{wm.name}」与该比率的分母不一致"
+                                  f"（重建 {rec0:.4f}/{rec1:.4f} vs 实际 "
+                                  f"{prev_total}/{cur_total}），拒绝给出分解",
+                        "reconstructed": [round(rec0, 4), round(rec1, 4)]}
+            continue
+        rate = sum((w0.get(k) or 0) / W0 * ((r1.get(k) or 0) - (r0.get(k) or 0)) for k in keys)
+        mix = sum(((w1.get(k) or 0) / W1 - (w0.get(k) or 0) / W0) * (r0.get(k) or 0)
+                  for k in keys)
+        change = float(cur_total or 0) - float(prev_total or 0)
+        out[dim] = {"valid": True, "weight_metric": wm.key,
+                    "change": round(change, 4), "rate_effect": round(rate, 4),
+                    "mix_effect": round(mix, 4),
+                    "interaction": round(change - rate - mix, 4),
+                    "denominator": [round(W0, 4), round(W1, 4)]}
+    return out or None
+
+
 def _time_where(metric_core: str, start: str, end: str) -> str:
     parts = [metric_core] if metric_core not in ("", "1=1") else []
     parts.append(f"o.order_purchase_timestamp >= {start} AND o.order_purchase_timestamp < {end}")
     return "WHERE " + " AND ".join(parts)
+
+
+# ---------------------------------------------------------------- 显著性
+
+def daily_series(cfg, db_path: str, m, start: str, end: str,
+                 dims: Sequence[str] = ()) -> List[float]:
+    """取指标的**日粒度序列**（只对可加指标有意义：日值之和 ≈ 期间总值）。"""
+    sql = (f"SELECT DATE(o.order_purchase_timestamp) AS d, {m.metric_expr} AS v\n"
+           f"{metric_source(cfg, m, list(dims))}\n"
+           f"{_time_where(m.where_core, start, end)}\n"
+           f"GROUP BY DATE(o.order_purchase_timestamp)")
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(sql).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    finally:
+        conn.close()
+    return [float(v) for _d, v in rows if v is not None]
+
+
+def significance_test(current: Sequence[float], previous: Sequence[float],
+                      alpha: float = 0.05) -> Dict:
+    """日粒度均值差异的 **Welch z 检验**（近似，零依赖、零 token）。
+
+    为什么需要一个统计护栏：单期环比只看 |change_pct| >= 阈值，而日间波动本身很大时，
+    几个百分点的差异完全可能是噪声（尤其是"月度 31 天 vs 28 天"这种口径差）。
+    这里用日序列的均值与方差做 Welch 检验（不假设等方差），p < alpha 才算"真实波动"。
+
+    局限（必须一起说）：假设日之间独立、且分布近似正态；对强趋势/强周期数据是**保守估计的近似**，
+    因此它只用来**抑制告警**（no false alarm），不用来"证明"波动存在。
+    """
+    if len(current) < 3 or len(previous) < 3:
+        return {"tested": False, "reason": "有效天数不足（<3）"}
+    m1, m0 = statistics.fmean(current), statistics.fmean(previous)
+    v1, v0 = statistics.variance(current), statistics.variance(previous)
+    se = math.sqrt(v1 / len(current) + v0 / len(previous))
+    if se <= 0:
+        return {"tested": False, "reason": "日序列无方差（数据退化）"}
+    z = (m1 - m0) / se
+    p = 2 * (1 - 0.5 * (1 + math.erf(abs(z) / math.sqrt(2))))
+    return {"tested": True, "alpha": alpha, "z": round(z, 3), "p_value": round(p, 4),
+            "is_significant": bool(p < alpha),
+            "days": {"current": len(current), "previous": len(previous)},
+            "daily_mean": {"current": round(m1, 4), "previous": round(m0, 4)},
+            "note": "Welch z 检验（日粒度均值差异）；近似检验，仅用于抑制告警噪声"}
 
 
 def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
@@ -84,7 +268,7 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         return {"ok": False, "reason": "指标或数据库不可用"}
 
     dims = [d for d in (dims or ["dt"]) if d in cfg.dimensions]
-    prev_spec = previous_spec or ("上月" if "月" in str(current_spec) else "上一期")
+    prev_spec = previous_spec or _default_previous_spec(current_spec)
     c0, c1 = _range_spec(current_spec)
     p0, p1 = _range_spec(prev_spec)
 
@@ -105,6 +289,9 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         "current_spec": current_spec, "previous_spec": prev_spec,
         "dims": [], "top_contributors": [],
     }
+    cal = _calendar_note((c0, c1), (p0, p1), change, change_pct)
+    if cal:
+        result["calendar"] = cal
     if not is_abnormal or not dims:
         return result
 
@@ -160,6 +347,46 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                  "pct_of_change": round(top_delta / change, 4) if change else 0.0,
                  "desc": f"{cfg.dimensions[d].name}「{top_key}」变化{top_delta:+.2f}"})
     result["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
+
+    # ---- 守恒自检：分段之和对不上总变化就**该维度**不许说"占波动 X%" ----
+    # 比率/均值类指标天然对不上（数学不成立）；可加指标也可能是某个维度没覆盖全部行
+    # （NULL 分段、新出现的分段、一对多重复计数）。两种情况下把占比写进结论/报告/告警都是错的，
+    # 因此按**维度**降级：坏维度只影响它自己，好维度（如按州）照常给占比。
+    checks = {}
+    for row in result["dims"]:
+        chk = _additivity_check(change, row["delta"])
+        row.update({"delta_sum": chk["delta_sum"], "uncovered": chk["uncovered"],
+                    "additive": chk["additive"]})
+        checks[row["dim"]] = chk
+    for c in result["top_contributors"]:
+        chk = checks.get(c.get("dim"), {"additive": True})
+        if chk["additive"]:
+            c["pct_reliable"] = True
+            continue
+        c["pct_of_change"] = None
+        c["pct_reliable"] = False
+        c["pct_note"] = "该维度分段之和不等于总变化，占比不适用"
+    unreliable = [d for d, chk in checks.items() if not chk["additive"]]
+    result["contribution_reliable"] = not unreliable
+    result["additivity_checks"] = checks
+
+    # 比率/均值类指标：分段 delta 不成占比，但可以给**量价/结构分解**（先重建校验再给结论）
+    dec = _ratio_decomposition(cfg, db_path, m, dims, (c0, c1), (p0, p1),
+                               prev_total, cur_total) if unreliable else None
+    if dec:
+        result["ratio_decomposition"] = dec
+
+    if unreliable:
+        dim_names = "、".join(cfg.dimensions[d].name if d in cfg.dimensions else d
+                            for d in unreliable)
+        has_dec = any(v.get("valid") for v in (dec or {}).values())
+        tail = ("；已改用量价/结构分解（见 ratio_decomposition）" if has_dec
+                else "；该维度未声明可用的权重指标，故只给分段对照")
+        result["contribution_note"] = (
+            f"「{m.name}」是比率/均值类指标，按「{dim_names}」的分段变化之和天然不等于总变化，"
+            f"故该维度的贡献只作分段对照、不给出「占波动」" + tail if not is_additive(m) else
+            f"维度「{dim_names}」未覆盖全部行（或存在一对多重复计数），分段之和不等于总变化，"
+            f"该维度的贡献占比降级为参照")
     # 显式暴露"维度拆解不可用"的原因：并行拆解需要按库文件路径独立开只读连接
     # （sqlite3 连接不能跨线程复用）。内存库（:memory:）没有文件路径，拆解会静默为空——
     # 这种静默失败最容易被误读成"该维度没波动"，因此在这里标注出来。
@@ -167,6 +394,17 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         result["dims_skipped_reason"] = (
             "维度拆解需要文件型数据库（并行查询按文件路径开新连接）；"
             "当前连接无文件路径（如 :memory:），故 dims 为空")
+
+    # ---- 统计护栏（放在最后：此处 db_path 与时间窗都已就绪）----
+    # 只在"可加指标 + 判定异常"时计算，且只用于**抑制**噪声告警，不用来"证明"波动存在。
+    if is_abnormal and is_additive(m) and db_path:
+        try:
+            sig = significance_test(daily_series(cfg, db_path, m, c0, c1),
+                                    daily_series(cfg, db_path, m, p0, p1))
+            if sig.get("tested"):
+                result["significance"] = sig
+        except Exception:  # noqa: BLE001
+            pass
     return result
 
 
@@ -175,6 +413,40 @@ def _deterministic_summary(base: str, top_lines: List[str]) -> str:
     if not top_lines:
         return base + "本次波动未达维度拆分要求，暂无显著主因。"
     return base + "主要来自：\n" + "\n".join(top_lines)
+
+
+# ---------------------------------------------------------------- 可加性
+
+def is_additive(metric) -> bool:
+    """该指标在维度上是否**可加**（分段变化之和 == 总变化）。
+
+    为什么必须区分：维度贡献 = 「各分段当期值 − 上期值」，这对 SUM 类成立；
+    对比率/均值类**在数学上不成立**。反例（AOV 按州）：
+        上期 SP 2 单×50=100、RJ 1 单×50=50 → AOV 50
+        当期 SP 3 单×50=110、RJ 1 单×40=40 → AOV 37.5
+    分段 delta = +10 / −10（合计 0），而真实变化是 −12.5 —— 报"主因 SP 占波动 −80%"
+    是纯粹的错。所以比率/均值类指标不做"占比"表述，只做分段对照。
+
+    判定顺序：配置显式声明 additive → 否则按表达式启发式（含 "/" 或 AVG( 视为不可加）。
+    注意这只是**先验**，且刻意不把 COUNT(DISTINCT ...) 一律判为不可加——按"州"这类**划分型维度**
+    时它是可加的，是否真的可加由数据侧的守恒自检（_additivity_check）决定。
+    """
+    explicit = getattr(metric, "additive", None)
+    if explicit is not None:
+        return bool(explicit)
+    expr = (getattr(metric, "metric_expr", "") or "").upper()
+    if "/" in expr or "AVG(" in expr:
+        return False
+    return True
+
+
+def _additivity_check(change: float, delta: Dict) -> Dict:
+    """数据侧守恒自检：分段变化之和是否等于总变化（确定性、零 token）。"""
+    s = sum(float(v) for v in delta.values())
+    uncovered = change - s
+    tol = max(1e-6, abs(change) * 1e-6)
+    return {"delta_sum": round(s, 4), "uncovered": round(uncovered, 4),
+            "additive": abs(uncovered) <= tol}
 
 
 # ---------------------------------------------------------------- 多轮下钻
@@ -234,7 +506,7 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         return _q
 
     c0, c1 = _range_spec(current_spec)
-    prev_spec = previous_spec or ("上月" if "月" in str(current_spec) else "上一期")
+    prev_spec = previous_spec or _default_previous_spec(current_spec)
     p0, p1 = _range_spec(prev_spec)
 
     out = {
@@ -474,7 +746,7 @@ def factorize(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         return _scalar(db, sql)
 
     c0, c1 = _range_spec(current_spec)
-    prev_spec = previous_spec or ("上月" if "月" in str(current_spec) else "上一期")
+    prev_spec = previous_spec or _default_previous_spec(current_spec)
     p0, p1 = _range_spec(prev_spec)
 
     cur_gmv = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, [])}\n"

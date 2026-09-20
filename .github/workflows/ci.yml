@@ -33,5 +33,30 @@ jobs:
         # 这一步保证"覆盖率"不会因为改配置或改匹配规则而悄悄退化。
         run: python evaluation/eval_product.py --report-dir /tmp/eval_reports
 
-      - name: Smoke-check Streamlit app import
-        run: python -c "import ast; ast.parse(open('app.py', encoding='utf-8').read()); print('app.py syntax OK')"
+      - name: Compile-check entrypoints
+        # 入口脚本语法自检（此前的 Streamlit app.py 冒烟步骤在 app.py 下线后一直让 CI 失败，
+        # 已替换为对**现存**入口的检查）。
+        run: |
+          python -m compileall -q api.py run_business.py demo_governance.py evaluation tools
+          python -c "import ast; ast.parse(open('api.py', encoding='utf-8').read()); print('api.py OK')"
+
+  web:
+    # 前端此前**完全不在版本控制与 CI 里**（web/ 未入库、无构建校验）。
+    # 注意：需要先把 web/ 源码提交进仓库（node_modules / dist 已被 .gitignore 排除）。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: web
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build

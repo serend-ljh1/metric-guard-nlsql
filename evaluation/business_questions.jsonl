@@ -41,7 +41,7 @@
 {"q": "各州的履约天数", "expect": "semantic", "metric": "avg_delivery_days", "dims": ["state"]}
 {"q": "平均评分", "expect": "semantic", "metric": "avg_review", "dims": []}
 {"q": "各州的平均评分", "expect": "semantic", "metric": "avg_review", "dims": ["state"]}
-{"q": "各品类的评分", "expect": "semantic", "metric": "avg_review", "dims": ["category"]}
+{"q": "各品类的评分", "expect": "semantic", "metric": "avg_review", "dims": ["category"], "note": "口径修正（2026-09）：avg_review 改为订单粒度预聚合（派生表），品类维度不再被条目数加权；此前该组合会返回被 fan-out 加权的错误均值"}
 {"q": "好评率", "expect": "semantic", "metric": "positive_review_rate", "dims": []}
 {"q": "差评率", "expect": "semantic", "metric": "negative_review_rate", "dims": []}
 {"q": "评价数", "expect": "semantic", "metric": "review_count", "dims": []}

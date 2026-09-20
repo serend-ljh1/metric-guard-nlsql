@@ -62,17 +62,6 @@ def _infer_drill_path(question: str, history: List[Dict], extra: Dict) -> List[D
     return []
 
 
-def _engine_run(question: str, db_id: str, schema: Dict, sb, llm, **kw):
-    """多 Agent 引擎调度：优先 LangGraph StateGraph（生产版编排），
-    未安装 langgraph 时回退 pipeline（确定性等价编排器）。"""
-    try:
-        from sqlpa.graph.langgraph_graph import run_graph
-        return run_graph(sb, schema, llm, question, db_id, **kw)
-    except ImportError:
-        from sqlpa.graph.pipeline import run_question
-        return run_question(question, db_id, schema, sb, llm, **kw)
-
-
 def _supervise(res, llm, question: str, drill_decision: Optional[Dict] = None) -> Dict:
     """**Supervisor 路由决策**（多 Agent 编排的"最后一块空位"）。
 
@@ -88,12 +77,10 @@ def _supervise(res, llm, question: str, drill_decision: Optional[Dict] = None) -
     不额外调 LLM、不改变既有分级放行行为，仅新增"路由+理由"这一可观测层。
     """
     if not res.matched:
-        if llm is None:
-            return {"decision": "reject",
-                    "reason": "未命中业务口径配置且当前无 LLM 可做兜底自由查询 → 拒绝生成未经认证的结果。"}
-        return {"decision": "escalate",
+        return {"decision": "reject",
                 "reason": "未命中业务口径配置（" + "; ".join(res.reject_reasons) +
-                          "）→ 升级到多 Agent 引擎兜底自由生成，结果标注为未经口径认证。"}
+                          "）→ 明确拒绝：本系统为可信归因诊断，仅支持口径内指标，"
+                          "不生成未经口径认证的查询结果。可尝试口径内指标或调整维度/时间。"}
     # matched：语义层优先；若归因 Agent 有后续动作，则路由进一步标注为 drill 路径。
     if drill_decision and drill_decision.get("action") not in ("", "none"):
         act = drill_decision.get("action")
@@ -110,10 +97,15 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
            hitl_path: Optional[str] = None) -> Dict:
     from sqlpa.business.followup import rewrite
     from sqlpa.business.metric_guard import build_constraint, formula_of, verify_formula
-    from sqlpa.business.permissions import check_access, mask_result
+    from sqlpa.business.permissions import check_access, mask_result, row_filter_clauses
     from sqlpa.business.assembler import assemble
+    from sqlpa.analysis.orchestrator import _llm_usage_snapshot
+    import time as _time
     import uuid as _uuid
     query_id = _uuid.uuid4().hex[:12]
+    # 可观测性基线：进入时先取 LLM 累计用量与起始时刻
+    _t0 = _time.perf_counter()
+    usage_before = _llm_usage_snapshot(llm)
 
     # ---- 多轮追问：把省略式追问改写成语义完整的独立问题 ----
     rewritten, used_ctx = rewrite(question, history or [], llm)
@@ -124,56 +116,17 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     # Supervisor 路由决策：语义层优先，仅在真实缺口上升级/拒绝；reason 供 UI 展示"为什么走这条路"。
     sup = _supervise(res, llm, question)
 
-    # ================= 口径外 → 自由查询（分级放行，结果降级标注） =================
+    # ================= 口径外 → 明确拒绝（不再自由生成 SQL） =================
+    # 产品定位：可信归因诊断系统只生成口径内经认证的结果。
+    # 未命中指标时不再升级到取数 SQL 引擎自由生成（已移除），统一拒绝并引导。
     if not res.matched:
-        if llm is None:
-            reason = "; ".join(res.reject_reasons) + "（离线模式无 LLM，不支持自由查询）"
-            append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
-                                     matched_metric="", is_success=False,
-                                     reject_reason=reason, mode="free", certified=False,
-                                     supervisor=sup["decision"]))
-            return {"query_id": query_id, "ok": False, "matched": False, "certified": False, "mode": "free",
-                    "reject": reason, "rewritten_question": q, "used_context": used_ctx,
-                    "supervisor": sup}
-
-        schema = _extract_schema(sb, db_path)
-        db_id = schema.get("db_id", "business")
-        er = _engine_run(q, db_id, schema, sb, llm, gold_sql=None,
-                         dialect_hint=_dialect_hint(sb))
-        final_sql = er.final_sql
-        ok = bool(er.final_valid and er.exec_result.get("ok"))
-        cols = er.exec_result.get("columns", [])
-        rows = er.exec_result.get("rows", []) if ok else []
-
-        # 护栏：自由查询同样必须过表列权限（传 schema 以解析非限定列名）
-        unauth = check_access(role, cfg.permissions, final_sql, schema=schema)
-        if unauth:
-            reason = "权限: " + "; ".join(unauth)
-            append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
-                                     matched_metric="", generated_sql=final_sql,
-                                     is_success=False, reject_reason=reason, mode="free", certified=False,
-                                     supervisor=sup["decision"]))
-            enqueue(q, "", final_sql, reason, role=role)
-            return {"query_id": query_id, "ok": False, "matched": False, "certified": False, "mode": "free",
-                    "reject": reason, "sql": final_sql,
-                    "rewritten_question": q, "used_context": used_ctx,
-                    "supervisor": sup}
-
-        if ok:
-            # 按列来源掩码（覆盖 AS 别名绕过）
-            rows = mask_result(cols, rows, cfg.permissions.get("sensitive_columns", {}),
-                               sql=final_sql, perms=cfg.permissions, schema=schema)
+        reason = "; ".join(res.reject_reasons) + "（系统仅支持口径内指标的自助归因诊断）"
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
-                                 matched_metric="", generated_sql=final_sql,
-                                 is_success=ok, result_rows=len(rows), mode="free", certified=False,
+                                 matched_metric="", is_success=False,
+                                 reject_reason=reason, mode="metric", certified=False,
                                  supervisor=sup["decision"]))
-        return {"query_id": query_id, "ok": ok, "matched": False, "certified": False, "mode": "free",
-                "path": "fallback",       # 口径外 → 多 Agent 兜底（供降级率埋点）
-                "reject": "" if ok else (er.exec_result.get("error") or "引擎未能生成有效查询"),
-                "source": "引擎多Agent自由生成(未经口径认证)",
-                "sql": final_sql, "columns": cols, "rows": rows,
-                "agent_trace": er.agent_trace,
-                "rewritten_question": q, "used_context": used_ctx,
+        return {"query_id": query_id, "ok": False, "matched": False, "certified": False, "mode": "metric",
+                "reject": reason, "rewritten_question": q, "used_context": used_ctx,
                 "supervisor": sup}
 
     # ================= 口径内 → 语义层确定性编译（**主路径**）=================
@@ -190,8 +143,10 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                           "detail": f"指标={res.metric_key} 维度={res.dims} "
                                     f"过滤={res.filters} 方法={res.method}",
                           "ms": 0}]
+    # 行级权限（RLS-lite）：把该角色的行过滤谓词注入编译，谓词无法生效时编译期即拒绝
+    row_filters = row_filter_clauses(role, cfg.permissions)
     try:
-        cq = compile_spec(cfg, spec)
+        cq = compile_spec(cfg, spec, row_filters=row_filters)
     except CompileError as e:
         # 规格不合法 → 明确拒绝（不给用户一个口径不明的数字）
         reason = f"语义层编译失败: {e}"
@@ -215,8 +170,8 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     agent_trace = trace
     compile_info = cq.to_dict()
 
-    # 护栏1: 公式校验
-    issues = verify_formula(final_sql, formula)
+    # 护栏1: 公式校验（结构绑定：口径列必须就是配置表达式）
+    issues = verify_formula(final_sql, formula, getattr(cq, "metric_key", ""))
     if issues:
         reason = "; ".join(issues)
         append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
@@ -224,7 +179,7 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                                  is_success=False, reject_reason=reason, mode="metric", certified=False,
                                  supervisor=sup["decision"]))
         enqueue(q, res.metric_key, final_sql, reason, role=role)   # HITL: 公式被改 -> 人工
-        return {"query_id": query_id, "ok": False, "matched": True, "certified": True, "mode": "metric",
+        return {"query_id": query_id, "ok": False, "matched": True, "certified": False, "mode": "metric",
                 "reject": reason, "metric": res.metric_key,
                 "sql": final_sql, "source": source,
                 "rewritten_question": q, "used_context": used_ctx,
@@ -238,7 +193,7 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                                  is_success=False, reject_reason=reason, mode="metric", certified=False,
                                  supervisor=sup["decision"]))
         enqueue(q, res.metric_key, final_sql, reason, role=role)   # HITL: 越权 -> 人工
-        return {"query_id": query_id, "ok": False, "matched": True, "certified": True, "mode": "metric",
+        return {"query_id": query_id, "ok": False, "matched": True, "certified": False, "mode": "metric",
                 "reject": reason, "metric": res.metric_key,
                 "sql": final_sql, "source": source,
                 "rewritten_question": q, "used_context": used_ctx,
@@ -312,10 +267,17 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     # 归因决策已得出 → 由 Supervisor 并入"drill"路径（direct 升级为 drill），
     # 让 UI 能展示"走了语义层 + 又自动下钻/分解"。
     sup = _supervise(res, llm, question, extra.get("drill_decision"))
+    # 可观测性：逐请求计量 LLM 调用/Token/成本/时延（此前 /api/query 完全不计量）
+    from sqlpa.analysis.orchestrator import _llm_usage_snapshot, _observability
+    obs = _observability(usage_before, _llm_usage_snapshot(llm), _t0)
     append_audit(AuditRecord(query_id=query_id, username=username, user_role=role, user_input=question,
                              matched_metric=res.metric_key, generated_sql=final_sql,
                              is_success=ok, result_rows=len(rows), mode="metric", certified=ok,
-                             supervisor=sup["decision"]))
+                             supervisor=sup["decision"],
+                             llm_calls=obs.get("llm_calls", 0),
+                             total_tokens=obs.get("total_tokens", 0),
+                             cost=obs.get("cost", 0.0),
+                             latency_ms=obs.get("latency_ms", 0.0)))
     # metric_name 取编译产物：派生指标（ratio@/share@）不在 cfg.metrics 里，
     # 修复前这里用 cfg.metrics[res.metric_key].name，派生指标会直接 KeyError。
     return {"query_id": query_id, "ok": ok, "matched": True, "certified": True, "mode": "metric",
@@ -329,4 +291,6 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
              "agent_trace": agent_trace,
              "supervisor": sup,            # 路由决策+理由，UI 展示"为什么走这条路"
              "rewritten_question": q, "used_context": used_ctx,
+             "observability": obs,
+             "applied_row_filters": row_filters,   # 行级权限确实生效了哪些谓词（可复核）
              **extra}

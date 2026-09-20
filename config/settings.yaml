@@ -2,23 +2,22 @@
 # 打分级/阈值/护栏等业务参数都在此，改规则无需改代码。
 #
 # 诚实说明：本文件**只保留被代码真实读取的键**。
-# 曾经的 route_llm_fallback / parallel_candidates / memory.long_term_enabled_*
-# 从未被任何代码读取（属"文档说可配置、实际是死配置"），已删除。
+# 已删除的死键（曾经"文档说可配置、实际没人读"）：
+#   route_llm_fallback / parallel_candidates / memory.long_term_enabled_*（随兜底引擎下线）
+#   pipeline.max_repair_round（自愈链已随兜底引擎移除）
+#   eval.dataset / eval.benchmark_file（Spider 评测入口已移除）
+#   security.allow_multi_statement（实测无意义：SQLite 的 execute 与 pymysql 默认都不支持
+#     多语句，开着也执行不了；沙箱一律只允许单条查询，规则写死在 sql_executor）
 # 需要某能力时请先实现再接配置，不要先写配置假装支持。
 
 eval:
-  dataset: spider                     # spider | bird
-  db_root: data/spider
-  benchmark_file: null
   max_rows: 500                       # 沙箱单次结果集行数上限（ExecConfig.from_settings 读取）
 
 pipeline:
-  max_repair_round: 3                 # 自愈最大轮次护栏（run_question / run_eval 读取）
-  route_llm_fallback: true            # 隐式 JOIN 等边界情形用 LLM 二次判断兜底
-                                      # （只对判为 simple 的题调用一次，仅单向升级为 complex）
-                                      # 评测可用环境变量 SQLPA_ROUTE_LLM_FALLBACK=0 关闭以保证可复现
+  require_significance: true          # 告警需同时通过「阈值 + 显著性检验（Welch z，零 token）」
+                                      # 关闭则回到纯阈值判定（会产生日间波动噪声告警）
 
 security:
-  timeout_seconds: 5.0                # 查询超时（SQLite progress_handler 真实中断长查询）
-  allow_multi_statement: false        # 是否允许多语句（默认禁止）
+  timeout_seconds: 5.0                # 查询超时（SQLite progress_handler 真实中断长查询；
+                                      # MySQL/PG 分别落到 MAX_EXECUTION_TIME / statement_timeout）
   forbid_keywords: []                 # 额外禁用关键字（转大写后并入沙箱拦截名单）

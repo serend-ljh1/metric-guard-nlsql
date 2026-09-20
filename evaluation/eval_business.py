@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from sqlpa.eval.console import ensure_utf8_console  # noqa: E402
+from sqlpa.config import ensure_utf8_console  # noqa: E402
 
 # ---------------------------------------------------------------- 标注集
 # 每条：(问题, 期望)
@@ -67,9 +67,9 @@ CASES = [
     {"q": "每个客服的响应时长是多少", "expect": "reject", "note": "配置里没有这类指标"},
     {"q": "今天天气怎么样", "expect": "reject", "note": "完全无关问题"},
 
-    # ---- 时间过滤 ----
-    {"q": "最近30天的GMV", "expect": "in", "metric": "gmv", "dims": [], "filters": ["time_range"],
-     "note": "时间范围过滤"},
+    # ---- 时间过滤（真实 Olist 窗口 2016-09~2018-10，须用窗口内月份）----
+    {"q": "2018-08的GMV", "expect": "in", "metric": "gmv", "dims": [], "filters": ["time_range"],
+     "note": "时间范围过滤（显式月份字面量）"},
 ]
 
 
@@ -81,8 +81,8 @@ def _build_sandbox(db: str):
 def main() -> int:
     ensure_utf8_console()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=str(ROOT / "data" / "olist_sample" / "sample.db"),
-                    help="业务库（默认用同结构小样本，离线确定性）")
+    ap.add_argument("--db", default=str(ROOT / "data" / "olist" / "olist.db"),
+                    help="业务库（默认真实 Olist data/olist/olist.db）")
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
     args = ap.parse_args()
 
@@ -95,8 +95,12 @@ def main() -> int:
     cfg = load_config()
     db = args.db
     if not Path(db).exists():
-        print(f"[!!] 业务库不存在：{db}（可先跑 tools/build_olist_sample.py）")
-        return 1
+        # 真实 Olist 库（data/olist）不进版本库，公开 CI 上必然缺失。
+        # 这里**大声跳过**而不是让流水线红：离线回归由 `pytest tests -q` 承担
+        # （那套用例自带同结构小库，无需外部数据）。
+        print(f"[SKIP] 缺少业务库 {db}：本评测需要真实 Olist 数据。")
+        print("       复现方式：python tools/build_olist_db.py --src data/olist --out data/olist/olist.db")
+        return 0
     sb = _build_sandbox(db)
 
     print("=" * 64)
@@ -159,23 +163,25 @@ def main() -> int:
               f"dims={row['dims']} rows={row['rows']} {ms:.0f}ms")
 
     # ---------------------------------------------------------------- 7) 公式防篡改
-    print("\n[7] 公式防篡改（verify_formula）")
+    print("\n[7] 公式防篡改（verify_formula，结构绑定）")
     gmv_expr = formula_of(cfg, "gmv")
-    # 第 4 条是本项目**已知的、真实的**局限：verify_formula 是"表达式子串包含"判定，
-    # 只要保留 SUM(oi.price) 这个子串、再在外面乘系数，校验就会放行。
-    # 这里如实测出来（预期"漏"，用来量化局限），而不是假装它 100% 拦住。
+    # 校验方式已从"表达式子串包含"升级为"结果列结构绑定"：口径列（AS <key>）必须与
+    # 配置表达式逐字等价。因此下面 5 条篡改（含此前拦不住的"改系数"与"诱饵列"）都应被拦。
     guard_cases = [
-        (f"SELECT {gmv_expr} FROM orders o JOIN order_items oi ON o.order_id=oi.order_id", False,
-         "原样使用配置公式 → 应通过"),
-        ("SELECT SUM(oi.price)*0.5 FROM orders o JOIN order_items oi ON o.order_id=oi.order_id", True,
-         "私自改系数（子串仍在，预期**拦不住**——已知局限）"),
-        ("SELECT COUNT(*) FROM orders", True, "换成完全不同的口径 → 应拦截"),
-        ("SELECT 1 FROM orders WHERE 1=0", True, "空壳 SQL（公式被删）→ 应拦截"),
+        (f"SELECT {gmv_expr} AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+         False, "原样使用配置公式 → 应通过"),
+        ("SELECT SUM(oi.price)*0.5 AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+         True, "私自改系数 → 应拦截"),
+        ("SELECT SUM(oi.price) AS decoy, SUM(oi.price)*0.001 AS gmv "
+         "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+         True, "诱饵列 + 口径列被改 → 应拦截"),
+        ("SELECT COUNT(*) AS gmv FROM orders", True, "换成完全不同的口径 → 应拦截"),
+        ("SELECT 1 AS gmv FROM orders WHERE 1=0", True, "空壳 SQL（公式被删）→ 应拦截"),
     ]
     n_guard = n_guard_ok = 0
     guard_details = []
     for sql, should_block, note in guard_cases:
-        issues = verify_formula(sql, gmv_expr)
+        issues = verify_formula(sql, gmv_expr, key="gmv")
         blocked = bool(issues)
         good = (blocked == should_block)
         n_guard += 1

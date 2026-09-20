@@ -97,6 +97,8 @@ class OpenAICompatLLM(LLMProvider):
         self.last_used_model = self.model_pool[0] if self.model_pool else self.model
 
     def _acc_usage(self, u: Optional[Dict]) -> None:
+        # 每次**成功**拿到内容算一次调用（含 token 与成本），供逐请求可观测性使用。
+        self.usage["calls"] = int(self.usage.get("calls", 0)) + 1
         if not u:
             return
         self.usage["prompt_tokens"] += int(u.get("prompt_tokens", 0))
@@ -106,14 +108,17 @@ class OpenAICompatLLM(LLMProvider):
                       + int(u.get("completion_tokens", 0)) / 1e6 * self.price_out)
 
     def stats(self) -> Dict:
-        return {"usage": dict(self.usage), "cost": round(self.cost, 4)}
+        # 成本保留 6 位：单次请求常在 1e-4 量级，round(…, 4) 会把小额成本抹成 0
+        return {"usage": dict(self.usage), "cost": round(self.cost, 6),
+                "last_model": self.last_model()}
 
     def last_model(self) -> str:
         """最近一次实际调用的模型名（用于发现模型池中途切换）。"""
         return str(getattr(self, "last_used_model", "") or "")
 
     def reset_stats(self) -> None:
-        self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self.usage = {"prompt_tokens": 0, "completion_tokens": 0,
+                      "total_tokens": 0, "calls": 0}
         self.cost = 0.0
 
     def _chat(self, messages: list, temperature: float | None = None) -> str:

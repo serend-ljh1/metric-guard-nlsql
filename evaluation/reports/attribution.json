@@ -1,0 +1,315 @@
+{
+  "suite": "attribution_hit_rate",
+  "desc": "注入式真因（Ground Truth by Construction）：归因(top-k)/下钻/因子分解 三维定位命中率",
+  "db": "D:\\ds harness\\metric-guard-nlsql\\data\\olist\\olist.db",
+  "inject_pct": 0.6,
+  "dimensions": [
+    "state",
+    "category"
+  ],
+  "periods": [
+    "2018-05",
+    "2018-06",
+    "2018-07"
+  ],
+  "attribution": {
+    "total_scenarios": 6,
+    "hits": 6,
+    "misses": 0,
+    "hit_rate": 1.0,
+    "topk_hit_rate": {
+      "1": 1.0,
+      "2": 1.0,
+      "3": 1.0,
+      "5": 1.0
+    },
+    "not_found_in_top": 0,
+    "wrong_direction": 0,
+    "details": [
+      {
+        "dim": "state",
+        "value": "SP",
+        "cur_spec": "2018-05",
+        "prev_spec": "2018-04",
+        "seg_gmv": 434116.39,
+        "current_spec": "2018-05",
+        "previous_spec": "2018-04",
+        "inject_pct": 0.6,
+        "is_abnormal": true,
+        "change_pct": -0.2629,
+        "attributed_delta": -222955.394,
+        "attributed_pct_of_change": 0.8536,
+        "hit": true,
+        "found_in_top": true,
+        "wrong_direction": false,
+        "rank": 1,
+        "top_contributor": [
+          "SP",
+          -222955.394,
+          0.8536
+        ]
+      },
+      {
+        "dim": "category",
+        "value": "relogios_presentes",
+        "cur_spec": "2018-05",
+        "prev_spec": "2018-04",
+        "seg_gmv": 123872.66,
+        "current_spec": "2018-05",
+        "previous_spec": "2018-04",
+        "inject_pct": 0.6,
+        "is_abnormal": true,
+        "change_pct": -0.0755,
+        "attributed_delta": -43109.506,
+        "attributed_pct_of_change": 0.5745,
+        "hit": true,
+        "found_in_top": true,
+        "wrong_direction": false,
+        "rank": 1,
+        "top_contributor": [
+          "relogios_presentes",
+          -43109.506,
+          0.5745
+        ]
+      },
+      {
+        "dim": "state",
+        "value": "SP",
+        "cur_spec": "2018-06",
+        "prev_spec": "2018-05",
+        "seg_gmv": 342590.48,
+        "current_spec": "2018-06",
+        "previous_spec": "2018-05",
+        "inject_pct": 0.6,
+        "is_abnormal": true,
+        "change_pct": -0.3376,
+        "attributed_delta": -297080.198,
+        "attributed_pct_of_change": 0.8864,
+        "hit": true,
+        "found_in_top": true,
+        "wrong_direction": false,
+        "rank": 1,
+        "top_contributor": [
+          "SP",
+          -297080.198,
+          0.8864
+        ]
+      },
+      {
+        "dim": "category",
+        "value": "beleza_saude",
+        "cur_spec": "2018-06",
+        "prev_spec": "2018-05",
+        "seg_gmv": 107795.99,
+        "current_spec": "2018-06",
+        "previous_spec": "2018-05",
+        "inject_pct": 0.6,
+        "is_abnormal": true,
+        "change_pct": -0.1957,
+        "attributed_delta": -52832.284,
+        "attributed_pct_of_change": 0.2719,
+        "hit": true,
+        "found_in_top": true,
+        "wrong_direction": false,
+        "rank": 1,
+        "top_contributor": [
+          "beleza_saude",
+          -52832.284,
+          0.2719
+        ]
+      },
+      {
+        "dim": "state",
+        "value": "SP",
+        "cur_spec": "2018-07",
+        "prev_spec": "2018-06",
+        "seg_gmv": 324517.71,
+        "current_spec": "2018-07",
+        "previous_spec": "2018-06",
+        "inject_pct": 0.6,
+        "is_abnormal": true,
+        "change_pct": -0.2084,
+        "attributed_delta": -212783.396,
+        "attributed_pct_of_change": 1.1826,
+        "hit": true,
+        "found_in_top": true,
+        "wrong_direction": false,
+        "rank": 1,
+        "top_contributor": [
+          "SP",
+          -212783.396,
+          1.1826
+        ]
+      },
+      {
+        "dim": "category",
+        "value": "beleza_saude",
+        "cur_spec": "2018-07",
+        "prev_spec": "2018-06",
+        "seg_gmv": 105517.68,
+        "current_spec": "2018-07",
+        "previous_spec": "2018-06",
+        "inject_pct": 0.6,
+        "is_abnormal": true,
+        "change_pct": -0.0562,
+        "attributed_delta": -65588.918,
+        "attributed_pct_of_change": 1.3515,
+        "hit": true,
+        "found_in_top": true,
+        "wrong_direction": false,
+        "rank": 1,
+        "top_contributor": [
+          "beleza_saude",
+          -65588.918,
+          1.3515
+        ]
+      }
+    ]
+  },
+  "drill": {
+    "total_scenarios": 3,
+    "hits": 3,
+    "hit_rate": 1.0,
+    "details": [
+      {
+        "state": "SP",
+        "category": "relogios_presentes",
+        "cur_spec": "2018-05",
+        "prev_spec": "2018-04",
+        "injected_category": "relogios_presentes",
+        "inject_pct": 0.6,
+        "path_desc": "state=SP",
+        "hit": true,
+        "wrong_direction": false,
+        "drill_category_delta": -12435.9,
+        "drill_category": [
+          {
+            "dim": "category",
+            "key": "relogios_presentes",
+            "delta": -12435.9,
+            "desc": "品类「relogios_presentes」变化-12435.90"
+          }
+        ]
+      },
+      {
+        "state": "SP",
+        "category": "beleza_saude",
+        "cur_spec": "2018-06",
+        "prev_spec": "2018-05",
+        "injected_category": "beleza_saude",
+        "inject_pct": 0.6,
+        "path_desc": "state=SP",
+        "hit": true,
+        "wrong_direction": false,
+        "drill_category_delta": -26144.592,
+        "drill_category": [
+          {
+            "dim": "category",
+            "key": "beleza_saude",
+            "delta": -26144.592,
+            "desc": "品类「beleza_saude」变化-26144.59"
+          }
+        ]
+      },
+      {
+        "state": "SP",
+        "category": "beleza_saude",
+        "cur_spec": "2018-07",
+        "prev_spec": "2018-06",
+        "injected_category": "beleza_saude",
+        "inject_pct": 0.6,
+        "path_desc": "state=SP",
+        "hit": true,
+        "wrong_direction": false,
+        "drill_category_delta": -27223.69,
+        "drill_category": [
+          {
+            "dim": "category",
+            "key": "beleza_saude",
+            "delta": -27223.69,
+            "desc": "品类「beleza_saude」变化-27223.69"
+          }
+        ]
+      }
+    ]
+  },
+  "factorize": {
+    "total_scenarios": 6,
+    "hits": 6,
+    "hit_rate": 1.0,
+    "details": [
+      {
+        "inject": "aov(客单价)",
+        "expected": "aov",
+        "ok": true,
+        "main_factor": "aov",
+        "hit": true,
+        "factor_shares": {
+          "order_count": 0.0118,
+          "aov": 0.9743
+        },
+        "cur_spec": "2018-05"
+      },
+      {
+        "inject": "order_count(单量)",
+        "expected": "order_count",
+        "ok": true,
+        "main_factor": "order_count",
+        "hit": true,
+        "factor_shares": {
+          "order_count": 0.9769,
+          "aov": -0.0067
+        },
+        "cur_spec": "2018-05"
+      },
+      {
+        "inject": "aov(客单价)",
+        "expected": "aov",
+        "ok": true,
+        "main_factor": "aov",
+        "hit": true,
+        "factor_shares": {
+          "order_count": 0.1459,
+          "aov": 0.9287
+        },
+        "cur_spec": "2018-06"
+      },
+      {
+        "inject": "order_count(单量)",
+        "expected": "order_count",
+        "ok": true,
+        "main_factor": "order_count",
+        "hit": true,
+        "factor_shares": {
+          "order_count": 0.9514,
+          "aov": 0.055
+        },
+        "cur_spec": "2018-06"
+      },
+      {
+        "inject": "aov(客单价)",
+        "expected": "aov",
+        "ok": true,
+        "main_factor": "aov",
+        "hit": true,
+        "factor_shares": {
+          "order_count": -0.0165,
+          "aov": 1.0021
+        },
+        "cur_spec": "2018-07"
+      },
+      {
+        "inject": "order_count(单量)",
+        "expected": "order_count",
+        "ok": true,
+        "main_factor": "order_count",
+        "hit": true,
+        "factor_shares": {
+          "order_count": 0.9822,
+          "aov": 0.0303
+        },
+        "cur_spec": "2018-07"
+      }
+    ]
+  }
+}

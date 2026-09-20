@@ -1,0 +1,368 @@
+{
+  "total": 32,
+  "correct": 26,
+  "decision_accuracy": 0.8125,
+  "llm_used": false,
+  "llm_calls": 0,
+  "cases": [
+    {
+      "name": "gmv-追问主因州下钻",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-主因州SP聚焦",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-85",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-客单价主因州",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-8",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-追问主导品类",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「alimentos」变化-120",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-下钻州内品类",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「health」变化-45",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-主因州",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-12",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-州贡献分散换维",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-30；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-处处都在跌",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「a」变化-32；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-客单价分散",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-4；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-各品类都下滑",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「x」变化-25；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-怀疑维度拆错",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-18；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-各州都掉",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-9；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-量价之辨",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-70；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-拆解单量客单",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「alimentos」变化-70；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-单量还是客单",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-70；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-量价孰因",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「x」变化-60；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-拆单量乘客单",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「MG」变化-55；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-单量客单贡献",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「b」变化-50；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-量价拆解归因",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-66；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-全国看板",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-近30天",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无显著维度贡献",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-分州对比",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-月度趋势",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-上月对比",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "category-品类排行",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-上月总额",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "判断-用户否定主因",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-用户叫停",
+      "action": "drill",
+      "expert": "none",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-阈值边界仍应下钻",
+      "action": "switch_dim",
+      "expert": "drill",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-用户转移话题",
+      "action": "drill",
+      "expert": "none",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-阈值边界仍应换维",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-要结论",
+      "action": "drill",
+      "expert": "none",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    }
+  ],
+  "rule_accuracy": 0.8125,
+  "llm_value": 0.0,
+  "judgment_cases": 6,
+  "judgment_accuracy": null,
+  "judgment_llm_calls": 0,
+  "expert_labeled_by": "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）",
+  "action_tally": {
+    "drill": 7,
+    "switch_dim": 8,
+    "factorize": 7,
+    "none": 10
+  },
+  "exec": {
+    "total": 4,
+    "passed": 4,
+    "exec_accuracy": 1.0,
+    "checks": [
+      {
+        "check": "factorize-分摊守恒",
+        "ok": true,
+        "detail": "contrib_sum=-70.000 change=-70.000"
+      },
+      {
+        "check": "factorize-份额合计≈1",
+        "ok": true,
+        "detail": "share_sum=0.9999"
+      },
+      {
+        "check": "factorize-主因方向合理",
+        "ok": true,
+        "detail": "main_factor=order_count"
+      },
+      {
+        "check": "drill-主因隔离收敛",
+        "ok": true,
+        "detail": "path=category=alimentos atti_delta=-200.0 drill_top=州「SP」变化-200.00 (-200.0)"
+      }
+    ]
+  }
+}

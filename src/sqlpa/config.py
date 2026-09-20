@@ -13,6 +13,7 @@ import yaml
 
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
 _CACHE: Dict[str, Any] = {}
+_initialized = False
 
 
 def load(path: str | Path | None = None) -> Dict[str, Any]:
@@ -38,3 +39,22 @@ def get(path: str, default: Any = None) -> Any:
 
 def reset() -> None:
     _CACHE.clear()
+
+
+def ensure_utf8_console() -> None:
+    """把 stdout/stderr 切到 UTF-8（失败则静默忽略，不影响主流程）。
+
+    只在需要打印非 ASCII 的入口调用一次即可；幂等。
+    Windows 默认 GBK，打印 "✓"/"¥" 等字符会抛 UnicodeEncodeError，导致
+    进程在结果已算出/写盘后却以非 0 退出（CI 会判为失败）。
+    """
+    global _initialized
+    if _initialized:
+        return
+    _initialized = True
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 —— 某些环境（如被重定向的管道）不支持
+            pass

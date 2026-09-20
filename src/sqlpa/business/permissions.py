@@ -109,24 +109,98 @@ def _unqualified_columns(sql: str, tables: List[str],
 
 
 def _select_items(sql: str) -> List[str]:
-    """粗略切出 SELECT 与 FROM 之间的选择列表项（按顶层逗号切分）。"""
-    cleaned = re.sub(r"'[^']*'", "''", sql)
-    m = re.search(r"\bselect\b(.*?)\bfrom\b", cleaned, re.I | re.S)
-    if not m:
-        return []
-    items, depth, cur = [], 0, []
-    for ch in m.group(1):
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            items.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-    items.append("".join(cur))
-    return [i.strip() for i in items if i.strip()]
+    """选择列表项（复用 metric_guard 的解析：顶层 FROM + 括号/字面量感知）。
+
+    为什么不各写一份：`select(.*?)from` 这种正则在派生指标（选择项里含子查询）上会在
+    内层 FROM 处截断，导致"口径列"解析错位——权限与掩码都建立在同一份解析上，
+    两处实现分叉就会出现"一边拦一边放"。
+    """
+    from .metric_guard import _select_items as _parse
+    return _parse(sql)
+
+
+def _has_wildcard_projection(sql: str) -> bool:
+    """选择列表里是否出现通配符投影（`*` / `t.*`）。
+
+    通配符是权限/掩码的**结构性盲点**：无法在解析层枚举"到底返回了哪些列"，
+    于是旧实现直接返回"没有敏感列"（fail-open），实测 `SELECT * FROM customers c`
+    会把 customer_zip_code_prefix / customer_phone 原样返回。安全控件在解析不出来
+    时必须**默认拒绝**，不能默认放行。
+    """
+    for item in _select_items(sql):
+        head = re.split(r"\s+as\s+", item, flags=re.I)[0].strip()
+        if head == "*" or head.endswith(".*") or re.fullmatch(r"\w+\s*\.\s*\*", head):
+            return True
+    return False
+
+
+def _derived_alias_tables(sql: str) -> Dict[str, List[str]]:
+    """派生表别名 -> 其子查询里实际引用的底层表。
+
+    为什么需要：`JOIN (SELECT ... FROM reviews GROUP BY order_id) r` 这种派生表，
+    别名前面是 `)`，`_alias_map` 抓不到 → 权限校验把 `r` 当成一张"未知表"直接拒绝
+    （实测 `AVG(r.review_score)` 会被判"无权访问表 r"）。派生别名必须能解析回底层表。
+    """
+    out: Dict[str, List[str]] = {}
+    for m in re.finditer(r"(?:FROM|JOIN)\s*\(", sql or "", re.I):
+        i = m.end() - 1
+        depth, start = 0, i
+        while i < len(sql):
+            if sql[i] == "(":
+                depth += 1
+            elif sql[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        body = sql[start + 1:i]
+        am = re.match(r"\s+(?:AS\s+)?([a-zA-Z_][\w]*)", sql[i + 1:], re.I)
+        if not am or am.group(1).lower() in _SQL_KEYWORDS:
+            continue
+        tables = [t.group(1).lower()
+                  for t in re.finditer(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][\w]*)", body, re.I)]
+        out[am.group(1).lower()] = list(dict.fromkeys(tables))
+    return out
+
+
+def row_filter_clauses(role: str, perms: Dict) -> List[str]:
+    """角色的**行级过滤**谓词（RLS-lite）。
+
+    配置形态：
+        permissions:
+          roles:
+            seller:
+              row_filters:
+                - "oi.seller_id = '6560211a19b47992c3666cc44a7e94c0'"
+
+    诚实边界：这是**应用层**的行级过滤（把谓词注入编译后的 WHERE），不是数据库原生 RLS。
+    优点是可见、可测、与口径一起进审计；缺点是绕过应用直连数据库就失效——
+    生产应同时用数据库视图/RLS 策略或独立只读账号兜底。
+    """
+    acfg = (perms.get("roles") or {}).get(role) or {}
+    raw = acfg.get("row_filters") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
+def missing_row_filter_aliases(sql: str, clauses: Sequence[str]) -> List[str]:
+    """找出**行过滤谓词引用了但 SQL 里不存在的别名**。
+
+    为什么必须拦：行级过滤只能收紧不能失效。若某个指标的口径里没有该表
+    （例如 cancellation_rate 不连 order_items），谓词就无法生效——此时**必须拒绝**，
+    而不是悄悄返回全量数据（那正是"越权看全表"的事故形态）。
+    """
+    present = set(_alias_map(sql)) | {t.lower() for t in _alias_map(sql).values()}
+    for t in re.findall(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][\w]*)", sql or "", re.I):
+        present.add(t.lower())
+    present |= _derived_alias_tables(sql).keys()
+    bad: List[str] = []
+    for clause in clauses:
+        for alias in re.findall(r"\b([a-zA-Z_][\w]*)\.([a-zA-Z_][\w]*)", clause):
+            if alias[0].lower() not in present:
+                bad.append(alias[0])
+    return sorted(set(bad))
 
 
 # ---------------------------------------------------------------- 权限校验
@@ -148,12 +222,28 @@ def check_access(role: str, perms: Dict, sql: str,
 
     amap = _alias_map(sql)
     refs = _qualified_refs(sql)
+    derived = _derived_alias_tables(sql)
     tables = _known_tables(amap, _schema_tables(schema))
     schema_cols = _schema_tables(schema)
     bad: List[str] = []
 
+    # 0) 通配符投影：列级白名单无法逐列核对 → 对受列限制的角色一律拒绝（fail-closed）
+    if allowed_cols != "*" and _has_wildcard_projection(sql):
+        bad.append(f"角色 {role} 不允许通配符投影（SELECT * 无法逐列核对权限，"
+                   f"请显式列出所需列）")
+
+    def _deny_columns(table: str, col: str) -> None:
+        cols = allowed_cols.get(table)
+        if cols is not None and col not in cols:
+            bad.append(f"角色 {role} 无权访问字段 {table}.{col}")
+
     # 1) 表级
     for alias, _col in refs:
+        if alias.lower() in derived:
+            for t in derived[alias.lower()]:
+                if allowed_tables != "*" and t not in (allowed_tables or []):
+                    bad.append(f"角色 {role} 无权访问表 {t}")
+            continue
         table = amap.get(alias.lower(), alias)
         if allowed_tables != "*" and table not in (allowed_tables or []):
             bad.append(f"角色 {role} 无权访问表 {table}")
@@ -161,21 +251,22 @@ def check_access(role: str, perms: Dict, sql: str,
     # 2) 限定列（原有行为）
     if allowed_cols != "*":
         for alias, col in refs:
+            if alias.lower() in derived:
+                # 派生别名：按底层表逐个核对（任一底层表禁止该列即拒绝）
+                for t in derived[alias.lower()]:
+                    _deny_columns(t, col)
+                continue
             table = amap.get(alias.lower(), alias)
             if allowed_tables != "*" and table not in (allowed_tables or []):
                 continue
-            cols = allowed_cols.get(table)
-            if cols is not None and col not in cols:
-                bad.append(f"角色 {role} 无权访问字段 {table}.{col}")
+            _deny_columns(table, col)
 
         # 3) 非限定列（新增：修复绕过缺口）
         if schema_cols:
             for table, col in _unqualified_columns(sql, tables, schema_cols):
                 if table is None:
                     continue  # 归属不明 → 不误拦，交由保守掩码兜底
-                cols = allowed_cols.get(table)
-                if cols is not None and col not in cols:
-                    bad.append(f"角色 {role} 无权访问字段 {table}.{col}")
+                _deny_columns(table, col)
 
     return list(dict.fromkeys(bad))
 
@@ -216,6 +307,19 @@ def sensitive_output_positions(sql: str, headers: Sequence[str], perms: Dict,
     if not items:
         # 解析不出选择列表 → 退化为按输出列名匹配
         return {i for i, h in enumerate(headers) if str(h).lower() in flat}
+
+    # 通配符投影：来源无法逐列解析 → 保守掩码"任何可能是敏感列的列"（fail-closed）。
+    # 旧实现在这里返回 {0}/提前 return，等于明文放行。
+    wildcard = any(re.split(r"\s+as\s+", it, flags=re.I)[0].strip() in ("*",) or
+                   re.split(r"\s+as\s+", it, flags=re.I)[0].strip().endswith(".*")
+                   for it in items)
+    if wildcard:
+        sensitive_names = {str(c).lower() for cols in sensitive.values() for c in (cols or [])}
+        pos = {i for i, h in enumerate(headers) if str(h).lower() in sensitive_names}
+        if not pos and sensitive_names:
+            # 连输出列名都对不上（例如 schema 缺失）→ 整列掩码，宁可多掩不可漏掩
+            pos = set(range(len(headers)))
+        return pos
 
     positions: Set[int] = set()
     for idx, item in enumerate(items):

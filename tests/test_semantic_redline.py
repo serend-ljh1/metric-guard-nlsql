@@ -21,12 +21,15 @@ from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
 CFG = load_config()
 
 # 覆盖：基础指标 / 多维度 / 时间粒度 / 派生指标 / 带过滤
+# 注意：这些 spec 必须都是**合法**的（编译期会强制支持度与 ratio 同源），
+# 否则这个"确定性"用例会退化成在测"抛不抛异常"。
 SPECS = [
     QuerySpec(metric="gmv", dims=["state"]),
     QuerySpec(metric="gmv", dims=["category", "state"]),
     QuerySpec(metric="order_count", dims=["dt"], time_grain="month"),
-    QuerySpec(metric="ratio@gmv/order_count", dims=["state"]),
-    QuerySpec(metric="aov", dims=["category"], filters=[("state", "SP")]),
+    QuerySpec(metric="ratio@freight_cost/gmv", dims=["state"]),
+    QuerySpec(metric="aov", dims=["state"], filters=[("state", "SP")]),
+    QuerySpec(metric="review_count", dims=["state"], filters=[("time_range", "2018-06")]),
 ]
 
 

@@ -1,0 +1,29 @@
+/* 全局样式：深色科技风 + 品牌紫主色，贴合「多 Agent 协作 + 炫可视化」的产品调性。 */
+:root {
+  --bg: #0b1020;
+  --bg-soft: #111832;
+  --surface: #161e3d;
+  --surface-muted: #0f1730;
+  --border: #262f52;
+  --text: #e6ecff;
+  --text-muted: #8b96c9;
+  --brand: #7c6bff;
+  --brand-2: #a48bff;
+  --accent: #22d3ee;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --mono: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(1200px 600px at 20% -10%, #1a2450 0%, var(--bg) 55%);
+  color: var(--text);
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+button { font-family: inherit; cursor: pointer; }

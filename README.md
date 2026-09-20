@@ -1,8 +1,13 @@
-# 可治理的自助分析产品（语义层优先 + 多 Agent 兜底）
+# 多 Agent 协作数据分析系统（语义层优先 · 归因下钻 · 决策闭环）
 
-> 面向**业务人员自助取数**的分析产品：**主路径是配置化的业务语义层**（口径由代码确定性编译、可追溯、零 token），
-> **长尾问题才降级**到多 Agent 生成 SQL；两侧都接治理面（口径冲突检测、异常归因与逐层下钻、HITL 闭环、交付物导出）。
-> 产品叙事上，"取数"只是入口，**归因逐层下钻（为什么跌 → 拆 → 再拆）才是主交互**——取数把数字/口径交到你手上，归因把它变成下一步该做什么。
+> 面向**业务人员**的**多智能体协作数据分析系统**：问一句「为什么」，系统像一支分析团队那样分工协作——
+> **归因往下钻到底，输出「诊断结论 + 依据 + 建议动作」，并由决策 Agent 决定该不该告警、推给谁、写进 HITL 工单**。
+>
+> 底座是**配置化的业务语义层**（口径由代码确定性编译、可追溯、零 token），覆盖不到的长尾问题才降级到多 Agent 兜底引擎；
+> 两侧接治理面（口径冲突检测、异常归因与逐层下钻、会话级 Agent 记忆、HITL 决策闭环、报告导出）。
+> 前端为 **Vue3 + ECharts**，全链路 **SSE 流式**把每个 Agent 的思考逐步推给用户，配炫的归因可视化（驱动瀑布/下钻树/因子占比）。
+>
+> **主交互**：取数只是入口，**归因逐层下钻（为什么跌 → 拆 → 再拆）+ 决策收口才是主戏**——「取数→归因→诊断→决策→HITL」构成一条完整分析链。
 
 **它解决的不是"教业务写 SQL"**，而是两件真实的事：
 
@@ -11,27 +16,84 @@
 
 分三层：
 
-- **语义层（主路径）**：23 个配置化指标 + 4 个维度（dt 支持日/周/月/季）+ 3 个派生指标（比率/占比）。
+- **语义层（主路径）**：24 个配置化指标 + 4 个维度（dt 支持日/周/月/季）+ 3 个派生指标（比率/占比）。
   命中即由 `compiler.py` **确定性编译** SQL——LLM 不在生成路径上，故可审计、零口径漂移、零 token。
-- **多 Agent 兜底（长尾）**：语义层覆盖不到的问题降级到 **LangGraph StateGraph** 引擎
-  （路由 → 写手 → 事后评审 → 只读沙箱 → 诊断自愈 → 校验），并明确标注"未经口径认证"。
+- **LangGraph 六 Agent 分析编排**：命中口径且圈定时间范围的问题，由 **StateGraph** 编排
+  RouterAgent→ExecutorAgent→AttributionAgent→ConclusionAgent→DecisionAgent（条件边分流 + 归因下钻/因子分解），
+  回答问题"为什么涨跌、要不要告警、推给谁"；口径未命中则明确拒绝并给出可操作原因（不做自由 SQL 生成）。
 - **治理与交付**：口径冲突检测、指标口径解释（负责人/版本）、异常归因 + **多轮下钻**、
   HITL 闭环（带负责人与 AI 归因草稿）、**报告/CSV 导出**、订阅告警。
 
 > **实现状态（诚实声明）**：语义层优先已落地（`path=semantic`）并在评测中量化覆盖率；
 > `langgraph` 为真实依赖（非回退路径）；Critic 已改为**事后评审**（先执行、再看结果），
-> 因实测"事前审写法"会同模型自评退化为风格改写、把对的改错；Chroma 长时记忆 / Checkpoint 未实现；
-> 公式防篡改是**子串校验**（可被"保留表达式再包装"绕过，且该指标已由 xfail 用例锁定）。
+> 因实测"事前审写法"会同模型自评退化为风格改写、把对的改错；Chroma 长时记忆 / Checkpoint 未实现。
+> 公式防篡改已从"子串包含"升级为**结果列结构绑定**（改系数/诱饵列/注释藏表达式均被拦截）。
 > 未实现项不在此虚构为已实现。
+
+> **本轮修复（2026-09，均带回归测试）** —— 详见 `docs/` 与 `tests/test_metric_correctness.py`、
+> `tests/test_attribution_additivity.py`、`tests/test_security_hardening.py`：
+> 1. **口径数字错了**：评价类指标的 `join_clause` 写死了 `LEFT JOIN order_items`，聚合却在 reviews 上 →
+>    无条件 fan-out（真实库实测 `review_count` 114,100 → 真值 99,173；`avg_review` 3.9998 → 4.0709）。
+>    现已只保留 1:1 JOIN、按需注入维度 JOIN，并加"编译值 vs 独立手写 SQL 真值"回归测试。
+> 2. **比值类指标不再输出"占波动 X%"**：分段 delta 之和对比率/均值天然不等于总变化（AOV 按州可差到 80%），
+>    归因层新增**守恒自检**，对不上就降级为分段对照并把原因写进依据。
+> 3. **过滤条件也注入 JOIN**：此前 `gmv` 加 `state` 过滤会生成 `WHERE c.customer_state=...` 却没连 customers 表。
+> 4. **编译期强制支持度**：`support_dims`/`support_filters` 不再只靠 matcher 把关（`aov+category` 曾被编出未认证结果）。
+> 5. **ratio 同源校验加上行级口径**：`where_core` 不同直接拒绝（`ratio@gmv/order_count` 曾把 GMV 悄悄改成"仅已送达"）。
+> 6. **指标中心不再毁指标**：`upsert_metric` 此前重建字段 dict 时丢掉 `join_clause`，保存一次 gmv 就永久不可用。
+> 7. **日历假象可见**：月度环比给出日均口径与"天数可解释比例"，2 月 vs 3 月这类假波动不再无人提醒。
+> 8. **安全加固**：`/api/audit`、`/api/datasources` 加鉴权与脱敏；审计表 append-only 且写失败不再静默；
+>    分析链补齐 `check_access` + 审计留痕；`SELECT *` 权限/掩码改为 fail-closed；外部连接器补只读事务与查询级超时；
+>    SSE 异常不再假超时；会话记忆按调用者隔离 + TTL/上限。
+> 9. **工程一致性**：CI 修绿（原 Streamlit 冒烟步骤引用的 `app.py` 已下线）；`settings.yaml` 清掉死键。
+>
+> **第二轮（同日，继续把"边界"变成"能力"）**：
+> 10. **审计单一权威 sink**：SQLite 是权威、JSONL 仅作镜像，`/api/audit` 只读 SQLite（消除双写分叉），并支持分页。
+> 11. **可观测性**：每次取数/分析都记录 `llm_calls / total_tokens / cost / latency_ms`，
+>     落入响应、审计表与 `/health`；同时修掉评测里"调用计数恒为 0"（读错字段 `calls`，实际只有 `usage`）。
+> 12. **编译器支持派生表 JOIN**：`JOIN (SELECT ...) r` 可被正确识别/去重/合并；`avg_review` 因此改用
+>     **订单粒度预聚合**，把 `category` 维度口径**修对后重新认证**（覆盖率仍 84.9%，但没有错的命中）。
+> 13. **比率类指标的 rate/mix 量价分解**：`weight_metric` 声明分母 → 价格效应/结构效应/交互项，
+>     并**先用权重指标重建总值做自校验**：重建对不上（如跨品类重复计数）就拒绝给分解。
+> 14. **统计门控 + 告警质量度量**：告警需同时过"阈值 + 显著性检验（Welch z，零 token）"；
+>     真实 Olist 上实测 **56 个阈值告警中 32 个（57%）属噪声被抑制**，决策分三态
+>     `alert / watch / normal`（"证据不足"不再伪装成"正常"）。新评测 `evaluation/eval_alert_quality.py`。
+> 15. **凭据加固**：口令改 **PBKDF2 随机盐 + 常量时间比较**（旧格式登录时透明升级）；
+>     不再预置 `admin/admin123`（改为环境变量引导）；数据源密钥不再硬编码（env 或本机生成文件，仅旧数据解密时回退）。
+> 16. **指标口径版本历史 / 血缘 / 回滚**：每次编辑记 before/after/actor（append-only），
+>     `rollback_metric` 可撤销某次变更（创建则撤销为删除）；`metric_lineage` 给出表/列级静态血缘；
+>     新增 `/api/metrics/history|lineage|rollback`（回滚需 admin）。
+> 17. **行级权限（RLS-lite）**：按角色注入行过滤谓词；谓词引用的表不在该指标取数范围时**编译期拒绝**
+>     （行级权限只能收紧、不能失效）；分析链与取数链同一套。
+> 18. **订阅告警闭环**：`console / file / webhook` 三种投递通道 + `tools/run_subscriptions.py` 调度入口
+>     （交给 cron）+ `/api/subscriptions` 增删查与立即检查；投递失败如实上报（cron 退出码非零）。
 
 ---
 
 ## 核心特性
 
 **一句话概括**：
-> 语义层优先的自助分析产品：**23 个配置化指标 + 派生指标**由编译器确定性生成 SQL（口径可追溯到负责人/版本），
-> 覆盖不到的长尾问题降级给 **LangGraph 多 Agent 引擎**兜底；在此之上提供**口径冲突检测、异常归因与多轮下钻、
-> 权限/掩码/审计、HITL 闭环、报告与 CSV 导出、订阅告警**。所有关键结论都有可复核的离线评测。
+> 语义层优先的**多 Agent 协作数据分析系统**：**24 个配置化指标 + 派生指标**由编译器确定性生成 SQL（口径可追溯到负责人/版本），
+> 带时间范围的波动问题交给 **LangGraph 六 Agent 分析编排**（路由→执行→归因下钻→结论→决策）；
+> 在此之上提供**口径冲突检测、异常归因与多轮下钻、会话级 Agent 记忆、权限/掩码/审计、HITL 决策闭环、
+> 报告与 CSV 导出、订阅告警**。所有关键结论都有可复核的离线评测（含**注入式真因的归因命中率评测**）。
+
+### 分析主角：六 Agent 协作编排（`src/sqlpa/analysis/orchestrator.py`）
+
+这是档3把产品"主角"升级的关键——不再只是"生成一个数字"，而是**答完"为什么"并决定"怎么办"**：
+
+| Agent | 职责 | 智能成色 |
+|---|---|---|
+| RouterAgent | 意图分流：取数 vs 波动归因 | LLM + 规则 |
+| MetricMatcher | 定位指标/维度/时间范围（口径来自配置） | LLM + 关键词兜底 |
+| ExecutorAgent | 编译 SQL → 只读沙箱取数（口径已认证） | 确定性 |
+| AttributionAgent | analyze → decide_drill → factorize/drill 归因算术 | 确定性算数 + LLM 决策下一步 |
+| ConclusionAgent | 把归因链翻成人话「诊断结论 + 依据 + 建议动作」 | LLM |
+| DecisionAgent | 是否告警 → 推负责人 → 写 HITL 工单（带 AI 归因草稿） | 确定性 |
+
+- **会话级 Agent 记忆**：每轮把主因建议写回一份工作记忆；下一轮「那 SP 呢？」这类省略式追问，靠记忆补全口径并沿上轮主因续钻（无需向量库，几个字段的 dict 足够）。
+- **SSE 流式**：`/api/analyze/stream` 把 6 个 Agent 的 start/step/done 一个事件一个事件推给前端，逐卡片渲染。
+- **归因可视化**：驱动瀑布 / 主因贡献条形 / 因子占比环形 / 下钻树，Vue3 + ECharts 呈现。
 
 - **语义层优先（架构反转）**：命中语义层 → LLM 不在 SQL 生成路径上；口径表达式来自配置，响应带
   `path=semantic`、负责人、版本、数据来源。长尾问题才走 `path=fallback`，并标注未认证。
@@ -67,7 +129,7 @@
   异常阈值可配、自动带负责人进 HITL。
 - **交付物**：带**口径说明**的 Markdown 报告 + CSV（Excel 可直接打开）+ 订阅告警（与归因共用阈值口径）。
 - **产品指标**：语义层命中率 / 口径外占比 / 认证率等，见"产品指标"一节（可复跑）。
-- **组件压力测试**：多 Agent 兜底组件用 Spider-dev 做 EX 评测（见"兜底组件评测"）。
+- **组件评测**：业务语义层命中/治理护栏、归因决策(真Agent)评测、产品指标，以及**归因命中率（注入式真因）**，见"离线评测"各节（均可复跑）。
 
 ---
 
@@ -75,14 +137,19 @@
 
 | 页面/能力 | 说明 |
 |---|---|
-| 🔐 登录认证 | 用户名+密码登录，角色绑定（admin/analyst），权限随角色生效 |
-| 💼 业务取数 | 对话式取数：口径内→配置公式硬约束（🛡️认证）；口径外→多Agent自由生成（🔓降级标注）；结果自动推荐图表；支持多轮追问；回答下方可 👍/👎 反馈、⭐ 收藏 |
-| 📜 查询历史 | 按用户查看历史查询记录（含 SQL、认证状态、结果行数） |
-| ⭐ 收藏夹 | 收藏常用查询，可快速回看 SQL |
-| ⚙️ 指标中心 | 指标/维度/业务别名的可视化增删改，带校验，保存即时生效 |
-| 🗄️ 数据源管理 | SQLite 内置 + MySQL/PostgreSQL 注册、连接测试；密码加密存储；沙箱语句级安全校验全方言一致 |
-| 🧪 引擎演示 | Spider 真实基准单题演示 + 实测消融结果展示 + 多Agent编排链路可视化 |
+| 🧪 分析演示（Vue3 + ECharts） | **当前唯一前端页面**：六 Agent 分析链可视化 + 归因/下钻/决策，SSE 流式（`web/`） |
+| 💼 业务取数（API） | `POST /api/query`：口径内→配置公式硬约束（🛡️认证）；口径外→明确拒绝并给出可操作原因 |
+| 🧭 多 Agent 分析（API） | `POST /api/analyze`、`/api/analyze/stream`、`/api/analyze/report`：六 Agent 编排 + SSE + 报告导出 |
+| 📈 指标口径治理（API） | `GET /api/metrics/history`（变更历史）、`GET /api/metrics/lineage`（表/列血缘）、`POST /api/metrics/rollback`（回滚，仅 admin） |
+| 🔔 订阅告警（API + CLI） | `GET/POST /api/subscriptions`、`DELETE /api/subscriptions/{id}`、`POST /api/subscriptions/check`；调度走 `tools/run_subscriptions.py`（cron）+ console/file/webhook 投递 |
+| ⚙️ 指标中心（库层） | `metric_store` 提供指标/维度/别名的增删改与校验；**尚无对应 API/页面**（接入前请勿在文档里当成已上线功能） |
+| 🗄️ 数据源管理（API 只读） | `GET /api/datasources` 列出已注册数据源（密码掩码）；**注册/编辑为脚本或配置操作** |
+| 📜 查询历史 / ⭐ 收藏 / 👍 反馈 | 数据表已在 `storage.py`（users/audit/feedback/favorites），**尚未暴露端点与页面** |
 | 🔌 REST API | FastAPI：`/api/query` `/api/metrics` `/api/audit` `/api/datasources` `/health`，Swagger 在 `/docs` |
+
+> ⚠️ **与历史版本的差异**：早期 README 曾列出「登录认证 / 查询历史 / 收藏夹 / 指标中心 / 数据源管理」等
+> Streamlit 页面。随 `app.py`（Streamlit 前端）下线、前端改为 Vue3 **只保留分析演示页**，
+> 上表已按仓库现状重写——文档不再描述不存在的界面。
 
 ---
 
@@ -90,26 +157,26 @@
 
 ```
 sqlpa/
-├── app.py                          # ★ Streamlit 前端（业务取数/指标中心/数据源/引擎演示）
-├── api.py                          # ★ FastAPI REST 后端
-├── run_eval.py                     # ★ 评测模式：Spider/BIRD 真实基准（默认LangGraph引擎）
+├── api.py                          # ★ FastAPI REST 后端 + SSE 流式分析端点（/api/analyze/*）
+├── web/                            # ★ Vue3 + ECharts 前端（SSE 流式 Agent 面板 + 归因可视化 + 决策卡）
+├── start_api.bat                   # ★ 一键启动后端
+├── start_web.bat                   # ★ 一键启动前端
 ├── run_business.py                 # ★ 业务模式 CLI：自然语言取数+口径说明+审计
+├── demo_governance.py              #   治理面确定性演示（无需 Key）
 ├── config/settings.yaml            # 阈值/护栏/模式开关（改规则不改代码）
 ├── .env.example                    # LLM Key / 端点模板
-├── Dockerfile / docker-compose.yml # 一键容器化（web:8501 + api:8000）
+├── Dockerfile / docker-compose.yml # 一键容器化（api:8000）
 ├── .github/workflows/ci.yml        # GitHub Actions：push/PR 自动跑离线测试（首次 push 后生效）
 ├── tools/
-│   ├── build_olist_db.py           # Olist 真实数据导入 SQLite
-│   ├── build_olist_sample.py       # 同结构小样本(离线验证)
-│   └── download_data.py            # 下载 Spider/BIRD（需可联网机器）
+│   ├── build_olist_db.py           # Olist 真实数据导入 SQLite（数据窗口 2016-09~2018-10）
+│   ├── verify_real_llm.py          # 真实 LLM 联调冒烟（在 Olist 上走完整六 Agent 分析链）
+│   ├── run_subscriptions.py        # ★ 订阅告警调度入口（cron 调用：检查 + 投递，失败返回非零）
+│   └── download_data.py            # 数据下载辅助（按需）
 ├── src/sqlpa/
-│   ├── graph/langgraph_graph.py    # ★ LangGraph StateGraph 生产版编排
-│   ├── graph/pipeline.py           # 确定性等价编排器（离线回退）
-│   ├── agents/router.py            # schema 感知难度路由
+│   ├── analysis/orchestrator.py    # ★★★ 分析主角链：LangGraph StateGraph 六 Agent 编排（归因下钻→诊断→决策）
 │   ├── sandbox/sql_executor.py     # 只读加固沙箱（语句级安全校验，全方言一致）
 │   ├── sandbox/dialects.py         # MySQL/PostgreSQL 连接器（会话级只读+schema提取）
 │   ├── llm/{base,mock_llm,openai_compat}.py  # 可插拔 LLM
-│   ├── eval/metrics.py             # EX / EM 度量
 │   ├── data/{loader,schema_extractor}.py
 │   ├── business/                   # 业务语义层
 │   │   ├── business_config.yaml    #   指标/维度/过滤模板/别名（配置化口径）
@@ -128,68 +195,84 @@ sqlpa/
 │   │   ├── audit.py / hitl.py      #   审计留痕 / 人工复核队列（异常→推送负责人→验证闭环）
 │   │   └── storage.py              #   SQLite 持久化（用户/审计/HITL/反馈/收藏）
 ├── tests/                          # pytest 套件（离线、无需Key、CI可复现）
-│   ├── conftest.py                 #   公共 fixture（样本库/迷你库）
+│   ├── conftest.py                 #   公共 fixture（真实 Olist 切片样本库/迷你库/缺数据自动跳过）
+│   ├── test_metric_correctness.py   # ★ 口径真值对照（fan-out、过滤 JOIN、支持度、ratio 同源、编辑不毁指标）
+│   ├── test_attribution_additivity.py # ★ 归因可加性降级 + 日历口径 + rate/mix 量价分解
+│   ├── test_security_hardening.py   # ★ 审计鉴权/append-only/不静默丢、分析链权限与审计、SELECT * fail-closed、外部连接器护栏
+│   ├── test_significance_gate.py    # ★ 统计门控（Welch z）+ 决策三态 alert/watch/normal
+│   ├── test_observability.py        # ★ LLM 用量/成本/时延计量 + 审计单 sink
+│   ├── test_credentials.py          # ★ PBKDF2 随机盐、无预置弱口令、数据源密钥不入源码
+│   ├── test_metric_versions.py      # ★ 口径版本历史/回滚/血缘
+│   ├── test_row_level_security.py   # ★ 行级权限（注入 + 失效即拒绝）
+│   ├── test_subscriptions.py        # ★ 订阅告警：规则/门控/投递/API 权限
+│   ├── test_analysis_orchestrator.py # ★ 分析主角链 / SSE / 会话记忆测试
 │   ├── test_sandbox.py             #   沙箱安全 + 方言适配
-│   ├── test_engine.py              #   多Agent编排链路
 │   ├── test_product.py             #   分级放行/多轮/图表/指标CRUD/数据源
 │   ├── test_api.py                 #   REST API 接口
-│   └── manual_*.py                 #   手动脚本（依赖本地Spider数据，不进CI）
+│   ├── test_attribution_drill.py   #   归因下钻 / 因子分解
+│   ├── test_attribution_decisions.py # 归因决策(真Agent)评测回归
+│   └── test_semantic_compiler.py   #   语义层编译器契约（编译确定性、全部可执行）
+├── evaluation/                     # 可复核的离线评测（确定性、无需 Key）
+│   ├── eval_business.py            #   语义层命中/口径外拒绝/权限/掩码/审计
+│   ├── eval_decisions.py           #   归因决策(真Agent) 26 场景 + 6 BORDERLINE 判断题
+│   ├── eval_product.py             #   产品指标（命中率/降级率/认证率）
+│   ├── eval_alert_quality.py       # ★ 告警质量：阈值告警 vs 阈值+显著性门控（假阳性治理）
+│   └── eval_attribution.py         # ★ 归因命中率（注入式真因，Ground Truth by Construction）
 ├── docs/                           # CaseStudy 与 项目过程问题与解决
-└── data/                           # benchmark_results(手动维护的展示常量，非实测证据) / olist(gitignored)
+└── data/                           # olist(真实公开数据，gitignored) / reports / audit
 ```
 
 ## 系统架构
 
 ```mermaid
 flowchart TD
-    U[业务人员] --> FE[Streamlit 前端 / FastAPI REST]
-    FE --> SVC[service.answer 统一入口]
+    U[业务人员] --> FE[Vue3 分析页 / REST 调用方]
+    FE -->|POST /api/query| SVC[service.answer 统一入口]
     SVC --> FU[多轮追问改写<br/>指代消解]
-    FU --> MAT[MetricMatcher<br/>识别指标+同义词/别名<br/>+关键兜底]
+    FU --> MAT[MetricMatcher<br/>指标+同义词/别名<br/>+关键词兜底]
 
-    MAT -- 口径内 --> GRD[配置公式硬约束+子串校验]
-    MAT -- 口径外 --> FREE[自由查询<br/>降级标注]
+    MAT -- 口径内 --> CMP[compiler.compile_spec<br/>确定性编译 SQL]
+    MAT -- 口径外/组合不支持 --> REJ[明确拒绝<br/>给出可操作原因]
 
-    subgraph ENG[多Agent引擎 · LangGraph StateGraph]
-        R[Router 难度路由]
-        W[SQLWriter 写手]
-        EX[Executor 只读沙箱]
-        DG[Diagnose 诊断]
-        CR[Critic 审查<br/>执行成功但结果存疑时]
-        VA[Validator 校验]
-        VA2[归因 Agent<br/>维度拆解·并行]
-        R --> W
-        W --> EX
-        EX -- 报错 --> DG
-        DG --> W
-        EX -- 执行成功但结果存疑 --> CR
-        CR -- 有意见 --> W
-        EX -- 通过 --> VA
-        VA -- 异常时 --> VA2
+    CMP --> AUTH[check_access<br/>表列权限 + SELECT * fail-closed]
+    AUTH --> SBX[只读沙箱执行<br/>只读连接+超时+单语句+行数上限]
+    SBX --> MASK[mask_result<br/>PII 掩码]
+    MASK --> AUD[(审计 append-only<br/>JSONL + SQLite)]
+    MASK --> CH[自动图表 + 认证徽章]
+
+    FE -->|POST /api/analyze/stream| ORC
+    subgraph ORC[LangGraph StateGraph 六 Agent 分析编排]
+        R[RouterAgent<br/>意图分流] --> E[ExecutorAgent<br/>确定性取数+权限+审计]
+        E -- 取数成功 --> A[AttributionAgent<br/>归因下钻/因子分解]
+        E -- 失败或越权 --> X[executor_reject]
+        A --> C[ConclusionAgent<br/>诊断结论+依据]
+        C --> D[DecisionAgent<br/>告警→负责人→HITL]
     end
+    ORC --> SBX
+    C -. 唯一真实 LLM 触点 .-> LLM[LLM: DeepSeek / OpenAI 兼容]
+    D --> HITL[(HITL 工单<br/>待确认→处理中→已修复→已验证/误报)]
+    D --> DEL[带口径报告 / CSV / 订阅规则]
 
-    GRD --> CMP[编译器 compiler.compile_spec<br/>确定性编译 SQL —— 语义层主路径，LLM 不写 SQL]
-    FREE --> ENG
-    CMP --> DB[(SQLite / MySQL / PostgreSQL)]
-    ENG --> DB
-    GRD --> GOV[治理面<br/>Governance口径冲突检测<br/>归因拆解<br/>HITL闭环(带负责人)]
-    ENG --> GOV
-    GOV --> CH[自动图表 + 认证/降级徽章]
-    CH --> U
-    ENG --> LLM[LLM: DeepSeek / OpenAI兼容]
+    SBX --> DB[(SQLite / MySQL / PostgreSQL)]
 ```
 
-> 关键设计：**推理交给 LLM（识别/生成/诊断/结果校验），执行/比对/护栏/口径公式交给确定性代码**——杜绝大模型算错或篡改业务口径。Critic 仅作**执行成功但结果存疑时的结果审查**，执行失败直接走 diagnose，不做无条件的事前评审。
+> 关键设计：**推理交给 LLM（意图识别、归因讲解），执行/比对/护栏/口径公式交给确定性代码**——
+> 杜绝大模型算错或篡改业务口径。生成链路（QuerySpec → SQL）**零 LLM**；
+> 六 Agent 里只有 `ConclusionAgent` 与归因动作决策真的调 LLM，其余是确定性函数（README 不把它包装成六个智能体）。
+> 取数链与分析链走**同一套**权限、掩码、审计与编译口径——不存在"分析入口绕过治理"的第二条路。
 
 ---
 
 ## 快速开始
 
-### 方式一：Docker（推荐，一键跑）
+### 方式一：一键启动（推荐）
 
-```bash
-docker compose up          # web: http://localhost:8501  api: http://localhost:8000/docs
+```bat
+start_api.bat    # 后端 http://localhost:8000/docs （需先有 venv）
+start_web.bat    # 前端 http://localhost:5173
 ```
+或手动：`.venv\Scripts\python.exe -m uvicorn api:app --port 8000` + 在 `web/` 下 `npm run dev`。
+前端在 **5173** 打开后，输入「本月 GMV 为什么跌？」即可看到六 Agent 流式执行 + 归因可视化 + 决策闭环。
 
 ### 方式二：本地
 
@@ -200,18 +283,17 @@ cp .env.example .env       # 填 LLM_API_KEY（DeepSeek/OpenAI兼容）；不填
 # 离线测试（无需 Key、无需外部数据）
 pytest tests -q
 
-# Streamlit 前端
-streamlit run app.py
-# 演示账号：admin / admin123（管理员）  ｜  analyst / analyst123（分析师）
+# 前端（Vue3 + ECharts）
+cd web && npm install && npm run dev   # http://localhost:5173
 
 # FastAPI 后端
 uvicorn api:app --port 8000
 
-# 评测模式（需 Key + Spider 数据）
-py run_eval.py --dataset spider --db-root data/spider --split dev --sample 50
+# 真实 LLM 联调冒烟（真实 Olist 上走完整六 Agent 分析链；无 Key 可加 --dry）
+py tools/verify_real_llm.py
 
-# 业务模式 CLI
-python run_business.py --question "各个品类的GMV"
+# 归因命中率评测（注入式真因，Ground Truth by Construction）
+py evaluation/eval_attribution.py
 ```
 
 ### REST API 示例
@@ -226,44 +308,24 @@ curl -X POST http://localhost:8000/api/query \
 
 ---
 
-## 复现兜底组件的评测（可选，需 LLM Key + Spider 数据）
+## ~~兜底组件评测（Spider-dev · 多 Agent 引擎）~~
 
-> ⚠️ `pytest` 离线套件用 **Mock LLM**，只证明**流程/沙箱/度量正确**，**不代表准确率**。
-> 产品侧的主指标（语义层命中率等）**不需要 Key**，见上一节 `evaluation/eval_product.py`。
-
-要复现多 Agent 兜底组件的 EX/消融：
-
-1. `pip install -r requirements.txt`（含 langgraph）。
-2. 复制 `.env.example` 为 `.env`，填 `LLM_API_KEY`（OpenAI 兼容端点即可）。
-3. 下载 Spider 数据（可联网机器）：`py tools/download_data.py --dataset spider --dir data/spider`；
-   数据在别处时用 `--db-root` 或 `.env` 的 `EVAL_DB_ROOT`（注意指向**含 `dev.json` 与 `database/` 的那一级**）。
-4. 运行（各臂逐题 JSON 都会落盘，便于复核）：
-   ```bash
-   py run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
-     --baseline --ablation --ablation-rounds 1,3 --out-dir ./eval_results
-   ```
-5. **锁定单一模型**可让绝对指标可归因（不加 `--model` 则按 `MODEL_POOL` 池化运行并记录每题实际模型）：
-   ```bash
-   py run_eval.py --dataset spider --split dev --sample 50 --seed 42 --model qwen3.8-max --baseline
-   ```
-
-> 现有实现提供的是 **zero-shot（`max_repair_round=0`）vs 自愈/评审** 对照；
-> 早期版本提到的 "Baseline2：单 Agent + Schema RAG" **并未实现**，不要引用。
-
-> **运行引擎**：默认 `--engine langgraph`（`sqlpa/graph/langgraph_graph.py`，含条件边/护栏/自愈/事后评审）。
-> `langgraph` 未安装时回退 `pipeline.py`；两者**并非完全等价**（提示词构造与评审轮次上限不同），报告中应注明实际引擎。
+> ⚠️ **本节所述的自由 SQL 生成引擎（`run_eval.py` / `src/sqlpa/graph` / `agents` / `eval`）已随"语义层优先"策略移除**：
+> 口径内走确定性编译、口径外明确拒绝，不做未认证的自由 SQL 生成。以下为组件下线前其自身评测的**遗留记录**，
+> 不代表当前产品行为，仅保留作历史对照，勿引用为新指标。产品归因质量请以 `evaluation/eval_attribution.py`（注入式真因命中率）为准。
+> 复现命令（需 LLM Key + 联网下载 Spider 数据）：`python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph --baseline --ablation --ablation-rounds 1,3 --out-dir ./eval_results`
 
 ## 业务产品模式（把实验变成真实业务产品）
 
-> 为避免"只是一个基准验证实验"，在引擎之上叠加了一层**业务语义层 + 产品层**。两种模式严格隔离：
+> 为避免"只是一个基准验证实验"，在业务语义层之上叠加了一层**产品层**。当前仓库只有一种运行模式：
 
-- 🧪 **评测模式**（`run_eval.py`）：关闭业务层，直接跑 **Spider-dev**，测**引擎本身**的 EX（保证与论文基线可比）。**业务样例绝不参与 EX 计算。**
-- 💼 **业务产品模式**（`app.py` / `api.py` / `run_business.py`）：开启业务语义层 + 护栏 + 审计，面向**业务人员自然语言取数**。
+- 💼 **业务产品模式**（`api.py` / `run_business.py` / `web/`）：开启业务语义层 + 护栏 + 审计，面向**业务人员自然语言取数**。
+- （历史）🧪 **Spider 评测模式**（`run_eval.py`）**已随兜底引擎下线移除**，其数字仅作历史对照，勿引用。
 
 ### ⚠️ 价值锚点：**这不是"教业务写 SQL"**
 这个项目**不是**"把中文翻译成 SQL、帮不会写 SQL 的人写 SQL"（那是 NL-to-SQL 最容易被问倒的伪定位）。真正的价值是 **指标语义层 + 治理 + 长尾自助取数**：
 
-- **核心**：把 GMV / 客单价 / 取消率等**业务口径配置化统一**（公式写在配置、注入后做子串校验），+ **权限白名单 / PII 掩码 / 审计 / 口径治理 / 异常归因闭环**，让业务不用排队找数分也能拿到**口径一致**的数据。**安全底座（权限+掩码+只读沙箱+审计）已核验：表列权限粒度、PII 覆盖列、沙箱只读与多语句拦截、审计留痕范围均已由离线测试锁定。**
+- **核心**：把 GMV / 客单价 / 取消率等**业务口径配置化统一**（公式写在配置、由编译器确定性生成，并做**结果列结构绑定校验**），+ **权限白名单 / PII 掩码 / append-only 审计 / 口径治理 / 异常归因闭环**，让业务不用排队找数分也能拿到**口径一致**的数据。**安全底座（权限+掩码+只读沙箱+审计）已核验：表列权限粒度（含 `SELECT *` fail-closed）、PII 覆盖列、沙箱只读与多语句拦截、审计留痕与不可删改均已由离线测试锁定。**
 - **服务的是"长尾 / 临时 / 探索式"取数**：看板报表覆盖**固定、高频**的指标；而"**临时想看某个维度异常、某组合**"这类**长尾**问题看板覆盖不到、找数分又排队长——**这才**是它的用武之地（**不是替代看板**，是补充看板覆盖不到的长尾，且因语义层而口径/权限可控）。
 - 解决的问题：**"同一个指标，不同人、不同 SQL 算出不同口径"** 的真实痛点。
 - **治理面增量**（新增，区别于纯 Text-to-SQL）：**规则 + LLM 协同**，各自解决明确的问题——
@@ -271,7 +333,7 @@ curl -X POST http://localhost:8000/api/query \
   - **LLM 负责"**业务听得懂**"的语义增强**：意图识别、**归因总结**（把波动与主因翻成人话）、口径冲突的自然语言解释——这些没有唯一正确答案，交给 LLM 更有价值；
   - **解决了什么**："同一个指标，不同人、不同 SQL 算出不同口径"（规则锁口径）+ "这个波动从哪来、该不该告警、推给谁"（规则定位 + LLM 讲解），两者协同才构成可复盘的治理闭环。
   - **口径治理**：GovernanceAgent 自动检测"语义相近但公式不同"的指标冲突，并给出**可追溯的口径解释**（负责人/版本/公式），避免口径分歧无人发现。
-  - **异常归因**：归因 Agent 按**乘法因子 + 维度贡献度**拆解波动——是订单量跌了、客单价跌了，还是某区域/品类跌了；阈值**可配置**，避免告警疲劳。查询按当期/上期**并行**执行降延迟。
+  - **异常归因**：归因 Agent 按**乘法因子（精确、含交互项）+ 维度贡献度**拆解波动——是订单量跌了、客单价跌了，还是某区域/品类跌了；阈值**可配置**。查询按当期/上期**并行**执行降延迟。比率/均值类指标不做"占波动"表述（分段 delta 之和在该类指标上不成立，见守恒自检）。
   - **闭环（ClosureAgent MVP）**：异常自动写入 HITL 队列并**关联指标负责人**，状态机为 **待确认 → 处理中 → 已修复 → 已验证 / 误报**；处理状态可追踪，验证需重跑指标。
 - **对标品类**：这是一类真实存在的产品 —— **dbt Semantic Layer / Cube / MetricFlow / Looker / AtScale**（"语义层 + 自助 + 治理"），以及近两年的 **AI-BI / text-to-dashboard 智能体**。**NL 生成 SQL 只是外壳，语义层 + 治理才是核心。**
 
@@ -316,7 +378,8 @@ curl -X POST http://localhost:8000/api/query \
 # 你下载 Olist CSV 放到 data/olist/ 后：
 python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 ```
-> 说明：业务层用**真实公开数据**(Olist)；`data/olist_sample/` 是**同结构小样本**，仅用于离线验证组装逻辑（非真实数据）。
+> 说明：业务层用**真实公开数据 Olist**（2016-09~2018-10 窗口，约 9.9 万订单）。演示/评测提问请落在该窗口内，
+> 如"2018-06 GMV 为什么比上月跌"；不要再问"本月/最近30天"——相对今天的日期在窗口外必然无数据。
 
 ### 验收指标（衡量产品价值，而非 SQL 准确率）
 
@@ -365,8 +428,13 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 | 口径认证率（成功中） | **100%** | 返回成功的结果全部带"口径已认证" |
 | 口径外占比 | **7.6% (5/66)** | 语义层没有对应指标 → 线上走多 Agent 降级 |
 
-**这些数字说明什么**：语义层已能覆盖大部分典型问法（指标 6→23、维度 +订单状态、时间粒度 4 档、派生指标 3 个），
+**这些数字说明什么**：语义层已能覆盖大部分典型问法（指标 6→24、维度 +订单状态、时间粒度 4 档、派生指标 3 个），
 剩下的 7.6% 是**语义层确实没有的指标**（如复购周期、库存周转）——它们是降级路径的用武之地，而不是缺陷掩盖。
+
+> ✅ **「各品类的评分」这个组合是"修对了才留下的"**：它一度返回**被条目数加权的错误均值**
+> （reviews × order_items 是 1:多）。现在 `avg_review` 改用**订单粒度预聚合派生表**，
+> 品维度下同一评价值重复多少次都不改变 AVG，口径由 `desc` 写明。
+> 覆盖率因此仍是 84.9%，但这个数字里没有"错的命中"。
 
 > ⚠️ **口径说明**：本评测**离线运行**（`llm=None`），因此**降级路径未被实际触发**——离线时口径外问题会被
 > 明确拒绝而不是交给多 Agent。故这里以"语义层命中率"为主指标，口径外占比仅作降级规模的上界。
@@ -381,7 +449,7 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 | 指标 | 结果 | 含义 |
 |---|---|---|
 | **规则命中率** `rule_accuracy`（纯规则+门控，零 token） | **81.2% (26/32)** | 26 条正例由规则+门控确定性全中；6 条判断题规则判不出，离线只能蒙/漏 |
-| **LLM 增值** `llm_value`（接 LLM 命中率 − 规则命中率） | **需 `--llm` 实跑** | = 32 条接 LLM 命中率 − 0.8125；0 说明 LLM 没增量，>0 说明判对了几道边界题 |
+| **LLM 增值** `llm_value`（接 LLM 命中率 − 规则命中率） | **+0.0%**（qwen3.8-27b） | 32 条接 LLM 仍 26 条；**判断题从规则 0/6 → LLM 5/6 (83.3%)**，但整体被"真追问"的稳定性成本抵消——见下方诚实口径 |
 | **执行正确率**（做完算对） | **100% (4/4)** | 因子分摊守恒（`-70.000` vs `-70.000`）、份额合计 `0.9999`、主因方向正确、下钻分支内主因隔离 |
 | 门控的价值 | **19/26 → 26/26**（仅正例） | 关掉策略门控还原旧规则即 19/26（7 条量价问法全漏），差值可被测试复现 |
 
@@ -396,153 +464,10 @@ python tools/build_olist_db.py --src data/olist --out data/olist/olist.db
 > ⚠️ **诚实口径（别把这些数字当成泛化准确率的证据）**：
 > - **32 条真值由实现者自标**（依据模块内的判定规则），不是独立第三方标注，故只承担**回归测试**与**方法论演示**两个身份；系统级准确率只由公共基准 Spider-dev 支撑（其 gold 由数据源外部定义）。若引入独立标注第二人可回填一致性后再谈泛化。
 > - 题集规模小，**任何命中率都不等于泛化**；门控判据本身是在观察这批问法后定的，存在过拟合风险（用"额外两条规则判不出、LLM 判得出"的用例做了反向校验，见 `tests/test_attribution_decisions.py`）。
-> - 离线路径**不调用 LLM**，"LLM 判断"那 12 条的成绩与 `llm_value` 需 `--llm` 实跑才成立；上面 26/32 是"规则+门控"的确定性成绩。
+> - 已实跑 `eval_decisions.py --llm`（qwen3.8-27b）：LLM 仅在 6 条判断题真调；整体 `decision_accuracy` 仍 26/32=81.2%，`llm_value=+0.0%`——判断题从规则 0/6 升到 5/6 (83.3%)，但几十条"真追问"题上 LLM 判偏了几题，净增被抵消。**结论是"LLM 判断力强但稳定性有成本"，不是"LLM 没用"。**
 > - 评测喂给决策层的是**原始问句**，而 service 层实际喂的是改写后的问句，两者尚未对齐（已知口径差）。
 
 ---
-
-## 兜底组件评测（Spider-dev · 多 Agent 引擎）
-
-> 这一节是**组件级的压力测试**：语义层覆盖不到的长尾问题交给多 Agent 生成 SQL，
-> 它的可靠性用公开基准来量。**它不是产品的主指标**（主指标见上一节）。
-
-
-> **数据来源**：Spider-dev（评测集），跨库分层随机抽样 **N=50（seed=42）**，引擎 `--engine langgraph`，模型 **qwen3.7-flash**（阿里云百炼兼容端点，`LLM_TEMPERATURE=0`）。逐题产物在 `eval_results/`（83 个文件，含每题 SQL / 路由 / 修复轮次 / token / 成本 / `gold_failed`），可复核。
-> 复现命令：
-> ```bash
-> python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
->   --baseline --ablation --ablation-rounds 1,3 --out-dir ./eval_results
-> ```
-
-### 模型池与可追溯性
-
-`MODEL_POOL` 会按顺序尝试模型，遇 **403/额度耗尽/404/401/400/context超限/空内容** 切换到下一个，仅 **429/5xx/超时** 在当前模型上指数退避重试；全部失败才抛错（并在错误中列出试过的池）。实测确认切换有效：池首 `qwen3.7-flash` 额度耗尽返回 403 后，自动切到 `qwen3.8-max` 并成功生成 SQL。
-
-**但"会切换"必须能被观测**：若产物不记录实际模型，一旦运行中途切换，导出的 EX/token/成本就是多模型混合且无人察觉。因此每题 JSON 现记录 `model` 字段，汇总记录 `models = {模型名: 题数}`，报告会打印实际模型并在出现**多于一个模型**时显式告警。
-
-> 本轮 N=50 的产物生成于该字段加入之前，故无 `model` 记录。事后按 token 分布核验：四个臂的 `prompt_tokens/total_tokens` 占比集中在 **12.6%–13.8%**、token 分布为单峰右偏（反映题目复杂度差异，而非双峰），**与"全程单一模型"一致**，未发现池切换痕迹。
-
-**另修一个真 bug**：`--model` 此前**锁不住模型**——它只设置 `self.model`，而 `_chat` 遍历的是 `model_pool`（来自 `MODEL_POOL`），因此传了 `--model` 仍可能在池里漂移。现在显式传 `--model` 会把池收敛为单一成员，才真正是"可归因到单一模型"的评测：
-
-```bash
-# 池化运行（默认）：有故障切换，产物记录每题实际模型
-python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph --baseline
-
-# 锁定单一模型：不做切换，绝对指标可归因
-python run_eval.py --dataset spider --split dev --sample 50 --seed 42 --engine langgraph \
-  --model qwen3.8-max --baseline
-```
-
-| 配置 | EX | EM | token/题 | 成本/题 | 平均延迟 | 平均修复轮次 |
-|---|---|---|---|---|---|---|
-| **L0** 单次直出（zero-shot，无自愈） | **0.82** (41/50) | 0.04 | 2367 | ¥0.00062 | 28.9s | 0.00 |
-| **L1** 引擎（最多修 1 轮） | **0.86** (43/50) · **0.88** (44/50) | 0.02 | 2845–2923 | ¥0.00074 | 36–39s | 0.12–0.14 |
-| **L3** 全自愈（最多修 3 轮） | **0.90** (45/50) | 0.04 | 4001 | ¥0.00104 | 47.7s | 0.38 |
-
-**结论（含不确定度，不夸大）**：
-- **自愈有效**：L0 → L1 提升 **+4 ~ +6 pp**（41 → 43/44 题）；L1 → L3 再 **+2 ~ +4 pp**（44 → 45 题）。
-- **代价是 token**：L3 每题 4001 token，是 L0 的 **1.69 倍**（1.41 倍于 L1），延迟从 28.9s 涨到 47.7s。
-- **⚠️ 必须说明的运行间波动**：同一份 L1 配置在这次运行中跑了两次（`baseline_engineL1` 与 `ablation_L1`），结果分别为 **43/50 与 44/50**——**差 1 道题 = 2.0 pp**。逐题对账确认差异集中在同 1 道题（`repairs` 1→0）。也就是说：
-  - **本次 L1→L3 的 +2 ~ +4 pp 落在运行间波动量级内**，方向与幅度都**不足以作为强结论**；要主张"L3 更好"需要更大样本或多次重复取均值。
-  - 顺带更正了一个历史说法：此前 README 声称"存在甜点位、L1(0.83) 优于 L3(0.80)"，**本次实测未复现该非单调性**（L3 ≥ L1）。旧数字本身互相矛盾，见下方"历史数字说明"。
-  - 路由也存在同类波动：同一个问题在两次运行中被分别判为 complex / simple。
-
-### 评审者（Writer↔Critic）消融：本次实测为**负向**
-
-同一次运行、同一抽样（N=50, seed=42），**只切换 `use_critic`**，自愈预算固定为 1（`--critic-ablation --critic-max-repair 1`）：
-
-| 臂 | EX | EM | token/题 | 成本/题 | 平均延迟 | 平均修复 |
-|---|---|---|---|---|---|---|
-| 单 Writer（无评审者） | **0.90** (45/50) | 0.02 | 3097 | ¥0.00081 | 30.0s | 0.16 |
-| **Writer + Critic** | **0.86** (43/50) | 0.02 | **4893** | **¥0.00124** | **68.6s** | 0.16 |
-
-> **口径提示（数据集与本轮对比）**：上表两臂为**同一** **Spider-dev** 采样（N=50, seed=42）的**同一次运行**对比，仅切换 `use_critic`。**EX 0.90 是 Spider 评测集上的引擎指标，不是产品整体准确率**——业务产品模式走"口径内配置直出 + 口径外降级"，不单靠此 EX。且本消融的 Writer↔Critic 是**事前逐题评审**；产品模式中 Critic 已改为**"执行成功但结果存疑时"才触发（默认关闭）**，故上表不能代表产品默认行为。
-
-**逐题对账（50 题中 4 题 EX 发生变化）**：
-
-| 结果 | 题数 | 说明 |
-|---|---|---|
-| 评审者**弄坏** | 3 | 原本答对 → 被评审意见改写后答错（`repairs=1`，终止 `max_retry`） |
-| 评审者**救回** | 1 | 原本答错 → 修复后答对 |
-
-即 **3 坏 / 1 救，净 −2 题**。逐题原因（重要，不都是"评审者判断错"）：
-
-1. `cre_Doc_Template_Mgt`「模板文档数最多的是哪个」——**这是并列取行问题，不是评审者判断错**：库里有 3 个模板各 2 份文档（id 25/14/11）并列第一，而 `ORDER BY count(*) DESC LIMIT 1` 未定义并列时取哪一行。实测确认：同一语义、仅调换表顺序或给 `GROUP BY` 多加一列，SQLite 就会返回**另一个**并列行。两个查询都合法，却一个判对、一个判错。
-2. `wta_1`「赢得最多比赛的选手」——评审者把直接可用的 `winner_name` 改成了子查询 + `JOIN rankings`，属**过度工程**，引入不必要复杂度后答错。
-3. `concert_singer`「每位歌手的演唱会数」——评审者引入了原答案没有的 `LEFT JOIN`（该库无演唱会数据的歌手会被计入并显示为 0），与金标准的 `JOIN` 语义不一致。
-
-**结论（含不确定度，不夸大）**：
-- **成本增加是确定的**：token **+58%**（3097 → 4893），延迟 **+129%**（30.0s → 68.6s）。评审者每题多两次 LLM 调用，这部分没有分歧。
-- **效果是负向的，但幅度仍在波动量级内**：净 −2 题 = **−4.0 pp**，与已知运行间波动（±1~2 题）同阶。方向与 `repairs` 分布一致，但**样本不足以主张"评审者显著有害"**。
-- 更值得注意的是**失败机制**：当评审者没有"执行结果"作为判据时，它审的是 SQL 的**写法**而非**结果**，于是把"看起来更规范"的改写引入进来，反而破坏正确答案（过度工程、改变 JOIN 语义、扰动并列取行）。
-- **本项目的历史说法不成立**：旧 README 称评审者在复杂题上 **+3.6pp**，本次实测为 **−4.0pp（complex 0.9149 → 0.8750）**，方向相反。旧数字本身互相矛盾（见下）。
-- **可改进方向**：给评审者提供金标准式的**执行结果反馈**（而非仅静态审 SQL）、或改用**更强的独立模型**做评审；否则"同模型自评"容易退化为风格改写。
-
-> 口径提示：本次运行的产物生成于"记录每题模型"功能之前，故无 `model` 字段；两臂为**同一次运行**，因此**臂间对比有效**。但**不要**把本次数字与上表（另一次运行）横向比较——那是跨运行、且 token 量级明显不同。
-
-### 写手与自愈的归因分析（从上面的逐题产物直接算出，无需额外付费）
-
-只看总 EX 不够——还得知道"错在哪一环"。按每题的 `repairs` 与 `terminate_reason` 拆开：
-
-| 臂 | 一次写对<br>(repairs=0 且 EX) | 触发过修复 | 修复后**答对** | 修复后**仍错** | 平均修复 | token/题 |
-|---|---|---|---|---|---|---|
-| L0 单次直出 | 41/50 = 82.0% | 0（**不给修复机会**） | — | — | 0.00 | 2367 |
-| L1 引擎 | 43/50 = 86.0% | 7 | **0** | 7 | 0.14 | 2923 |
-| L1 重跑 | 44/50 = 88.0% | 6 | **0** | 6 | 0.12 | 2845 |
-| L3 全自愈 | 43/50 = 86.0% | 7 | **2** | 5 | 0.38 | 4001 |
-
-**读数（比总 EX 更有信息量）**：
-1. **写手"一次写对"的基线是 41/50 = 82%**。L0 之所以最低，是因为 `max_repair_round=0` 让错题**连修复机会都没有**（`repairs` 全 0，错题终止原因全为 `max_retry`）。
-2. **L1 的 +4pp 不是"修复救回来的"**：L1 中触发过修复的 7 题**一题都没救回（0/7）**；它到 43/50 靠的是**本身一次写对的题集不同**（运行间波动），并非修复能力。
-3. **修复真正见效只在 L3**：7 题触发修复中翻盘 2 题（2/7），代价是 token 从 2367 → 4001（**1.69 倍**）、延迟 28.9s → 47.7s。
-4. **失败全部是 `max_retry`**（L3 的 5 题都跑满 3 轮仍错），没有一题是"校验通过但其实错了"——说明**校验器没有放过错答案**，瓶颈在写手/修复能力，不在判定环节。
-5. 结论：本样本下**单轮修复基本无效（0/7）**，多轮修复**边际收益很小（2/7）**而成本线性上涨。若要提升 EX，应优先改**写手侧**（schema 链接、few-shot、问题改写），而不是继续加修复轮次。
-
-> 注：L1 与 L1 重跑之间"一次写对"的 1 题差异，即上文提到的运行间波动。
-
-### 历史数字说明（为什么不引用 `data/benchmark_results.json`）
-
-该文件是**手动维护的展示用常量**（供 `app.py` 引擎演示页渲染），**没有任何脚本生成它**，也没有对应的逐题产物。它内部**自相矛盾**：基线表把 `max_repair_round=0/1` 记为 0.86 / 0.88，而自愈消融表在同样声称 N=100、seed=42 下记为 0.76 / 0.83。数字仍保留在文件中（并带 `DISCLAIMER`）作为历史记录，但**不构成证据**；请只引用上表的实测结果。
-
-### 评测框架能力（可复用于你自己的数据）
-
-- **分层抽样**：`--sample N --seed 42`，跨库轮询以覆盖多个 schema，抽样可复现。
-- **指标**：EX（执行结果比对，**金标准执行失败的题不计为正确**并单独报 `gold_failed`）与 EM（SQL 逐字匹配），按 simple/complex 分档。
-- **Token / 成本**：逐题采集 `usage` 并按 `LLM_INPUT/OUTPUT_PRICE_PER_1M` 估算成本，随报告输出。
-- **消融开关**：`--baseline`（L0 vs L1）、`--ablation --ablation-rounds 0,1,3`、`--critic-ablation`、`--schema-link-ablation`。
-- **逐题落盘**：**每条实验臂**都会写出逐题 JSON（含每题 SQL / 路由 / 修复轮次 / `gold_failed` / 终止原因 / token / 成本），默认目录 `eval_results/`（可用 `--out-dir` 指定），**并随仓库发布**（本次 4 臂共 83 个文件 / 0.23MB）。修复前只有主跑路径落盘、且目录不存在会直接崩 —— "结果无法复核"在方法层面就是必然的。
-
-### ⚠️ EX 口径修复（本轮，重要）
-
-修复前 `execution_match([], []) == True`（空集等于空集），而**金标准 SQL 自身执行失败时 `rows` 恰好也是空列表**——于是"预测也没跑出结果"的错答案会被判成**正确**，导致 EX **系统性虚高**。该缺陷同时存在于 `eval/runner.py`、`pipeline.validate`、`langgraph_graph._is_valid` 三处。
-
-现已修复：
-- 新增 `gold_match(gold_rows, gold_valid, pred_rows)`：**金标准执行失败直接返回不匹配**并标记 `gold_failed`，绝不与其他空结果"撞对"。
-- `EvalSummary` 新增 `gold_failed` / `gold_failed_rate` 并随报告输出——这类题**不可判定**，既已计为错，也要把数量暴露出来，避免"金标准坏了"被误读成"模型答错了"。
-- 两个引擎都在金标准失败时走显式路径（LangGraph 直接进 validate 记录 `terminate_reason=gold_failed`，不再无意义地反复自愈）。
-- 回归测试 `tests/test_ex_scoring.py`（10 项）锁定该口径。
-
-> **这解释了此前那个可疑的高分**：EX 0.86/0.88 显著高于 Spider-dev 公开基线，而评测口径恰好存在"空 vs 空算对"的漏洞。修复并重跑之前，任何历史 EX 数字都不应采信。
-
-> ⚠️ **使用前需注意的两点**：① 抽样是**每库近似等额轮询**，并非按 Spider-dev 的问题分布比例抽样，因此结果**不可直接与论文公开的 dev EX 对比**；② 本仓库的 EX 是自实现比对（结果集去重后比较），**不是 Spider 官方 `evaluation` 脚本**，两套口径不等价。
-
-> ⚠️ **EX 在"并列行"上的固有脆弱性（本次实测撞到）**：当金标准含 `ORDER BY ... LIMIT 1` 而排序键存在并列时，取哪一行并未定义。实测确认：**同一语义**、仅调换 JOIN 表顺序或给 `GROUP BY` 多加一列（结果集大小等价），SQLite 就会返回另一个并列行，于是"语义正确的改写"被判错。BIRD 改用 test-suite 多金标准正是为缓解此问题。**复现数字时请记得：这类题会以约 ±1~2 题的幅度给 EX 带来与模型能力无关的抖动。**
-
-### 环境准备与复现要点
-
-```bash
-# 1) 拿到 Spider 数据（本仓库不附带）。下载后目录需含 dev.json 与 database/<db_id>/<db_id>.sqlite
-py tools/download_data.py --dataset spider --dir data/spider
-#    数据放在别处时用 --db-root 或 .env 的 EVAL_DB_ROOT 指定
-
-# 2) 配好 .env：LLM_API_BASE / LLM_API_KEY / LLM_MODEL（模型名务必记入报告）
-```
-
-建议把 `eval_results/` 的逐题 JSON 一并提交，并在报告中标注**数据集版本、模型名、seed 与 commit SHA**——这是让数字可被复核的最低要求。
-
-> **一个经验教训（本仓库踩过）**：LLM 在 `temperature=0` 下**仍非完全确定**。本项目同配置两次运行相差 1 道题（2.0 pp）。因此**不要把"L1 vs L3"这类 1~2 题的差异当作强结论**；要下结论请扩大样本或多次重复取均值。
-
-> **运行引擎**：默认 `--engine langgraph`（`src/sqlpa/graph/langgraph_graph.py`，含条件边 / 自愈闭环 / Writer↔Critic / 护栏）。`langgraph` 未安装时自动回退到无依赖的 `pipeline.py`。注意两者**并非完全等价**：LangGraph 有 `PlannerAgent` 并把 `plan` 传给 Writer，而 pipeline 恒传 `plan=""`；两者的评审轮次上限也不同。因此**不能假设两者结果一致**，`--engine` 需在报告中注明。
 
 ## 业务语义层评测（离线、确定性、无需 API Key）
 
@@ -557,39 +482,79 @@ py tools/download_data.py --dataset spider --dir data/spider
 | 口径内执行成功率 | **100% (8/8)** | 口径内问题经确定性组装器真的跑出结果（Olist 同结构样本库） |
 | 口径外拦截率 | **100% (4/4)** | 无对应指标 / 维度组合不受支持时**拒绝**而非硬生成 |
 | 拒绝原因可读率 | **100% (4/4)** | 拒绝时给出可操作提示（业务人员能据此调整问法） |
-| **公式防篡改拦截率** | **75% (3/4)** | ⚠️ 见下：**子串包含判定的真实局限** |
+| **公式防篡改拦截率** | **100% (5/5)** | 校验已升级为**结果列结构绑定**：改系数 / 诱饵列 / 注释藏表达式 全部拦截 |
 | 权限拦截率 | **100% (5/5)** | 限定列 / **非限定列** / **别名改写** 三种越权写法全部拦下；允许列与 admin 不误拦 |
 | PII 掩码覆盖率 | **100% (2/2)** | 含 `AS 别名` 改写场景（历史绕过点） |
-| 审计覆盖率 | **100% (12/12)** | 每次取数都写入审计留痕 |
+| 审计覆盖率 | **100% (12/12)** | 每次取数都写入审计留痕（分析链同样留痕，见安全加固） |
 
 > **口径说明（请连同数字一起引用）**：
-> - 这是**离线确定性验证**（`llm=None` + Olist 同结构小样本库），不是 LLM 准确率；样本为人工设计的 12 条标注用例，规模小，**不代表真实流量的分布**。
-> - **公式防篡改 75% 是真实的已知缺口**，不是笔误：`verify_formula` 是"表达式子串包含"判定，只要保留 `SUM(oi.price)` 再乘系数（如 `SUM(oi.price)*0.5`）就能绕过；而"换成别的口径""删掉公式写成空壳"都能拦住。该项已由 `tests/test_business_eval.py` 的 xfail 用例锁定，修复（改为表达式结构校验）后会自动转为通过。
+> - 这是**离线确定性验证**（`llm=None` + Olist 同结构小样本库），不是 LLM 准确率；样本为人工设计的用例，规模小，**不代表真实流量的分布**。
+> - **公式防篡改 100% 是"结构绑定"带来的**：此前实现是"表达式子串包含"，把表达式留在注释、字符串或诱饵列里都能绕过（实测 4 例中 3 例放行）。
+>   现在要求"别名 = 指标 key 的结果列"与配置表达式逐字等价，并新增了 5 条反例测试（`tests/test_business_eval.py`）。
+>   仍非完备：它校验的是**词法等价**，不解析 SQL 语义（若将来恢复自由 SQL 生成，应改成 AST 级校验）。
 > - 配置里 `sensitive_columns` 还列了 `customer_phone`，但 Olist 的 `customers` 表**没有 phone 列**，该条目在当前数据下不可达；权限/掩码用例因此改用真实存在的 `customer_zip_code_prefix`。
 
 ## 测试与 CI
 
 ```bash
-pytest tests -q    # 184 项离线测试（184 passed + 1 xfailed；该 xfail 为已知口径局限）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/EX口径/权限与掩码/路由兜底/业务语义层/治理闭环/语义层编译器/语义层红线契约(编译确定性与生成区零LLM)/归因下钻/归因决策(真Agent,26场景评测+门控准入/拒绝/短路回归)/判断题(规则判不出、度量LLM增值)/因子分解/执行正确性/交付物
+pytest tests -q    # 267 项离线测试（267 passed，0 xfail）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/权限与掩码/行级权限/业务语义层/治理闭环/语义层编译器/语义层红线契约(编译确定性与生成区零LLM)/口径真值对照/归因可加性与日历口径/量价分解/统计门控/审计与可观测性/凭据加固/指标版本历史/订阅告警/归因下钻/归因决策/因子分解/交付物
 ```
-> 测试数随着功能迭代一直在涨（历史出现过 88/92/115/163/175/181 等不同数字）；以上 184 为**最新一次全量 `pytest tests` 的实测口径**（含归因决策真Agent的 26 场景 + 6 判断题评测，与执行正确性评测；其中 1 项为已锁定已知局限的 xfail）。决策评测同时统计 `rule_accuracy` / `llm_value`，用 **6 条规则判不出、要 LLM 真判断**的边界题（BORDERLINE）度量 LLM 增值——离线（`llm=None`）命中 26/32，证明评测确有会判错的题、不是自证 100%；后续改动请以实跑结果为准并同步更新此处。
+> **测试数口径**：267 = 历史 176 项 + 两轮新增 91 项回归（口径真值对照 `test_metric_correctness.py`、
+> 归因可加性与日历 `test_attribution_additivity.py`、量价分解与显著性门控 `test_significance_gate.py`、
+> 安全加固 `test_security_hardening.py`、可观测性 `test_observability.py`、凭据 `test_credentials.py`、
+> 指标版本 `test_metric_versions.py`、行级权限 `test_row_level_security.py`、订阅告警 `test_subscriptions.py`）。
+> 此前唯一的 xfail（公式子串校验可绕过）已随结构绑定修复转为**通过**，因此不再有 xfail。
+> 依赖真实 Olist 库的用例在缺数据时**跳过**（`real_olist_db` / `sample_db` fixture），
+> 因此公开 CI 上不会把"环境缺数据"误报成"代码回归"。
 
-- **无需 API Key、无需外部数据**（内置迷你库 + 同结构样本库），本地与 CI 行为一致。
-- **GitHub Actions**：每次 push/PR 自动跑离线套件（`.github/workflows/ci.yml`，首次 push 后生效）。
-- 需要本地 Spider 数据的手动验证脚本已拆除（`demo_governance.py` 为治理面确定性演示，无需 Key 即可跑）。
+- **数据**：依赖真实 Olist `data/olist/olist.db`；测试每次从其中抽一小撮真实切片建临时库（非捏造日期），本地与 CI 行为一致。
+  纯逻辑用例（编译器口径真值、指标编辑、安全护栏）使用**自建小库**，不依赖真实数据。
+- **GitHub Actions**：每次 push/PR 自动跑离线套件 + 两个离线评测（缺真实库时评测**大声跳过**而非失败），
+  并做入口脚本语法自检（`.github/workflows/ci.yml`）。
 
 ## 诚实说明（局限与边界）
 
-- **确定性路由是启发式**：schema 感知（跨表=复杂）+ 逻辑信号，属于**快速预筛**；对**判为 simple** 的题会走一层**轻量 LLM 二次判断兜底**（`route_with_llm_fallback`，只做 simple→complex 单向升级、异常静默回退），开关 `pipeline.route_llm_fallback`。评测时可用环境变量 `SQLPA_ROUTE_LLM_FALLBACK=0` 关闭以保证可复现。
-- **测试用内置迷你 schema**（singer/concert，由 `tests/conftest.py` 运行时构建，非评测基准）仅用于引擎/沙箱自检，**不是** Spider/BIRD，不能作为准确率证据。
-- **长时记忆 / Checkpoint 断点续跑未实现**。此前 `settings.yaml` 的 `memory.*`、`pipeline.parallel_candidates` 等键**从未被任何代码读取**（属"写个配置假装支持"），已删除；现在配置里的每个键都真实生效：`security.timeout_seconds`（SQLite `progress_handler` **真实中断**长查询，不再只是等锁）、`security.forbid_keywords`、`security.allow_multi_statement`、`eval.max_rows`、`pipeline.max_repair_round`、`pipeline.route_llm_fallback`。
-- 访问公开数据的网络在本仓库受限；`--dir` 的数据与 `.env` 的 Key 需由使用方提供。Spider 数据位置用环境变量 `SQLPA_SPIDER_ROOT` 指定（已移除写死的机器路径）。
-- **MySQL/PostgreSQL 方言层**已实现语句级安全校验与 schema 提取，但真实库连通性需在装有对应驱动与目标库的环境验证。
+- **当前唯一的 LLM 触点**是"意图识别"（自然语言 → QuerySpec）与"结论/归因讲解"。
+  RouterAgent 与 MetricMatcher 是**同一次语义匹配的两次上报**，Executor/Decision 是确定性函数——
+  所谓"六 Agent"是**编排**上的六个阶段，不是六个独立智能体，README 不把它当作"多智能体更强"的证据。
+- **归因做了守恒自检，但没有统计显著性检验**：单期环比仍是主要形态（已补日历口径提示：日均波动 + 天数可解释比例），
+  阈值 5% 是经验值，未在真实波动分布上标定，因此**假阳性率未被度量**——这是下一步最该补的评测。
+- **比率/均值类指标不做"占波动 X%"**：分段 delta 之和在该类指标上数学不成立（AOV 按州可差到 80%），
+  系统会自动降级为分段对照并说明原因。要给出真正的贡献度需要 rate/mix 分解（未实现）。
+- **评价类指标的口径已显式化**：Olist 的 `reviews` 表有 802 个重复 `review_id`（100,000 行 / 99,173 个唯一），
+  因此"评价数/好评率"采用**去重口径**（`COUNT(DISTINCT review_id)`）并在配置 `desc` 里写明；
+  `avg_review` 不支持 `category` 维度（1:多 JOIN 下 AVG 无法去重，需编译器支持子查询聚合）。
+- **数据层**：依赖真实 Olist `data/olist/olist.db`；`data/` 下产物（审计 JSONL、HITL、报告、订阅）均为运行期生成、不进版本库。
+- **长时记忆 / Checkpoint 未实现**。`config/settings.yaml` 中未被代码读取的历史键已删除
+  （`pipeline.max_repair_round`、`route_llm_fallback`、`eval.dataset` 等），
+  `security.allow_multi_statement` 也已移除——实测该开关无意义（SQLite `execute` 与 pymysql 默认都不支持多语句）。
+- **外部库（MySQL/PostgreSQL）**：已实现语句级安全校验、会话级只读（MySQL 显式关闭 autocommit + 只读事务；
+  PG 连接参数 `default_transaction_read_only=on`）与查询级超时（`MAX_EXECUTION_TIME` / `statement_timeout`），
+  并有单测锁住语句序列；但**真实库连通性仍需在装有驱动与目标库的环境验证**。
+  另外行数上限是客户端 `fetchmany` 截断（服务端仍会扫完），所以超时护栏不可省。
+- **审计**：SQLite 为**权威 sink**（append-only 触发器，禁止 DELETE/UPDATE），JSONL 仅作兼容镜像；
+  `/api/audit` 只读 SQLite 并支持分页。权威写入失败会记日志与计数（`audit_write_failures()`，`/health` 可见）；
+  镜像失败只影响镜像（`audit_mirror_failures()`），不再出现"两个 sink 各说各话"。
+- **前端未纳入本仓库的 CI**：`web/`（Vue3 + ECharts）当前只有分析演示页，
+  无 lint/构建流水线；登录、查询历史、收藏、反馈等能力只有数据表与库函数，尚未暴露端点。
 - **数据源密码**使用 XOR+Base64 **可逆编码**（密钥为源码内硬编码的兜底值，非加密）存储于 `data/datasources.yaml`（已 gitignore），仅原型级；生产部署应改用密钥管理服务（KMS）。
-- **用户密码**使用 SHA-256 哈希存储于本地 SQLite（`data/app.db`，已 gitignore），但**盐值是全局硬编码常量**且比较非常量时间，仅原型级，不可用于生产。
-- **API 鉴权已修复**：`/api/query` 的角色**只认凭据、不认请求体**。配置 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 后必须带 `X-API-Token`；未配置时（本地/演示）忽略请求体 role，按最小权限角色 `SQLPA_DEFAULT_ROLE`（默认 analyst）执行。**生产部署务必配置 token 或接入企业鉴权。**
-
-- **归因决策层有 32 条专家自标用例**（`evaluation/eval_decisions.py`）：26 条正例（14 条由规则+门控确定性命中、12 条真追问交给 LLM；需 `--llm` 实跑）+ **6 条 BORDERLINE 判断题**（规则判不出、专测 `llm_value` 增值）。**真值由实现者自标、非独立第三方**，只作回归测试与方法论演示，不作泛化准确率证据（系统级准确率只由 Spider-dev 支撑）。离线（`llm=None`）只命中 26/32=81.2%，**评测确有会判错的题，不是自证 100%**；接真实 LLM 后 `llm_value`=接 LLM 命中率 − 纯规则命中率，如实显现判断力增量。门控判据是在观察正例问法后定的，**仍存在过拟合风险**，别把任何数字当普适准确率。
+- **用户密码**使用 SHA-256 哈希存储于本地 SQLite（`data/app.db`，已 gitignore），但**盐值是全局硬编码常量**且比较非常量时间，仅原型级；`ensure_default_users` 还会预置 `admin/admin123`，**上线前必须删除或强制改密**。
+- **API 鉴权**：`/api/query`、`/api/analyze*`、`/api/audit`、`/api/datasources` 的角色**只认凭据、不认请求体**。
+  配置 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 后必须带 `X-API-Token`；
+  未配置时（本地/演示）按最小权限角色 `SQLPA_DEFAULT_ROLE`（默认 analyst）执行，`/api/audit` 对非 admin 脱敏。
+  **生产部署务必配置 token 或接入企业鉴权**。
+- **行级权限是应用层实现（RLS-lite）**：谓词注入编译后的 WHERE，可见、可测、与口径一起进审计；
+  但它**不是数据库原生 RLS** —— 绕过应用直连数据库即失效。生产应叠加数据库视图/RLS 策略或独立只读账号。
+- **指标血缘是表/列级静态解析**（来自 `from_clause`/`join_clause`/表达式），不是数据库字段级血缘，
+  也不含上游加工链路与字段级影响分析。
+- **统计门控是近似检验**：Welch z 检验假设日间独立、近似正态，对强趋势/强周期数据偏保守；
+  它只用来**抑制**告警（减少假阳性），不用来"证明"波动存在。假阳性率本身仍未被精确度量
+  （`evaluation/eval_alert_quality.py` 报的是告警量下降与成因结构，真 FP/FN 需独立标注集）。
+- **订阅告警无邮件/SMS 通道**：需要 SMTP/短信服务凭据与配额，属部署侧配置；仓库内提供的是
+  `console / file / webhook` 三种通道 + cron 调度入口（`tools/run_subscriptions.py`），**内置调度器刻意不做**。
+- **归因决策层有 32 条专家自标用例**（`evaluation/eval_decisions.py`）：26 条正例 + 6 条 BORDERLINE 判断题。
+  **真值由实现者自标、非独立第三方**；离线（`llm=None`）命中 26/32=81.2%，`llm_value=+0.0%`（判断题 0/6 → 5/6），
+  门控判据存在过拟合风险，**不要把它当普适准确率**。
 
 ## 指标口径
 

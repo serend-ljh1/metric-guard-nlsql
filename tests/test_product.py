@@ -37,19 +37,19 @@ def test_in_scope_certified(env):
 
 
 def test_out_of_scope_offline_rejected(env):
-    """口径外：语义层覆盖不到 → 离线（无 LLM）时明确拒绝，不做兜底。"""
+    """口径外：语义层覆盖不到 → 明确拒绝（可信归因诊断，不做兜底自由查询）。"""
     sb, cfg, db = env
     a = answer("每个客服的响应时长是多少", cfg, sb, db, llm=None)
-    assert not a["ok"] and "自由查询" in a["reject"]
+    assert not a["ok"] and "仅支持口径内指标" in a["reject"]
 
 
-def test_out_of_scope_free_query(env):
-    """口径外 + 有 LLM → 降级到多 Agent 自由生成，并标注未经口径认证。"""
+def test_out_of_scope_rejected_even_with_llm(env):
+    """口径外 + 有 LLM → 同样明确拒绝（不再降级自由生成 SQL，系统只出口径内认证结果）。"""
     sb, cfg, db = env
     a = answer("每个客服的响应时长是多少", cfg, sb, db, llm=MockLLM())
-    assert a["mode"] == "free" and a["ok"]
-    assert a["certified"] is False   # 降级标注：未经口径认证
-    assert a.get("path") == "fallback"
+    assert not a["ok"] and a["mode"] == "metric"
+    assert a["certified"] is False
+    assert "口径内指标" in a["reject"]
 
 
 def test_in_scope_uses_semantic_path_not_llm(env):

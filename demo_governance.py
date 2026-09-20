@@ -81,7 +81,15 @@ def main():
             if r["is_abnormal"]:
                 print("  → 超过阈值，维度拆解（并行查询）：")
                 for c in r["top_contributors"]:
-                    print(f"    - {c['desc']}  (占整体波动 {c['pct_of_change']*100:.0f}%)")
+                    # pct_of_change 可能为 None：比率/均值类指标或"维度没覆盖全部行"时，
+                    # 系统会拒绝给出"占波动"（数学上不成立），这里如实显示而不是硬乘。
+                    pct = c.get("pct_of_change")
+                    share = f"占整体波动 {pct * 100:.0f}%" if pct is not None else "占比不适用（不可加指标）"
+                    print(f"    - {c['desc']}  ({share})")
+                if r.get("contribution_note"):
+                    print(f"  ⚠ {r['contribution_note']}")
+                if (r.get("calendar") or {}).get("note"):
+                    print(f"  ⚠ {r['calendar']['note']}")
             else:
                 print(f"  → 波动在阈值内（默认5%），不展开归因/不告警")
             break  # 只取第一个有完整结果的月份对

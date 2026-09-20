@@ -12,8 +12,8 @@ run_business.py
   - 引擎的多Agent自愈能力保留在评测模式(自由SQL)使用——这正是两套模式的分工。
 
 用法：
-  # 真实业务查询（使用 .env 的 LLM Key；数据默认 data/olist/olist.db，缺省则用样本）
-  python run_business.py --question "2026年8月各个品类的GMV"
+  # 真实业务查询（使用 .env 的 LLM Key；数据默认 data/olist/olist.db）
+  python run_business.py --question "2018年8月各个品类的GMV"
   python run_business.py --mock --question "每州的客单价"     # 离线用关键词匹配
 """
 from __future__ import annotations
@@ -40,7 +40,6 @@ from sqlpa.business.audit import append_audit, AuditRecord  # noqa: E402
 from sqlpa.business.permissions import check_access, mask_result  # noqa: E402
 from sqlpa.sandbox.sql_executor import SqlSandbox, ExecConfig  # noqa: E402
 
-SAMPLE_DB = ROOT / "data" / "olist_sample" / "sample.db"
 REAL_DB = ROOT / "data" / "olist" / "olist.db"
 
 DEFAULT_QS = [
@@ -48,19 +47,15 @@ DEFAULT_QS = [
     "各州的客单价",
     "各品类的取消率",
     "各州的订单数",
-    "每个SKU的复购率",   # 口径外 → 演示自由查询分级放行(结果降级标注)
 ]
 
 
 def pick_db() -> Path:
-    if REAL_DB.exists():
-        print(f"  [库] 使用真实 Olist 数据: {REAL_DB}")
-        return REAL_DB
-    from build_olist_sample import build as build_sample
-    build_sample()
-    print(f"  [库] 未发现真实 Olist 数据，使用同结构样本库(仅演示组装逻辑): {SAMPLE_DB}\n"
-          f"      真实数据请先 python tools/build_olist_db.py")
-    return SAMPLE_DB
+    if not REAL_DB.exists():
+        raise FileNotFoundError(
+            f"缺少真实 Olist 数据 {REAL_DB}，请先 python tools/build_olist_db.py")
+    print(f"  [库] 使用真实 Olist 数据: {REAL_DB}")
+    return REAL_DB
 
 
 def run_question(question: str, cfg, sb, db_path, llm, role: str = "analyst",

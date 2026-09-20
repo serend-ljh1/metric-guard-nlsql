@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.business.datasources
 ==========================
 数据源注册中心：持久化「业务库连接规格」，支持 SQLite / MySQL / PostgreSQL。
@@ -18,9 +18,37 @@ from typing import Dict, List, Optional
 import yaml
 
 _STORE = Path(__file__).resolve().parents[3] / "data" / "datasources.yaml"
+_KEY_FILE = Path(__file__).resolve().parents[3] / "data" / ".datasource_key"
 
-# 加密密钥：优先取环境变量，否则用固定派生密钥（原型用）
-_SECRET = os.environ.get("SQLPA_DS_SECRET", "sqlpa_datasource_secret_2026").encode()
+
+def _load_secret() -> bytes:
+    """取加密密钥：环境变量 > 本机密钥文件（首次自动生成）> 拒绝启动。
+
+    旧实现在源码里硬编码 `sqlpa_datasource_secret_2026` —— 等于没有加密：
+    任何拿到仓库的人都能解开 datasources.yaml 里的库密码。
+    现在密钥必须来自环境变量或**本机生成且 gitignore 的**密钥文件，源码里不再有可用密钥。
+    """
+    env = (os.environ.get("SQLPA_DS_SECRET") or "").strip()
+    if env:
+        return env.encode()
+    if _KEY_FILE.exists():
+        return _KEY_FILE.read_bytes().strip()
+    import secrets
+    key = secrets.token_bytes(32)
+    _KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _KEY_FILE.write_bytes(key)
+    try:
+        _KEY_FILE.chmod(0o600)
+    except OSError:
+        pass
+    print(f"[安全提示] 已生成本机数据源密钥 {_KEY_FILE}（请勿提交；"
+          f"生产环境请用 SQLPA_DS_SECRET 或 KMS 注入）")
+    return key
+
+
+_SECRET = _load_secret()
+# 旧硬编码密钥：**仅用于解密历史数据**（见 decrypt_password），不再参与新数据加密
+_LEGACY_KEY = b"sqlpa_datasource_secret_2026"
 
 
 def _xor_crypt(data: bytes, key: bytes) -> bytes:
@@ -40,10 +68,24 @@ def encrypt_password(plain: str) -> str:
 
 
 def decrypt_password(enc: str) -> str:
+    """解密连接密码。
+
+    兼容性：历史数据的密码可能由**旧硬编码密钥**加密（源码里那把 `sqlpa_datasource_secret_2026`）。
+    硬编码密钥已从加密路径移除（不再用于新数据），但这里保留**仅解密**的回退，
+    避免升级后旧数据源直接不可用；命中回退时会提示重新保存（以新密钥重加密）。
+    """
     if not enc or not enc.startswith("enc:"):
         return enc  # 兼容旧的明文密码
     raw = base64.b64decode(enc[4:])
-    return _xor_crypt(raw, _SECRET).decode("utf-8")
+    try:
+        plain = _xor_crypt(raw, _SECRET).decode("utf-8")
+        if plain.isprintable():
+            return plain
+    except UnicodeDecodeError:
+        pass
+    legacy = _xor_crypt(raw, _LEGACY_KEY).decode("utf-8", "replace")
+    print("[安全提示] 该数据源密码由旧的硬编码密钥加密，请在数据源管理中重新保存以升级密钥。")
+    return legacy
 
 
 def _load() -> Dict:
