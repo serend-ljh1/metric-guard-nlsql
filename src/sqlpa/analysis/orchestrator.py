@@ -24,12 +24,11 @@ sqlpa.analysis.orchestrator
 from __future__ import annotations
 
 import datetime
-import json
 import time
 import uuid
 from typing import Callable, Dict, List, Optional, TypedDict
 
-from sqlpa.business import attribution, governance
+from sqlpa.business import attribution, confirm as _confirm
 from sqlpa.business.metric_config import BusinessConfig
 from sqlpa.business.metric_matcher import match
 
@@ -206,7 +205,7 @@ def _build_analysis_graph(cfg: BusinessConfig, sb, db_path: str, llm, role: str,
                           hitl_path: Optional[str], alert_threshold_pct: float,
                           dims_override: Optional[List[str]], memory: Dict,
                           _emit: "_Emitter", question: str, username: str = "",
-                          confirm_metric: Optional[str] = None):
+                          confirm_id: Optional[str] = None):
     """用 LangGraph StateGraph 编排 6 个分析 Agent（节点 + 条件边 + 终止节点）。
 
     每个 Agent 的业务逻辑仍是独立的确定性/LLM 函数（见 `_route` / `_executor` /
@@ -221,40 +220,44 @@ def _build_analysis_graph(cfg: BusinessConfig, sb, db_path: str, llm, role: str,
     """
     from langgraph.graph import END, START, StateGraph
 
+    # 确认门：确认记录在**进入图之前**就从库里取出来并校验（越界/重放在这层拒绝）
+    _confirm_spec, _confirm_err = (None, None)
+    if confirm_id:
+        _confirm_spec, _confirm_err = _confirm.load(cfg, confirm_id)
+
     # ---- 节点：每个 = 一个命名 Agent（发射同名流式事件，逻辑复用原函数）----
 
-    def _confirmed_routing(mk: str):
-        """用户确认/改选口径后，用**确定性**方式锁定指标，不再让 LLM 猜。
+    def _confirmed_routing(spec: Dict):
+        """按**落库的确认记录**逐字重建路由（不再用关键词二次解析）。
 
-        原则：确认口径只锁定"指标 key"，维度/时间范围仍从原问题确定性解析
-        （同一问题两次解析结果一致，第一次待确认窗口里展示的口径维度/时间
-        与确认后执行的完全一致，可复核）。method="confirmed" 用于区分
-        LLM 推断（需确认）与已确认锁定（放行）。
+        旧实现的三个问题：① 只认客户端自报的指标字符串，任何真值都能绕过门；
+        ② 维度/时间用 `_keyword_match(question)` 重新推 → 与确认卡展示的可能不一致；
+        ③ 确认状态只活在前端内存、不落库、无审计。
+        现在 spec 来自 `confirm.load()`（指标/维度/过滤/粒度逐字），method="confirmed"。
         """
-        import sqlpa.business.metric_matcher as _mm
-        m = cfg.metrics.get(mk)
-        if m is None and not mk.startswith(("ratio@", "share@")):
-            return None
-        name = m.name if m is not None else mk
-        _, kw_dims, kw_filters = _mm._keyword_match(question)
-        dims = [d for d in kw_dims if d in cfg.dimensions]
-        time_spec = memory.get("time_spec") or next(
-            (v for ft, v in kw_filters if ft == "time_range"), None)
-        from sqlpa.business.metric_matcher import MatchResult
-        res = MatchResult(matched=True, metric_key=mk, metric_name=name, dims=dims,
-                          filters=([("time_range", time_spec)] if time_spec else []),
-                          method="confirmed", time_grain=_mm._extract_grain(question))
+        res = _confirm.res_from_spec(spec)
+        time_spec = spec.get("time_spec")
         return {"route": "analyze" if time_spec else "query_only", "matched": True,
-                "resumed": False, "question": question, "metric": mk,
-                "metric_name": name, "dims": dims, "time_spec": time_spec,
-                "method": "confirmed", "reason": f"口径已由用户确认：指标「{name}」",
-                "res": res}
+                "resumed": False, "question": question, "metric": spec["metric"],
+                "metric_name": spec.get("metric_name") or spec["metric"],
+                "dims": list(spec.get("dims") or []), "time_spec": time_spec,
+                "method": "confirmed",
+                "reason": f"口径已由用户确认：指标「{spec.get('metric_name') or spec['metric']}」",
+                "confirm_id": spec.get("confirm_id"), "res": res}
 
     def node_router(state):
         _emit.agent_start("RouterAgent", "意图分流", "判断本次提问是取数还是波动归因分析")
-        # 用户已在确认窗口锁定口径 → 走确定性路由，跳过 LLM 猜（省一次调用且口径可信）
-        if confirm_metric:
-            routing = _confirmed_routing(confirm_metric) or _route(question, cfg, llm, memory)
+        if _confirm_err:
+            # 越界即拒绝：confirm_id 无效/已用过/指标已不可编译 → 不走 LLM 兜底，直接拒
+            reason = f"口径确认无效：{_confirm_err}"
+            _emit.agent_step("RouterAgent", "confirm-invalid", reason)
+            routing = {"route": "unmatched", "matched": False, "resumed": False,
+                       "question": question, "metric": None, "metric_name": "",
+                       "dims": [], "time_spec": None, "method": "rejected",
+                       "reason": reason, "res": None}
+        elif _confirm_spec:
+            # 用户已确认 → 按落库的 spec **逐字**执行（确定性锁定，不再让 LLM 猜）
+            routing = _confirmed_routing(_confirm_spec)
         else:
             routing = _route(question, cfg, llm, memory)
         _emit.agent_step("RouterAgent", "match", routing["reason"],
@@ -272,12 +275,12 @@ def _build_analysis_graph(cfg: BusinessConfig, sb, db_path: str, llm, role: str,
         return {"routing": routing}
 
     def route_next(state):
-        # 条件边三分：已确认/确定性命中 → 执行器；LLM 推断口径且未确认 → 确认终结边；
-        # 未命中 → 拒绝终结边。
-        # 只有 method=="llm"（口径是 LLM 猜出来的，不确定）才需要人工确认；
-        # keyword/memory/confirmed 都是确定性锁定 → 直接放行。
+        # 条件边三分：确定性命中（keyword/memory/confirmed）→ 执行器；
+        # **LLM 推断的口径一律先过确认门**；未命中 → 拒绝终结边。
+        # 注意：这里只看 routing.method，不再看任何客户端传入的参数 ——
+        # 旧实现用 `and not confirm_metric`，于是"随便传个真值"就能让 LLM 猜的口径直接执行。
         r = state["routing"]
-        if r.get("matched") and r.get("method") == "llm" and not confirm_metric:
+        if r.get("matched") and r.get("method") == "llm":
             return "confirm"
         return "executor" if r.get("matched") else "unmatched"
 
@@ -292,28 +295,27 @@ def _build_analysis_graph(cfg: BusinessConfig, sb, db_path: str, llm, role: str,
     def node_confirm(state):
         """口径确认终结节点（HITL 前置）：LLM 推断的口径不回显确认就直接进昂贵归因，
         是"确定性保底、LLM 兜底、越界即拒绝"的可信闭环节点——先让用户认口径，再算数。
+
+        **落库**：把待确认 spec 登记为一条记录并返回 confirm_id；客户端只能凭 id 确认，
+        不能自报指标名。这样确认动作可审计、可被他人接手、也不会因刷新丢失。
         """
         r = state["routing"]
-        proposed = {"metric": r.get("metric"), "metric_name": r.get("metric_name"),
-                    "dims": list(r.get("dims") or []),
-                    "time_spec": r.get("time_spec"),
+        spec = _confirm.proposed_spec(r.get("res"), r.get("time_spec"), question, cfg=cfg)
+        cid = _confirm.persist(spec, actor=username)
+        proposed = {"metric": spec["metric"], "metric_name": spec["metric_name"],
+                    "dims": spec["dims"], "time_spec": spec["time_spec"],
                     "method": r.get("method")}
-        # 可选口径候选：全部已登记基础指标 + 派生指标（用户确认/改选时下拉）
-        candidates = [{"key": k, "name": m.name} for k, m in cfg.metrics.items()]
-        for d in (getattr(cfg, "derived_metrics", None) or {}).values():
-            if d.get("key"):
-                candidates.append({"key": d["key"], "name": d.get("name", d["key"])})
+        cands = _confirm.candidates(cfg)
         _emit({"type": "confirm_required", "name": "MetricMatcher",
-               "detail": (f"系统用 LLM 把问题推断为口径「{r.get('metric_name')}」"
-                          f"（{r.get('metric')}），请确认后再拉取并归因"),
-               "proposed": proposed, "candidates": candidates, "at": _now()})
+               "detail": (f"系统用 LLM 把问题推断为口径「{spec['metric_name']}」"
+                          f"（{spec['metric']}），请确认后再拉取并归因"),
+               "confirm_id": cid, "proposed": proposed, "candidates": cands, "at": _now()})
         return {"reject": {"ok": False, "need_confirm": True, "route": "confirm",
-                           "reject": "口径待确认",
-                           "metric": r.get("metric"),
-                           "metric_name": r.get("metric_name", ""),
+                           "reject": "口径待确认", "confirm_id": cid,
+                           "metric": spec["metric"], "metric_name": spec["metric_name"],
                            "conclusion": "", "evidence": [], "actions": {},
                            "decision": {"alert": False, "reason": "口径待用户确认"},
-                           "proposed": proposed, "candidates": candidates}}
+                           "proposed": proposed, "candidates": cands}}
 
     def node_executor(state):
         _emit.agent_start("ExecutorAgent", "确定性取数",
@@ -393,7 +395,7 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
                  alert_threshold_pct: float = 0.05,
                  dims_override: Optional[List[str]] = None,
                  memory: Optional[Dict] = None,
-                 confirm_metric: Optional[str] = None) -> Dict:
+                 confirm_id: Optional[str] = None) -> Dict:
     """多 Agent 分析编排（**LangGraph StateGraph**）：节点+条件边+收敛，发射流式事件。
 
     编排由 `_build_analysis_graph` 编译出的图 `invoke` 驱动，而不是手写 if/return：
@@ -407,6 +409,8 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
       ├ 写：last_drill={dim,value,path_desc}、metric、att_change_pct
       └ 读：followup 追问时沿上轮主因续下钻（不再从零开始）
     不传则本轮独立、无记忆（向后兼容）。
+    confirm_id: 口径确认门的**落库确认记录 id**（LLM 推断口径时由本函数返回）。
+      传入后按记录里的 spec 逐字执行；无效/已用过/指标已下线 → 明确拒绝。用掉即置 confirmed。
     """
     if memory is None:
         memory = {}
@@ -418,7 +422,7 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
 
     graph = _build_analysis_graph(cfg, sb, db_path, llm, role, hitl_path,
                                   alert_threshold_pct, dims_override, memory,
-                                  _emit, question, username, confirm_metric)
+                                  _emit, question, username, confirm_id)
     # ---- 可观测性：逐请求记录 LLM 调用/Token/成本/时延（此前生产路径完全不计量）----
     t0 = time.perf_counter()
     llm_before = _llm_usage_snapshot(llm)
@@ -430,25 +434,31 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
         out = dict(state["reject"])
         out["observability"] = obs
         if out.get("need_confirm"):
-            # 口径确认：不套 summarize_final 的结论包装，把 proposed/candidates 原样透出
-            # 给前端，供确认卡渲染（确认后带 confirm_metric 重新发起同一分析）。
+            # 口径确认：不套 summarize_final 的结论包装，把 confirm_id/proposed/candidates
+            # 原样透出给前端渲染确认卡（确认后带 confirm_id 重新发起同一分析）。
             final = {
                 "analysis_id": aid, "question": question,
                 "ok": False, "route": "confirm", "reject": out.get("reject"),
                 "metric": out.get("metric"), "metric_name": out.get("metric_name", ""),
                 "conclusion": "", "evidence": [], "actions": {},
                 "decision": out.get("decision", {}),
-                "need_confirm": True, "proposed": out.get("proposed"),
+                "need_confirm": True, "confirm_id": out.get("confirm_id"),
+                "proposed": out.get("proposed"),
                 "candidates": out.get("candidates", []),
                 "observability": obs,
             }
             if emit:
                 emit({"type": "done", "analysis_id": aid, "payload": final, "at": _now()})
                 emit({"type": "confirm_required", "analysis_id": aid,
+                      "confirm_id": out.get("confirm_id"),
                       "proposed": out.get("proposed"), "candidates": out.get("candidates"),
                       "at": _now()})
             return final
         return summarize_final(question, aid, out, _emit)
+
+    # 确认记录用掉即置 confirmed（防重放）：走到这里说明按该记录成功执行了
+    if confirm_id:
+        _confirm.consume(confirm_id, actor=username)
 
     merged = state["merged"]
     final = summarize_final(question, aid, {
@@ -480,6 +490,7 @@ def _executor(cfg: BusinessConfig, sb, db_path: str, res, routing: Dict,
     schema = _extract_schema(sb, db_path)
     spec = QuerySpec(metric=routing["metric"], dims=list(res.dims or []),
                      filters=list(res.filters or []),
+                     having=list(getattr(res, "having", None) or []),
                      time_grain=getattr(res, "time_grain", None))
     # 行级权限：分析链与取数链走同一套（否则分析入口就是绕过 RLS 的第二条路）
     row_filters = row_filter_clauses(role, cfg.permissions)

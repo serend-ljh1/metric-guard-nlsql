@@ -54,13 +54,28 @@ CREATE TABLE IF NOT EXISTS hitl_queue (
     username      TEXT,
     user_input    TEXT,
     matched_metric TEXT,
+    owner         TEXT,
     generated_sql TEXT,
     reject_reason TEXT,
-    status        TEXT DEFAULT 'pending',  -- pending / approved / rejected
+    time_spec     TEXT,                -- 异常所属时间窗（重跑验证用）
+    dims_json     TEXT,                -- 异常归因维度（重跑验证用）
+    status        TEXT DEFAULT 'pending',  -- pending/in_progress/fixed/verified/dismissed/reopened
     decided_by    TEXT,
     decided_at    TEXT,
     created_at    TEXT NOT NULL
 );
+
+-- HITL 状态流转历史（append-only）：每个工单"谁在什么时候把它从什么状态改成了什么"
+CREATE TABLE IF NOT EXISTS hitl_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_id   TEXT NOT NULL,
+    from_status TEXT,
+    to_status   TEXT NOT NULL,
+    actor       TEXT,
+    note        TEXT,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hitl_history ON hitl_history(record_id);
 
 CREATE TABLE IF NOT EXISTS feedback (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,6 +139,26 @@ BEFORE UPDATE ON metric_versions
 BEGIN
     SELECT RAISE(ABORT, 'metric_versions 为 append-only：禁止修改口径历史');
 END;
+
+-- 口径确认（HITL 前置门）：LLM 猜出来的口径必须先由人确认才允许拉数/归因。
+-- 旧实现把"确认"放在前端内存里、且只看一个客户端自报的 confirm_metric 字符串 ——
+-- 既不落库（刷新即失、别人看不到、无审计），又能被一个真值参数绕过门。
+-- 现在：确认是一条**记录**，执行时按记录里的 spec 逐字执行，且用掉即置 confirmed。
+CREATE TABLE IF NOT EXISTS metric_confirmations (
+    id           TEXT PRIMARY KEY,
+    question     TEXT,
+    metric       TEXT NOT NULL,
+    metric_name  TEXT,
+    dims_json    TEXT,
+    filters_json TEXT,
+    time_grain   TEXT,
+    method       TEXT,                  -- 提出该口径的方式：llm（系统猜的）
+    status       TEXT NOT NULL DEFAULT 'pending',   -- pending / confirmed / dismissed
+    actor        TEXT,
+    created_at   TEXT NOT NULL,
+    decided_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_confirm_status ON metric_confirmations(status);
 """
 
 
@@ -142,6 +177,9 @@ _MIGRATIONS = [
     ("audit_logs", "total_tokens", "INTEGER DEFAULT 0"),
     ("audit_logs", "cost", "REAL DEFAULT 0"),
     ("audit_logs", "latency_ms", "REAL DEFAULT 0"),
+    ("hitl_queue", "owner", "TEXT"),
+    ("hitl_queue", "time_spec", "TEXT"),
+    ("hitl_queue", "dims_json", "TEXT"),
 ]
 
 
@@ -346,30 +384,151 @@ def get_metric_version(metric_key: str, version_seq: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+# ================= 口径确认（HITL 前置门） =================
+def insert_confirmation(question: str, metric: str, metric_name: str = "",
+                        dims: Optional[list] = None, filters: Optional[list] = None,
+                        time_grain: Optional[str] = None, method: str = "llm",
+                        actor: str = "") -> str:
+    """登记一条待确认口径，返回 its id（客户端凭 id 确认，不再自报指标名）。"""
+    cid = uuid.uuid4().hex[:12]
+    with _conn() as c:
+        c.execute("""INSERT INTO metric_confirmations
+            (id,question,metric,metric_name,dims_json,filters_json,time_grain,method,
+             status,actor,created_at)
+            VALUES(?,?,?,?,?,?,?,?, 'pending', ?,?)""",
+            (cid, question, metric, metric_name,
+             json.dumps(list(dims or []), ensure_ascii=False),
+             json.dumps([[t, v] for t, v in (filters or [])], ensure_ascii=False),
+             time_grain or "", method, actor, _now()))
+    return cid
+
+
+def get_confirmation(cid: str) -> Optional[dict]:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM metric_confirmations WHERE id=?", (cid,)).fetchone()
+    if not row:
+        return None
+    rec = dict(row)
+    try:
+        rec["dims"] = json.loads(rec.get("dims_json") or "[]")
+        rec["filters"] = [tuple(x) for x in json.loads(rec.get("filters_json") or "[]")]
+    except Exception:  # noqa: BLE001
+        rec["dims"], rec["filters"] = [], []
+    return rec
+
+
+def list_confirmations(status: Optional[str] = None, limit: int = 50) -> list:
+    sql = "SELECT * FROM metric_confirmations"
+    args: list = []
+    if status:
+        sql += " WHERE status=?"
+        args.append(status)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(max(1, int(limit)))
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(sql, args).fetchall()]
+    for r in rows:
+        try:
+            r["dims"] = json.loads(r.get("dims_json") or "[]")
+            r["filters"] = [tuple(x) for x in json.loads(r.get("filters_json") or "[]")]
+        except Exception:  # noqa: BLE001
+            r["dims"], r["filters"] = [], []
+    return rows
+
+
+def decide_confirmation(cid: str, status: str, actor: str = "") -> bool:
+    """置 confirmed / dismissed（原子更新；已处理过的不再改）。"""
+    if status not in ("confirmed", "dismissed", "pending"):
+        return False
+    with _conn() as c:
+        cur = c.execute("UPDATE metric_confirmations SET status=?, actor=?, decided_at=? "
+                        "WHERE id=? AND status='pending'", (status, actor, _now(), cid))
+        return cur.rowcount > 0
+
+
 # ================= HITL =================
 def insert_hitl(rec: dict) -> None:
     rec.setdefault("created_at", _now())
     with _conn() as c:
         c.execute("""INSERT OR IGNORE INTO hitl_queue
-            (record_id,username,user_input,matched_metric,generated_sql,reject_reason,status,created_at)
-            VALUES(?,?,?,?,?,?,?,?)""",
+            (record_id,username,user_input,matched_metric,owner,generated_sql,
+             reject_reason,time_spec,dims_json,status,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
             (rec.get("record_id"), rec.get("username", ""), rec.get("user_input", ""),
-             rec.get("matched_metric", ""), rec.get("generated_sql", ""),
-             rec.get("reject_reason", ""), rec.get("status", "pending"), rec["created_at"]))
+             rec.get("matched_metric", ""), rec.get("owner", ""),
+             rec.get("generated_sql", ""), rec.get("reject_reason", ""),
+             rec.get("time_spec", ""), json.dumps(rec.get("dims") or [], ensure_ascii=False),
+             rec.get("status", "pending"), rec["created_at"]))
+
+
+def hitl_get(record_id: str) -> Optional[dict]:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM hitl_queue WHERE record_id=?", (record_id,)).fetchone()
+    if not row:
+        return None
+    rec = dict(row)
+    try:
+        rec["dims"] = json.loads(rec.get("dims_json") or "[]")
+    except Exception:  # noqa: BLE001
+        rec["dims"] = []
+    return rec
+
+
+def hitl_find_open(matched_metric: str, time_spec: str = "") -> Optional[dict]:
+    """幂等键：同一(指标, 时间窗)若已有未关闭工单，则返回它而不是再开一张。
+
+    旧实现每次分析都新 uuid → 同一异常反复告警，人工队列被刷屏。
+    """
+    open_status = ("pending", "in_progress", "fixed", "reopened")
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM hitl_queue WHERE matched_metric=? AND "
+            f"COALESCE(time_spec,'')=? AND status IN {open_status} "
+            "ORDER BY id DESC LIMIT 1", (matched_metric, time_spec or "")).fetchone()
+    return dict(row) if row else None
+
+
+def hitl_set_status(record_id: str, status: str, actor: str = "", note: str = "") -> bool:
+    """状态流转（写历史 + 原子更新；工单不存在返回 False）。"""
+    with _conn() as c:
+        row = c.execute("SELECT status FROM hitl_queue WHERE record_id=?",
+                        (record_id,)).fetchone()
+        if not row:
+            return False
+        old = row["status"]
+        c.execute("UPDATE hitl_queue SET status=?, decided_by=?, decided_at=? WHERE record_id=?",
+                  (status, actor, _now(), record_id))
+        c.execute("""INSERT INTO hitl_history(record_id,from_status,to_status,actor,note,created_at)
+                     VALUES(?,?,?,?,?,?)""", (record_id, old, status, actor, note, _now()))
+        return True
+
+
+def hitl_history(record_id: str) -> list:
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM hitl_history WHERE record_id=? ORDER BY id", (record_id,)).fetchall()]
 
 
 def list_hitl(status: str = "pending", limit: int = 50) -> list:
+    sql = "SELECT * FROM hitl_queue"
+    args: list = []
+    if status and status != "all":
+        sql += " WHERE status=?"
+        args.append(status)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(max(1, int(limit)))
     with _conn() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT * FROM hitl_queue WHERE status=? ORDER BY created_at DESC LIMIT ?",
-            (status, limit)).fetchall()]
+        rows = [dict(r) for r in c.execute(sql, args).fetchall()]
+    for r in rows:
+        try:
+            r["dims"] = json.loads(r.get("dims_json") or "[]")
+        except Exception:  # noqa: BLE001
+            r["dims"] = []
+    return rows
 
 
 def decide_hitl(record_id: str, status: str, decided_by: str = "") -> bool:
-    with _conn() as c:
-        cur = c.execute("UPDATE hitl_queue SET status=?, decided_by=?, decided_at=? WHERE record_id=?",
-                        (status, decided_by, _now(), record_id))
-        return cur.rowcount > 0
+    return hitl_set_status(record_id, status, actor=decided_by)
 
 
 # ================= 反馈 =================

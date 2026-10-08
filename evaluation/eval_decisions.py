@@ -19,7 +19,7 @@ evaluation/eval_decisions.py
     - 离线基线（llm=None，纯规则 + 策略门控）：
         python -m evaluation.eval_decisions
     - 接真实 LLM（.env 配好 LLM_API_KEY / LLM_API_BASE）：
-        python -m evaluation.eval_decisions --llm --model qwen3.8-max --out eval_results/decision.json
+        python -m evaluation.eval_decisions --llm --model qwen3.8-max --out evaluation/reports/decisions_llm.json
       默认**钉死单模型**（不放开模型池），避免额度耗尽时静默换模型、把别人的分数记到它头上。
     - 作为 pytest 用例被 tests/test_attribution_decisions.py 引用，保证不改坏。
 
@@ -274,11 +274,27 @@ def action_tally(annotated: List[Dict]) -> Dict[str, int]:
 
 # ---------------------------------------------------------------- 执行正确性（③）
 
+def _month_anchors() -> Dict[str, str]:
+    """与「本月 / 上月」语义对齐的日期锚点（相对运行当天动态计算）。
+
+    回归背景（日期炸弹）：早期这里把订单日期硬编码为 2026-08 / 2026-09，
+    再用 current_spec="本月" 取数；而归因的时间语义由 `attribution._now()`
+    用 `date.today()` 解析。运行日期一旦不在 2026-09，当期范围就落在样例库之外，
+    factorize / drill 全部 ok=False，执行正确性评测随之失败。
+    """
+    import datetime
+    first = datetime.date.today().replace(day=1)
+    prev_first = (first - datetime.timedelta(days=1)).replace(day=1)
+    return {"current": first.isoformat(), "previous": prev_first.isoformat(),
+            "previous_late": prev_first.replace(day=20).isoformat()}
+
+
 def _build_sample_db(tmp_path: Path) -> Path:
-    """8 月(GMV150=2单×75) vs 9 月(GMV80=1单×80)：既支持维度归因也支持因子分解。"""
+    """上月(GMV150=2单×75) vs 本月(GMV80=1单×80)：既支持维度归因也支持因子分解。"""
+    m = _month_anchors()
     p = tmp_path / f"exec_factorize-{uuid.uuid4().hex[:6]}.db"
     con = sqlite3.connect(p)
-    con.executescript("""
+    con.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
@@ -286,8 +302,8 @@ def _build_sample_db(tmp_path: Path) -> Path:
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
       INSERT INTO orders VALUES
-        ('o1','c1','2026-08-01','delivered'),('o2','c1','2026-08-05','delivered'),
-        ('o3','c2','2026-09-01','delivered');
+        ('o1','c1','{m["previous"]}','delivered'),('o2','c1','{m["previous_late"]}','delivered'),
+        ('o3','c2','{m["current"]}','delivered');
       INSERT INTO order_items VALUES ('o1','p1',100),('o2','p1',50),('o3','p2',80);
       INSERT INTO products VALUES ('p1','alimentos'),('p2','alimentos');
     """)
@@ -298,9 +314,10 @@ def _build_sample_db(tmp_path: Path) -> Path:
 
 def _build_drill_db(tmp_path: Path) -> Path:
     """双品类库：整体下滑但主因集中在 alimentos 分支，下钻后应在该分支内隔离出次主因。"""
+    m = _month_anchors()
     p = tmp_path / f"exec_drill-{uuid.uuid4().hex[:6]}.db"
     con = sqlite3.connect(p)
-    con.executescript("""
+    con.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
@@ -308,8 +325,8 @@ def _build_drill_db(tmp_path: Path) -> Path:
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
       INSERT INTO orders VALUES
-        ('o1','c1','2026-08-01','delivered'),('o2','c1','2026-08-02','delivered'),
-        ('o3','c2','2026-08-03','delivered'),('o4','c2','2026-09-01','delivered');
+        ('o1','c1','{m["previous"]}','delivered'),('o2','c1','{m["previous"]}','delivered'),
+        ('o3','c2','{m["previous"]}','delivered'),('o4','c2','{m["current"]}','delivered');
       INSERT INTO order_items VALUES
         ('o1','p1',100),('o2','p1',100),('o3','p3',60),('o4','p3',90);
       INSERT INTO products VALUES ('p1','alimentos'),('p3','health');
@@ -588,7 +605,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         python -m evaluation.eval_decisions                    # 离线规则基线（不花钱）
         python -m evaluation.eval_decisions --llm              # 真实 LLM 参与判断
-        python -m evaluation.eval_decisions --llm --model qwen3.8-max --out eval_results/decision.json
+        python -m evaluation.eval_decisions --llm --model qwen3.8-max --out evaluation/reports/decisions_llm.json
     """
     import argparse
     import json

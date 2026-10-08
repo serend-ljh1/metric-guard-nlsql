@@ -33,6 +33,13 @@ jobs:
         # 这一步保证"覆盖率"不会因为改配置或改匹配规则而悄悄退化。
         run: python evaluation/eval_product.py --report-dir /tmp/eval_reports
 
+      - name: Sandbox external corpus eval (offline, in-repo corpus)
+        # 外部对抗语料（61 条）：危险拦截率 / **只读误杀率** / 库不变性 / 过滤值注入。
+        # 语料在仓库内（evaluation/sandbox_corpus/），因此可进 CI：
+        # 危险拦截必须 100%、库文件 sha256 与行数必须一字不变。
+        # 注：外部基准 eval_external_bank.py 需要仓库外的 Spider 数据集，故不在此运行。
+        run: python evaluation/eval_sandbox_external.py --report-dir /tmp/eval_reports
+
       - name: Compile-check entrypoints
         # 入口脚本语法自检（此前的 Streamlit app.py 冒烟步骤在 app.py 下线后一直让 CI 失败，
         # 已替换为对**现存**入口的检查）。

@@ -1,0 +1,480 @@
+# ============================================================================
+# 第二个业务域语义层：Spider `world_1`（公开基准库，非本项目自有数据）
+#
+# 用途：给项目一个**外部可比**的语料 —— 问题与 gold SQL 都由第三方（Spider 数据集）
+# 定义，不是本项目自编。评测脚本 `evaluation/eval_external_bank.py` 用它跑
+# 「覆盖率 / 覆盖内执行正确率 / 拒答率」，报告见 `evaluation/reports/`。
+#
+# 为什么用一个完全无关的域：Olist 域只能证明"这套机制在自家数据上跑得通"。
+# 换域只改 YAML、不改代码，才能证明"语义层 + 治理"是**机制**而不是一组硬编码。
+#
+# 与 Olist 配置的差异：
+#   1) 没有时间维度（world 库无日期列）→ 不声明 dt，也就不会走波动归因；
+#   2) 指标的事实表有 3 张（country / city / countrylanguage），
+#      "过滤落在哪张表"决定用哪个指标 —— 见 matcher 的 support 消歧；
+#   3) 关键词词表是英文（`matcher_keywords`），**整体替换**内置中文词表；
+#   4) 过滤取值来自库自身的列（建层时取 DISTINCT），并带词形别名
+#      （库里存 `Africa`，问句写 `African countries`）。
+# ============================================================================
+
+# ---------- 1) 维度（分组字段）----------
+dimensions:
+  - {key: continent, name: 大洲, sql_fragment: "co.Continent"}
+  - {key: region, name: 地区, sql_fragment: "co.Region"}
+  - {key: governmentform, name: 政体, sql_fragment: "co.GovernmentForm"}
+  - {key: country_name, name: 国家, sql_fragment: "co.Name"}
+  - {key: language, name: 语言, sql_fragment: "cl.Language"}
+  - {key: district, name: 城市辖区, sql_fragment: "ci.District"}
+
+# ---------- 2) 过滤条件模板 ----------
+# 写成 `列 {op} {value}` 的模板才能承载比较/区间/集合语义（算子来自 filter_ops 白名单，
+# 永远是配置里的记号，不是问句里的字符串）。
+# 只含 `=` 的模板（如 isofficial）只能等值 —— 触发式过滤的取值本身是布尔语义。
+filter_templates:
+  continent: "co.Continent {op} {value}"
+  region: "co.Region {op} {value}"
+  governmentform: "co.GovernmentForm {op} {value}"
+  country_name: "co.Name {op} {value}"
+  language: "cl.Language {op} {value}"
+  district: "ci.District {op} {value}"
+  indep_year: "co.IndepYear {op} {value}"
+  isofficial: "cl.IsOfficial = 'T'"
+  # 否定形态：自包含的反连接子查询（模板自己定义 cl2/cl3，不需要额外注入 JOIN）。
+  # 这是"非某语言的国家总人口"这类问法能答对的关键 —— 若按正面版本执行，
+  # 会返回**语义恰好相反**的结果，而数值看起来完全合理。
+  language_excl: "co.Code NOT IN (SELECT cl2.CountryCode FROM countrylanguage cl2 WHERE cl2.Language = {value})"
+  language_official_excl: "co.Code NOT IN (SELECT cl3.CountryCode FROM countrylanguage cl3 WHERE cl3.Language = {value} AND cl3.IsOfficial = 'T')"
+
+# ---------- 3) 算子白名单 ----------
+# 规格里只出现**算子名**，SQL 记号只能来自这里：取值走字面量转义、算子走白名单，
+# 意图层/LLM 都无法把任意 SQL 片段送进查询。未声明的过滤类型只允许等值。
+filter_ops:
+  continent: {eq: "=", ne: "!=", in: "IN", nin: "NOT IN"}
+  region: {eq: "=", ne: "!=", in: "IN", nin: "NOT IN"}
+  governmentform: {eq: "=", ne: "!=", in: "IN", nin: "NOT IN"}
+  country_name: {eq: "=", ne: "!=", in: "IN", nin: "NOT IN"}
+  language: {eq: "=", ne: "!=", in: "IN", nin: "NOT IN"}
+  district: {eq: "=", ne: "!=", in: "IN", nin: "NOT IN"}
+  indep_year: {eq: "=", lt: "<", lte: "<=", gt: ">", gte: ">=", between: "BETWEEN", in: "IN"}
+
+# HAVING 的算子白名单（对本指标的**聚合值**做组内筛选，如"语言数 > 2"）
+metric_ops:
+  eq: "="
+  ne: "!="
+  lt: "<"
+  lte: "<="
+  gt: ">"
+  gte: ">="
+  between: "BETWEEN"
+  in: "IN"
+
+# ---------- 3) 指标配置 ----------
+# 声明顺序有意义：同长度关键词命中时取表中靠前者（`country_count` 必须早于
+# `country_government_form_count`，否则 "how many countries ... form of government"
+# 会被判成"数政体种类")。
+metrics:
+  # ===== country 事实表 =====
+  - key: country_count
+    name: 国家数
+    desc: 国家的个数（COUNT(*)）
+    metric_expr: "COUNT(*)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-地理线
+    version: v1
+    additive: true
+
+  - key: country_population_total
+    name: 国家总人口
+    desc: 国家人口合计（SUM(Population)）
+    metric_expr: "SUM(co.Population)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name, language_excl]
+    owner: 数据组-地理线
+    version: v1
+    additive: true
+
+  - key: country_surface_area_total
+    name: 国土总面积
+    desc: 国土面积合计（SUM(SurfaceArea)）
+    metric_expr: "SUM(co.SurfaceArea)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-地理线
+    version: v1
+    additive: true
+
+  - key: country_surface_area_avg
+    name: 平均国土面积
+    desc: 国土面积均值（AVG(SurfaceArea)）
+    metric_expr: "AVG(co.SurfaceArea)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-地理线
+    version: v1
+    additive: false
+
+  - key: country_life_expectancy_avg
+    name: 平均预期寿命
+    desc: 平均预期寿命（AVG(LifeExpectancy)）
+    metric_expr: "AVG(co.LifeExpectancy)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name, language_official_excl]
+    owner: 数据组-民生线
+    version: v1
+    additive: false
+
+  - key: country_population_avg
+    name: 平均国家人口
+    desc: 国家人口均值（AVG(Population)）
+    metric_expr: "AVG(co.Population)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-地理线
+    version: v1
+    additive: false
+
+  - key: country_gnp_avg
+    name: 平均GNP
+    desc: 国民生产总值均值（AVG(GNP)）
+    metric_expr: "AVG(co.GNP)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-财务线
+    version: v1
+    additive: false
+
+  - key: country_gnp_max
+    name: 最大GNP
+    desc: 国民生产总值最大值（MAX(GNP)）
+    metric_expr: "MAX(co.GNP)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region, governmentform]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-财务线
+    version: v1
+    additive: false
+
+  - key: country_government_form_count
+    name: 政体种类数
+    desc: 不同政体形式的个数（COUNT(DISTINCT GovernmentForm)）
+    metric_expr: "COUNT(DISTINCT co.GovernmentForm)"
+    from_clause: "FROM country co"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [continent, region]
+    support_filters: [continent, region, governmentform, country_name]
+    owner: 数据组-地理线
+    version: v1
+    additive: false
+
+  # ===== countrylanguage 事实表 =====
+  - key: language_count
+    name: 语言种数
+    desc: 去重语言种数（COUNT(DISTINCT Language)），只看语言表本身
+    metric_expr: "COUNT(DISTINCT cl.Language)"
+    from_clause: "FROM countrylanguage cl"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [language]
+    support_filters: [language, isofficial]
+    owner: 数据组-文化线
+    version: v1
+    additive: false
+
+  - key: language_rows_count
+    name: 某国语言条数
+    desc: 指定国家（或官方语言）的语言条数（COUNT(DISTINCT Language)，需定位到国家）
+    metric_expr: "COUNT(DISTINCT cl.Language)"
+    from_clause: "FROM countrylanguage cl"
+    join_clause: "JOIN country co ON co.Code=cl.CountryCode"
+    where_core: "1=1"
+    support_dims: [country_name, language]
+    support_filters: [country_name, language, isofficial, indep_year]
+    owner: 数据组-文化线
+    version: v1
+    additive: false
+
+  - key: lang_country_count
+    name: 使用某语言的国家数
+    desc: 使用指定语言的国家个数（COUNT(DISTINCT Code)）
+    metric_expr: "COUNT(DISTINCT co.Code)"
+    from_clause: "FROM countrylanguage cl"
+    join_clause: "JOIN country co ON co.Code=cl.CountryCode"
+    where_core: "1=1"
+    support_dims: [continent, region, language]
+    support_filters: [language, continent, region, isofficial]
+    owner: 数据组-文化线
+    version: v1
+    additive: false
+
+  - key: lang_continent_count
+    name: 使用某语言的大洲数
+    desc: 使用指定语言的大洲个数（COUNT(DISTINCT Continent)）
+    metric_expr: "COUNT(DISTINCT co.Continent)"
+    from_clause: "FROM countrylanguage cl"
+    join_clause: "JOIN country co ON co.Code=cl.CountryCode"
+    where_core: "1=1"
+    support_dims: [language]
+    support_filters: [language, isofficial]
+    owner: 数据组-文化线
+    version: v1
+    additive: false
+
+  # ===== city 事实表 =====
+  - key: city_count
+    name: 城市数
+    desc: 城市个数（COUNT(*)）
+    metric_expr: "COUNT(*)"
+    from_clause: "FROM city ci"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [district]
+    support_filters: [district]
+    owner: 数据组-地理线
+    version: v1
+    additive: true
+
+  - key: city_population_total
+    name: 城市人口合计
+    desc: 城市人口合计（SUM(Population)），按辖区统计
+    metric_expr: "SUM(ci.Population)"
+    from_clause: "FROM city ci"
+    join_clause: ""
+    where_core: "1=1"
+    support_dims: [district]
+    support_filters: [district]
+    owner: 数据组-地理线
+    version: v1
+    additive: true
+
+# ---------- 4) 关键词词表（英文；声明后整体替换内置中文词表）----------
+# 设计纪律：关键词必须是**指标语义短语**，不能用裸名词。
+# 例：`population` 单独出现时不匹配任何指标 —— 因为 "What are the region and
+# population of Angola?" 是**行级列举**问题，指标层答不了；用裸名词会命中并返回
+# 一个只有一列的结果（外部基准上就是"错答"）。
+matcher_keywords:
+  metrics:
+    country_count:
+      - "how many countries"
+      - "how many nations"
+      - "number of countries"
+      - "number of nations"
+      - "count of countries"
+      - "count the number of countries"
+      - "total number of countries"
+      - "how many different countries"
+    country_population_total:
+      - "total population"
+      - "total number of people"
+      - "sum of the population"
+      - "sum of population"
+      - "how many people live in"
+      - "total number of people living in the nations that"
+      - "total number of people living in the countries that"
+      - "population of countries that speak"
+      - "population of the nations that"
+    country_surface_area_total:
+      - "total surface area"
+      - "total area"
+      - "how much surface area"
+      - "surface area covered"
+    country_surface_area_avg:
+      - "average surface area"
+      - "mean surface area"
+      - "average area"
+      - "mean area"
+    country_life_expectancy_avg:
+      - "average expected life expectancy"
+      - "average life expectancy"
+      - "average life expectancies"
+      - "mean life expectancy"
+      - "average of life expectancy"
+      - "average life expectancy in the countries where"
+      - "average life expectancy of countries where"
+      - "life expectancy in the countries where"
+      - "mean life expectancy of countries in which"
+      - "life expectancy"
+    country_population_avg:
+      - "average population"
+      - "mean population"
+      - "average of the population"
+    country_gnp_avg:
+      - "average gnp"
+      - "mean gnp"
+    country_gnp_max:
+      - "maximum gnp"
+      - "max gnp"
+      - "largest gnp"
+      - "highest gnp"
+    country_government_form_count:
+      - "types of government"
+      - "type of government"
+      - "forms of government"
+      - "form of government"
+      - "government forms"
+      - "different forms of government"
+    language_count:
+      - "unique languages"
+      - "distinct languages"
+      - "different languages"
+      - "types of languages"
+      - "number of languages"
+    language_rows_count:
+      - "how many languages are spoken in"
+      - "how many languages are used in"
+      - "number of languages used in"
+      - "how many official languages"
+      - "number of official languages"
+      - "languages does"
+      - "how many languages"
+      - "languages spoken"
+      - "numbers of languages"
+    lang_country_count:
+      - "how many countries speak"
+      - "how many countries use"
+      - "number of countries that speak"
+      - "number of nations that use"
+      - "how many nations speak"
+    lang_continent_count:
+      - "number of distinct continents"
+      - "how many continents"
+      - "number of continents"
+      - "distinct continents"
+    city_count:
+      - "number of cities"
+      - "how many cities"
+      - "count the number of cities"
+    city_population_total:
+      - "total population"
+      - "how many people live in"
+      - "population of the district"
+      - "district population"
+
+  dimensions:
+    continent: ["by continent", "per continent", "for each continent", "in each continent"]
+    region: ["by region", "per region", "for each region", "in each region"]
+    governmentform: ["by government form", "per government form", "for each government form",
+                     "by form of government", "for each form of government"]
+    country_name: ["by country", "per country", "for each country", "for each nation"]
+    language: ["by language", "per language", "for each language"]
+    district: ["by district", "per district", "for each district", "in each district"]
+
+  # 过滤取值：值域来自库自身的列（建层时取 DISTINCT），不手抄。
+  # aliases 处理词形差异（库里 `Africa`，问句 `African`）——不加别名会"静默丢过滤"。
+  #
+  # `multi` 声明该取值域的**多取值语义**，这是语义判断，必须显式配置：
+  #   or  → 同一行只能有一个取值（一个国家只有一个洲/地区/政体/名字，一个城市只有一个辖区）
+  #         → "Asia and Europe" 就是 IN（或），可以正确编译。
+  #   缺省/and → 不允许：如 language —— 一个国家有多条语言行，"English and Dutch" 问的是
+  #         "两者都会"（与语义，需要 INTERSECT/EXISTS），用 IN 会答成"会其中一种"，
+  #         是一个数值看着合理的错答。宁可拒答。
+  filter_values:
+    continent:
+      column: "country.Continent"
+      multi: or
+      aliases: {"african": "Africa", "asian": "Asia", "european": "Europe",
+                "american": "North America", "south american": "South America"}
+    region:
+      column: "country.Region"
+      multi: or
+    governmentform:
+      column: "country.GovernmentForm"
+      multi: or
+      aliases: {"republics": "Republic"}
+    country_name:
+      column: "country.Name"
+      multi: or
+    language:
+      column: "countrylanguage.Language"
+      multi: and
+    district:
+      column: "city.District"
+      multi: or
+    isofficial:
+      values: ["official"]
+
+  # 否定形态：问句命中否定线索且取值在场时，换成这些**独立过滤类型**
+  # （其模板是自包含反连接子查询）。`requires` 用于选择最贴合的形态：
+  #   - 同时出现 official（isofficial 过滤在场）→ 用 language_official_excl
+  #   - 否则 → 用 language_excl
+  # 若某个否定问法在这里找不到对应形态，系统**照旧拒答**（不猜）。
+  negated_filters:
+    cues: ["not", "n't", "never", "without", "other than", "except", "excluding"]
+    language:
+      variants:
+        - {filter: language_official_excl, requires: [isofficial]}
+        - {filter: language_excl, requires: []}
+
+  # 行级数值比较（进 WHERE）：线索词 + 紧随其后的数字 → 带算子的过滤条件
+  numeric_filters:
+    indep_year:
+      cues:
+        lt: ["before", "earlier than", "prior to"]
+        gt: ["after", "later than"]
+        between: ["between"]
+
+  # 聚合后比较（进 HAVING）：约束作用在**本指标的聚合值**上，如"语言数 > 2"。
+  # entity_dim：组内筛选必须有分组实体，否则会退化成"整表一行"（问"每个国家"却返回全局）。
+  having_filters:
+    metric:
+      entity_dim: country_name
+      cues:
+        # "at least N" 是 >= N（等价于 > N-1）；写成 > N 会漏掉恰好等于 N 的组，
+        # 是外部基准上真实存在过的 off-by-one。
+        gte: ["at least"]
+        gt: ["more than", "greater than", "over", "higher than", "longer than"]
+        lt: ["fewer than", "less than", "under", "lower than", "shorter than"]
+
+  # 语义层表达不了的句式 → 明确拒答（内置核心集在 matcher 里，这里补充英文特有词形）
+  # 逐条都对应外部基准上实测到的一次**错答**：
+  #   - "shortest/lowest life expectancy" 曾漏掉 shortest → 答成全局均值。
+  #     argmax 要返回**实体名称**，而语义层返回度量值；支持它意味着支持任意列投影，
+  #     那会把系统变成通用查询构建器并稀释口径治理这条主线，因此明确保持拒答。
+  #   - "above the average population" 曾漏掉 above → 答成未过滤的分组计数。
+  #     （`above/below` 现在由核心比较守卫处理：有数字可消费则答，无数字则拒答。）
+  unsupported_patterns:
+    # 注意：这里**不含** `least` —— "at least N" 是阈值比较（>= N），已被 having/numeric
+    # 线索消费；把它当最值词会让一个可答的问题被误拦（实测踩过）。
+    - pattern: "\\b(?:most|largest|greatest|highest|smallest|lowest|fewest|shortest|longest|biggest|oldest|youngest|best|worst|top\\s+\\d+)\\b|predominantly|majority"
+      reason: "取最大/最小者（argmax）语义：需要返回实体名称，而语义层只返回度量值"
+    - pattern: "\\bboth\\b"
+      reason: "「同时满足两个取值」的交集语义"
+    - pattern: "\\b(?:independence|independent)\\b"
+      reason: "独立年份条件（world 库无此口径）"
+
+# ---------- 5) 角色表列权限 ----------
+# 外部基准库只用于评测：给 analyst 全放行，避免"权限拦截"与"口径未命中"混在一起
+# （权限拦截本身由 eval_business 的独立用例覆盖）。
+permissions:
+  roles:
+    analyst:
+      allowed_tables: "*"
+      allowed_columns: "*"
+    admin:
+      allowed_tables: "*"
+      allowed_columns: "*"
+  sensitive_columns: {}

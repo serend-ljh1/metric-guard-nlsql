@@ -63,6 +63,17 @@ class BusinessConfig:
     permissions: Dict = field(default_factory=dict)
     # 派生指标（ratio/share 等）：由 compiler 在编译期展开，配置只声明定义
     derived_metrics: Dict[str, Dict] = field(default_factory=dict)
+    # 关键词兜底匹配词表（可选）。声明后**整体替换**内置中文词表，
+    # 使非中文语料/其它业务域不必改代码即可接入确定性匹配路径。
+    # 结构: {metrics:{key:[kw..]}, derived:{key:[kw..]}, dimensions:{key:[kw..]},
+    #        grains:{day|week|month|quarter:[kw..]}}
+    matcher_keywords: Dict = field(default_factory=dict)
+    # 过滤算子白名单：{过滤类型: {算子名: SQL 记号}}。
+    # 规格里只出现算子名，SQL 记号只能来自这里 —— 算子与取值一样走白名单，
+    # 绝不把规格里的字符串直接拼进 SQL。未声明的过滤类型只允许等值。
+    filter_ops: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # HAVING（对本指标聚合值做后置筛选）的算子白名单，同上。
+    metric_ops: Dict[str, str] = field(default_factory=dict)
 
     def derived_key(self, d: Dict) -> str:
         """把派生指标定义转成 compiler 能解析的 key（ratio@a/b 或 share@a）。"""
@@ -74,7 +85,57 @@ class BusinessConfig:
         return ""
 
 
-def load_config(path: str | Path | None = None) -> BusinessConfig:
+def _resolve_filter_values(mk: Dict, value_provider) -> Dict:
+    """把 `matcher_keywords.filter_values` 解析成 过滤类型 -> 值清单。
+
+    支持三种声明：
+      - `{type: [v1, v2, ...]}`                       显式枚举（适合"official"这类触发词）
+      - `{type: {column: "表.列"}}`                   值域来自数仓自身的列（建层时取 distinct）
+      - `{type: {column: ..., aliases: {词形: 值}}}`   词形别名（"African" -> "Africa"）
+    未提供 value_provider 时，`column` 形式的条目**跳过**（宁可少一层过滤能力，
+    也不要凭空编造字典外的取值 —— 值词表必须是真实数据里的值）。
+
+    为什么需要词形别名：自然语言会用形容词而不是库里存的名词（库里是 `Africa`，
+    问句写的是 `African countries`）。别名不处理就会"过滤器静默丢失" —— 查询照跑、
+    结果变成全局口径，而用户以为已经按洲过滤了。别名表把这种漂移变成显式配置。
+    """
+    out: Dict[str, List[str]] = {}
+    aliases_out: Dict[str, Dict[str, str]] = {}
+    multi_out: Dict[str, str] = {}
+    for ftype, spec in (mk.get("filter_values") or {}).items():
+        vals: List[str] = []
+        aliases: Dict[str, str] = {}
+        if isinstance(spec, dict):
+            if spec.get("values"):
+                vals = [str(v) for v in spec["values"]]
+            elif spec.get("column") and value_provider is not None:
+                table, _, col = str(spec["column"]).partition(".")
+                try:
+                    vals = [str(v) for v in (value_provider(table, col) or []) if v not in (None, "")]
+                except Exception:            # noqa: BLE001 — 取值域失败就退化为"无该过滤"
+                    vals = []
+            for al, canon in (spec.get("aliases") or {}).items():
+                if str(canon):
+                    aliases[str(al)] = str(canon)
+            # `multi` 是"该取值域的多取值语义"声明，必须随解析结果一起带出去 ——
+            # 否则匹配器看不到它，多取值就只能一律拒答（实测踩过：声明了 multi: or
+            # 仍然被拒，因为解析器只保留了取值清单）。
+            if spec.get("multi"):
+                multi_out[ftype] = str(spec["multi"])
+        elif isinstance(spec, (list, tuple)):
+            vals = [str(v) for v in spec]
+        if vals:
+            out[ftype] = vals
+        if aliases:
+            aliases_out[ftype] = aliases
+    if aliases_out:
+        mk["filter_value_aliases"] = aliases_out
+    if multi_out:
+        mk["filter_multi"] = multi_out
+    return out
+
+
+def load_config(path: str | Path | None = None, value_provider=None) -> BusinessConfig:
     p = Path(path or _DEFAULT)
     data = yaml.safe_load(open(p, encoding="utf-8")) or {}
     metrics = {}
@@ -95,10 +156,16 @@ def load_config(path: str | Path | None = None) -> BusinessConfig:
     dims = {d["key"]: Dimension(key=d["key"], name=d.get("name", d["key"]),
                                 sql_fragment=d["sql_fragment"])
             for d in data.get("dimensions", [])}
+    mk = dict(data.get("matcher_keywords") or {})
+    if mk.get("filter_values"):
+        mk["filter_values"] = _resolve_filter_values(mk, value_provider)
     cfg = BusinessConfig(alias=data.get("business_alias", {}),
                          metrics=metrics, dimensions=dims,
                          filter_templates=data.get("filter_templates", {}),
-                         permissions=data.get("permissions", {}))
+                         permissions=data.get("permissions", {}),
+                         matcher_keywords=mk,
+                         filter_ops=data.get("filter_ops", {}) or {},
+                         metric_ops=data.get("metric_ops", {}) or {})
     for d in (data.get("derived_metrics") or []):
         k = cfg.derived_key(d)
         if k:

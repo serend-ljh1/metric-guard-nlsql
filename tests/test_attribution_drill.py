@@ -23,11 +23,16 @@ CFG = load_config()
 
 
 @pytest.fixture
-def db(tmpdir_clean):
-    """8 月(GMV150) vs 9 月(GMV80)：SP 跌、品类 alimentos 跌，便于逐层下钻。"""
+def db(tmpdir_clean, business_months):
+    """上月(GMV150) vs 本月(GMV80)：SP 跌、品类 alimentos 跌，便于逐层下钻。
+
+    日期用 business_months 动态锚点，与「本月」语义对齐，避免日期炸弹。
+    """
+    cur, prev, prev_late = (business_months["current"], business_months["previous"],
+                            business_months["previous_late"])
     p = tmpdir_clean / "biz.db"
     con = sqlite3.connect(p)
-    con.executescript("""
+    con.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
@@ -35,8 +40,8 @@ def db(tmpdir_clean):
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
       INSERT INTO orders VALUES
-        ('o1','c1','2026-08-01','delivered'),('o2','c1','2026-08-05','delivered'),
-        ('o3','c2','2026-09-01','delivered');
+        ('o1','c1','{prev}','delivered'),('o2','c1','{prev_late}','delivered'),
+        ('o3','c2','{cur}','delivered');
       INSERT INTO order_items VALUES ('o1','p1',100),('o2','p1',50),('o3','p2',80);
       INSERT INTO products VALUES ('p1','alimentos'),('p2','alimentos');
     """)

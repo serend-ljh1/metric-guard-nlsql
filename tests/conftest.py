@@ -31,6 +31,35 @@ sys.path.insert(0, str(ROOT / "tools"))
 _TMP_BASE = ROOT / "._test_tmp"
 
 
+@pytest.fixture(scope="session")
+def business_months() -> dict:
+    """与「本月 / 上月」语义对齐的日期锚点（相对**运行当天**动态计算）。
+
+    "日期炸弹"回归：过去各测试夹具把订单日期硬编码成 2026-08 / 2026-09，
+    而用例以「本月」取数；时间语义却由 `attribution._now()` 与
+    `compiler.resolve_time_range()` 各自用 `date.today()` 解析。于是运行日期一旦
+    离开 2026-09，当期范围就落在夹具数据之外 → 归因返回 ok=False，一批
+    归因/下钻/决策/编排用例连锁失败。改为按当天动态生成锚点后，
+    「本月 / 上月」的真实语义得以保留，且不再依赖运行日期。
+
+    返回：{"current": 本月 1 号 ISO, "previous": 上月 1 号 ISO,
+            "previous_late": 上月 20 号 ISO（与 previous 同月但不同日，
+                             避免按天维度(dt)与按州维度产生并列贡献）,
+            "stale": 再往前约 3 个月的 1 号 ISO（保证既不属本月也不属上月）}
+    """
+    import datetime
+
+    first = datetime.date.today().replace(day=1)
+    prev_first = (first - datetime.timedelta(days=1)).replace(day=1)
+    stale_first = (prev_first - datetime.timedelta(days=60)).replace(day=1)
+    return {
+        "current": first.isoformat(),
+        "previous": prev_first.isoformat(),
+        "previous_late": prev_first.replace(day=20).isoformat(),
+        "stale": stale_first.isoformat(),
+    }
+
+
 @pytest.fixture
 def tmpdir_clean():
     """独立的临时目录（用完即删）。
@@ -45,6 +74,20 @@ def tmpdir_clean():
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def isolate_storage(tmpdir_clean, monkeypatch):
+    """把 SQLite 权威存储隔离到临时库（HITL / 审计 / 口径确认 / 版本 / 用户）。
+
+    为什么必须：HITL 从"jsonl 权威"改为"SQLite 权威"后，只传一个临时 jsonl 路径不再
+    构成隔离 —— 工单会写进真实的 `data/app.db`，测试之间（以及与本机历史数据之间）
+    互相污染（实测表现为"幂等命中上一轮遗留工单，于是 jsonl 镜像不写、断言失败"）。
+    这里统一隔离，让每个用例都在自己的空库上跑。
+    """
+    from sqlpa.business import storage
+    monkeypatch.setattr(storage, "_DB_PATH", tmpdir_clean / "app.db")
+    return tmpdir_clean / "app.db"
 
 
 @pytest.fixture(scope="session")

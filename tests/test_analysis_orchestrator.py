@@ -24,10 +24,12 @@ class _MockLLM:
         return "GMV 下跌主要来自 SP 州订单减少，建议核查 SP 履约与促销节奏。"
 
 
-def _make_db(tmpdir) -> str:
+def _make_db(tmpdir, months) -> str:
     p = tmpdir / "an.db"
+    cur, prev, prev_late = (months["current"], months["previous"],
+                            months["previous_late"])
     con = sqlite3.connect(p)
-    con.executescript("""
+    con.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
@@ -35,8 +37,8 @@ def _make_db(tmpdir) -> str:
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
       INSERT INTO orders VALUES
-        ('o1','c1','2026-08-01','delivered'),('o2','c1','2026-08-05','delivered'),
-        ('o3','c2','2026-09-01','delivered');
+        ('o1','c1','{prev}','delivered'),('o2','c1','{prev_late}','delivered'),
+        ('o3','c2','{cur}','delivered');
       INSERT INTO order_items VALUES ('o1','p1',100),('o2','p1',50),('o3','p2',80);
       INSERT INTO products VALUES ('p1','alimentos'),('p2','alimentos');
     """)
@@ -49,8 +51,8 @@ def _sb(db_path):
     return SqlSandbox(db_path, ExecConfig.from_settings(max_rows=2000))
 
 
-def test_run_analysis_full_chain(tmpdir_clean):
-    db_path = _make_db(tmpdir_clean)
+def test_run_analysis_full_chain(tmpdir_clean, business_months):
+    db_path = _make_db(tmpdir_clean, business_months)
     events = []
 
     def emit(p):
@@ -92,9 +94,9 @@ def test_run_analysis_full_chain(tmpdir_clean):
     assert chart["waterfall"]["labels"], "瀑布应有标签"
 
 
-def test_run_analysis_normal_no_alert(tmpdir_clean):
+def test_run_analysis_normal_no_alert(tmpdir_clean, business_months):
     """无波动时：结论为正常，decision 不告警、不写 HITL。"""
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     # 阈值 500% → 波动远未达到，判定为正常
     result = run_analysis(
         "本月 GMV 为什么跌？", CFG, _sb(db_path), db_path, _MockLLM(),
@@ -106,9 +108,9 @@ def test_run_analysis_normal_no_alert(tmpdir_clean):
     assert result["actions"]["is_abnormal"] is False
 
 
-def test_run_analysis_unmatched_rejects(tmpdir_clean):
+def test_run_analysis_unmatched_rejects(tmpdir_clean, business_months):
     """未命中口径 → RouterAgent 拒绝，无归因但给结论兜底。"""
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     result = run_analysis(
         "外星人数量是多少？", CFG, _sb(db_path), db_path, _MockLLM(),
         role="analyst", emit=None,
@@ -118,9 +120,9 @@ def test_run_analysis_unmatched_rejects(tmpdir_clean):
     assert result["conclusion"], "未命中也应给出兜底结论说明"
 
 
-def test_run_analysis_session_memory(tmpdir_clean):
+def test_run_analysis_session_memory(tmpdir_clean, business_months):
     """会话级工作记忆：第一轮存主因建议，第二轮追问沿记忆续钻。"""
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     memory = {}
     # 第一轮：正常分析，应写入 last_drill
     r1 = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
@@ -146,18 +148,19 @@ def test_run_analysis_session_memory(tmpdir_clean):
 
 # ---------------- 回归：失败必须报"数据不足"，不能被伪装成"正常波动" ----------------
 
-def _make_db_without_current_period(tmpdir) -> str:
-    """只有 2026-08 的数据：查"本月"（相对当前日期）时当期/上期都取不到 → 归因失败。"""
+def _make_db_without_current_period(tmpdir, months) -> str:
+    """只有「三个月前」的数据：查「本月」（相对当前日期）时当期/上期都取不到 → 归因失败。"""
     p = tmpdir / "stale.db"
+    stale = months["stale"]
     con = sqlite3.connect(p)
-    con.executescript("""
+    con.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
       CREATE TABLE products(product_id TEXT, product_category_name TEXT);
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP');
-      INSERT INTO orders VALUES ('o1','c1','2026-08-01','delivered');
+      INSERT INTO orders VALUES ('o1','c1','{stale}','delivered');
       INSERT INTO order_items VALUES ('o1','p1',100);
       INSERT INTO products VALUES ('p1','alimentos');
     """)
@@ -166,7 +169,7 @@ def _make_db_without_current_period(tmpdir) -> str:
     return str(p)
 
 
-def test_attribution_failure_is_not_reported_as_normal(tmpdir_clean):
+def test_attribution_failure_is_not_reported_as_normal(tmpdir_clean, business_months):
     """**回归**：归因查询失败 ≠ 波动正常。
 
     修复前：归因返回 ok=False 时，结论仍走 `is_abnormal` 分支，输出
@@ -174,7 +177,7 @@ def test_attribution_failure_is_not_reported_as_normal(tmpdir_clean):
     decision 也报 alert=False —— 把一次**分析失败**伪装成一个**结论**。
     这是最危险的一类错：用户会因此不去查一个可能真实存在的问题。
     """
-    db_path = _make_db_without_current_period(tmpdir_clean)
+    db_path = _make_db_without_current_period(tmpdir_clean, business_months)
     result = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
                           _MockLLM(), role="analyst", emit=None)
 
@@ -198,9 +201,9 @@ def test_attribution_failure_is_not_reported_as_normal(tmpdir_clean):
     assert not any(e["type"] == "基准波动" for e in result["evidence"])
 
 
-def test_analysis_failure_does_not_ask_llm_for_conclusion(tmpdir_clean):
+def test_analysis_failure_does_not_ask_llm_for_conclusion(tmpdir_clean, business_months):
     """数据不足时不该调结论 LLM：没有依据可依据，只会生成幻觉结论。"""
-    db_path = _make_db_without_current_period(tmpdir_clean)
+    db_path = _make_db_without_current_period(tmpdir_clean, business_months)
     calls = []
 
     class CountingLLM:
@@ -217,14 +220,14 @@ def test_analysis_failure_does_not_ask_llm_for_conclusion(tmpdir_clean):
         "数据不足时不应调用结论 Agent 的 LLM"
 
 
-def test_conclusion_prompt_carries_the_real_question(tmpdir_clean):
+def test_conclusion_prompt_carries_the_real_question(tmpdir_clean, business_months):
     """**回归**：结论 Agent 的 prompt 必须带用户原话。
 
     修复前该行拼的是 `str(routing.get('res', {}).__class__)`，实际发出
     "用户问题：<class 'sqlpa.business.metric_matcher.MatchResult'>" ——
     模型既不知道用户问了什么，也就无法判断该突出哪个主因。
     """
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     captured = {}
 
     class SpyLLM:
@@ -234,9 +237,14 @@ def test_conclusion_prompt_carries_the_real_question(tmpdir_clean):
                 return "GMV 下滑，主因在 SP 州。"
             return '{"metric":"gmv","dims":["state"],"filters":[{"type":"time_range","value":"本月"}]}'
 
-    result = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
-                          SpyLLM(), role="analyst", alert_threshold_pct=0.0, emit=None,
-                          confirm_metric="gmv")
+    q = "本月 GMV 为什么跌？"
+    step1 = run_analysis(q, CFG, _sb(db_path), db_path, SpyLLM(), role="analyst",
+                         alert_threshold_pct=0.0, emit=None)
+    # LLM 推断口径 → 先过确认门；用返回的 confirm_id 再跑一遍才真正执行
+    assert step1.get("need_confirm") and step1.get("confirm_id")
+    captured.clear()
+    result = run_analysis(q, CFG, _sb(db_path), db_path, SpyLLM(), role="analyst",
+                          alert_threshold_pct=0.0, emit=None, confirm_id=step1["confirm_id"])
     assert "prompt" in captured, "应走到结论 Agent（归因需成功）"
     p = captured["prompt"]
     assert "本月 GMV 为什么跌？" in p, "prompt 里必须含用户原话"
@@ -246,7 +254,7 @@ def test_conclusion_prompt_carries_the_real_question(tmpdir_clean):
     assert result["conclusion"] == "GMV 下滑，主因在 SP 州。"
 
 
-def test_conclusion_reference_verification(tmpdir_clean):
+def test_conclusion_reference_verification(tmpdir_clean, business_months):
     """**新增**：结论引用校验（"事实-证据"握手）。
 
     ConclusionAgent 返回里必须带 traceability；校验器确定性判定证据是否自洽：
@@ -274,7 +282,7 @@ def test_conclusion_reference_verification(tmpdir_clean):
 
     # 端到端：结论节点返回带 traceability 字段
     from sqlpa.analysis.orchestrator import run_analysis
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     result = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
                           _MockLLM(), role="analyst", alert_threshold_pct=0.0, emit=None)
     trace = result.get("traceability")
@@ -282,7 +290,7 @@ def test_conclusion_reference_verification(tmpdir_clean):
     assert "verified" in trace and isinstance(trace["verified"], bool)
 
 
-def test_analysis_is_langgraph_orchestrated(tmpdir_clean):
+def test_analysis_is_langgraph_orchestrated(tmpdir_clean, business_months):
     """**新增**：分析编排是**真 LangGraph** 构建的（StateGraph 节点+条件边，而非手写 if/return）。
 
     验证「多智能体 langgraph 编排」在代码里落地，而不只是 README 里的说法：
@@ -308,7 +316,7 @@ def test_analysis_is_langgraph_orchestrated(tmpdir_clean):
         f"缺少 LangGraph 节点，实际有：{sorted(node_names)}"
 
     # 端到端：同一图驱动完整分析并产出结论（验证状态流收敛正确）
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
     sb = SqlSandbox(db_path, ExecConfig.from_settings(max_rows=2000))
     g2 = _build_analysis_graph(CFG, sb, db_path, _MockLLM(), "analyst", None,
@@ -328,9 +336,9 @@ class _JsonMetricLLM:
         return '{"metric":"gmv","dims":[],"filters":[]}'
 
 
-def test_confirm_gate_llm_inferred_metric_requires_confirmation(tmpdir_clean):
+def test_confirm_gate_llm_inferred_metric_requires_confirmation(tmpdir_clean, business_months):
     """LLM 推断口径且未确认 → 停在确认门：不执行取数/归因，返回待确认载荷。"""
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     events = []
 
     def emit(p):
@@ -358,23 +366,53 @@ def test_confirm_gate_llm_inferred_metric_requires_confirmation(tmpdir_clean):
     assert "AttributionAgent" not in names, "口径未确认就不应跑归因"
 
 
-def test_confirm_gate_confirmed_metric_runs(tmpdir_clean):
-    """用户在确认窗口选定口径（confirm_metric）→ 确定性放行并完成分析。"""
-    db_path = _make_db(tmpdir_clean)
-    result = run_analysis("本月 GMV 波动大，为什么跌？", CFG, _sb(db_path), db_path,
-                          _JsonMetricLLM(), role="analyst", alert_threshold_pct=0.0,
-                          emit=None, confirm_metric="gmv")
+def test_confirm_gate_confirmed_metric_runs(tmpdir_clean, business_months):
+    """口径确认的**完整往返**：先拿到 confirm_id，再用它确定性放行并完成分析。
+
+    并覆盖两条护栏：非法 confirm_id 被拒、同一 confirm_id 不能重放（用掉即失效）。
+    """
+    db_path = _make_db(tmpdir_clean, business_months)
+    q = "本月 GMV 波动大，为什么跌？"
+    step1 = run_analysis(q, CFG, _sb(db_path), db_path, _JsonMetricLLM(), role="analyst",
+                         alert_threshold_pct=0.0, emit=None)
+    assert step1["route"] == "confirm" and step1["need_confirm"] is True
+    cid = step1["confirm_id"]
+    assert cid, "确认门必须返回落库的 confirm_id（旧实现只回显一个客户端自报的指标名）"
+
+    result = run_analysis(q, CFG, _sb(db_path), db_path, _JsonMetricLLM(), role="analyst",
+                          alert_threshold_pct=0.0, emit=None, confirm_id=cid)
     assert result["ok"] is True
     assert result["route"] == "analyze"
     assert result["metric"] == "gmv"
     assert result.get("need_confirm", False) is not True
-    # 确认后走确定性执行，方法与指标都已锁定
     assert result["certified"] is True
 
+    # 防重放：同一确认记录只能用一次
+    again = run_analysis(q, CFG, _sb(db_path), db_path, _JsonMetricLLM(), role="analyst",
+                         alert_threshold_pct=0.0, emit=None, confirm_id=cid)
+    assert again["ok"] is False
+    assert "确认记录" in str(again.get("reject") or "")
 
-def test_confirm_gate_keyword_method_auto_runs(tmpdir_clean):
+
+def test_confirm_gate_rejects_bogus_confirm_id(tmpdir_clean, business_months):
+    """**回归**：伪造的 confirm_id 必须被拒，而不是回退成"LLM 猜的口径直接执行"。
+
+    旧实现用一个客户端自报的 `confirm_metric` 字符串关掉确认门 —— 任何真值都能绕过，
+    实测 `confirm_metric="not_a_real_metric"` 会让 LLM 猜的口径照跑。
+    """
+    db_path = _make_db(tmpdir_clean, business_months)
+    bad = run_analysis("本月 GMV 波动大，为什么跌？", CFG, _sb(db_path), db_path,
+                       _JsonMetricLLM(), role="analyst", alert_threshold_pct=0.0,
+                       emit=None, confirm_id="not_a_real_confirm_id")
+    assert bad["ok"] is False
+    assert bad["route"] == "unmatched"
+    assert not bad.get("sql"), "伪造确认不允许触发任何取数"
+    assert "确认记录不存在" in str(bad.get("reject") or "")
+
+
+def test_confirm_gate_keyword_method_auto_runs(tmpdir_clean, business_months):
     """确定性关键词命中（method=keyword）→ 无论如何都直接放行，不打扰用户确认。"""
-    db_path = _make_db(tmpdir_clean)
+    db_path = _make_db(tmpdir_clean, business_months)
     # _MockLLM 返回非 JSON → metric_matcher 落到 keyword 兜底，method="keyword"
     result = run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path,
                           _MockLLM(), role="analyst", alert_threshold_pct=0.0, emit=None)

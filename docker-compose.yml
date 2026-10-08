@@ -1,18 +1,12 @@
 # 一键启动：docker compose up
-#   web  -> http://localhost:8501  (Streamlit 前端)
-#   api  -> http://localhost:8000  (FastAPI 后端, /docs 有 Swagger)
+#   api -> http://localhost:8000  (FastAPI 后端, /docs 有 Swagger)
+# 前端（Vue3 + Vite）不在容器里跑：开发期在 web/ 下 `npm run dev`（5173，已代理到 8000），
+# 生产部署请构建 web/dist 后用任意静态服务器托管。
+#   （历史：这里曾有 web -> 8501 的 Streamlit 服务，该前端已下线。）
+#
 # 可选：把真实 Olist 库挂载进去覆盖样本库
 #   volumes: - ./data/olist/olist.db:/app/data/olist/olist.db:ro
 services:
-  web:
-    build: .
-    ports:
-      - "8501:8501"
-    env_file:
-      - path: .env
-        required: false
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
-
   api:
     build: .
     ports:

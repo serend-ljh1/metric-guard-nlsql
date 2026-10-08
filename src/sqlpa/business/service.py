@@ -1,15 +1,18 @@
 """
 sqlpa.business.service
 ======================
-业务"混合模式"的统一入口：CLI(run_business) 与 UI(app.py) 共用这套逻辑，保证一致。
+取数入口的统一实现：CLI(`run_business.py`) / REST(`api.py`) / 分析链(`orchestrator.py`)
+共用这套逻辑，保证"取数链与分析链"口径、权限、审计一致。
 
-分级放行（产品化的核心策略）：
-  - 口径内（命中配置指标且组合受支持）→ 权威公式作为【硬约束】喂给 Writer →
-    引擎(LLM)生成查询结构 → 校验"公式未被篡改" → 权限 → 只读执行/掩码 → 审计。
-    结果标记 certified=True（口径已认证）。
-  - 口径外（未命中指标 / 维度组合不受支持）→ 不再生硬拦截，而是走引擎多 Agent
-    自由生成，权限/沙箱/掩码照常生效，结果标记 certified=False（未经口径认证），
-    由用户自行判断。拦截是实验思维，分级放行才是产品思维。
+两条分支（**没有第三条**）：
+  - **口径内**（命中配置指标、且维度/过滤组合受支持）→ 由 `compiler.compile_spec`
+    从配置**确定性编译** SQL（LLM 不在生成路径上）→ 公式结构绑定校验 → 表列/行级权限
+    → 只读沙箱执行 → PII 掩码 → 审计。结果 `certified=True`，`path=semantic`。
+  - **口径外**（未命中指标 / 组合不受支持 / 句式超出表达力）→ **明确拒绝**并给出可操作原因。
+    不降级到"自由 SQL 生成"（该链路已整体删除：失败模式是口径漂移、无法审计、
+    错误伪装成合理数字）。拒绝同样进审计，可统计"哪些问法还没被口径覆盖"。
+
+LLM 的触点只有两处：意图识别（`method=llm` 时必须过**口径确认门**才执行）与结论/归因讲解。
 
 多轮追问：传入 history 时先做上下文改写（指代消解/省略补全），再进入识别链路。
 """
@@ -94,11 +97,12 @@ def _supervise(res, llm, question: str, drill_decision: Optional[Dict] = None) -
 
 def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
            history: Optional[List[Dict]] = None, username: str = "",
-           hitl_path: Optional[str] = None) -> Dict:
+           hitl_path: Optional[str] = None,
+           confirm_id: Optional[str] = None) -> Dict:
+    """取数入口。confirm_id 为口径确认记录 id（LLM 推断口径时由上一次调用返回）。"""
     from sqlpa.business.followup import rewrite
-    from sqlpa.business.metric_guard import build_constraint, formula_of, verify_formula
+    from sqlpa.business.metric_guard import verify_formula
     from sqlpa.business.permissions import check_access, mask_result, row_filter_clauses
-    from sqlpa.business.assembler import assemble
     from sqlpa.analysis.orchestrator import _llm_usage_snapshot
     import time as _time
     import uuid as _uuid
@@ -111,7 +115,45 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     rewritten, used_ctx = rewrite(question, history or [], llm)
     q = rewritten
 
-    res = match(q, cfg, llm=llm)
+    # ---- 口径确认门（与多 Agent 分析链**同一套**逻辑，杜绝两条治理路径分叉）----
+    # 确认记录的读取/校验/逐字还原都在 sqlpa.business.confirm 里，取数链与分析链共用。
+    # 这两条分支都是"拒绝/待确认"，supervisor 直接标 reject（此时 sup 尚未计算）。
+    from sqlpa.business import confirm as _confirm
+    if confirm_id:
+        _spec, _confirm_err = _confirm.load(cfg, confirm_id)
+        if _confirm_err:
+            reason = f"口径确认无效：{_confirm_err}"
+            append_audit(AuditRecord(query_id=query_id, username=username, user_role=role,
+                                     user_input=question, matched_metric="",
+                                     is_success=False, reject_reason=reason, mode="metric",
+                                     certified=False, supervisor="reject"))
+            return {"query_id": query_id, "ok": False, "matched": False, "certified": False,
+                    "mode": "metric", "reject": reason, "rewritten_question": q,
+                    "used_context": used_ctx, "supervisor": {"decision": "reject",
+                                                             "reason": reason}}
+        res = _confirm.res_from_spec(_spec)
+    else:
+        res = match(q, cfg, llm=llm)
+        if res.matched and getattr(res, "method", "") == "llm":
+            # LLM 猜出来的口径**不允许直接执行**：登记一条待确认记录并返回确认卡。
+            spec = _confirm.proposed_spec(
+                res, next((v for t, v in (res.filters or []) if t == "time_range"), None),
+                question, cfg=cfg)
+            cid = _confirm.persist(spec, actor=username)
+            append_audit(AuditRecord(query_id=query_id, username=username, user_role=role,
+                                     user_input=question, matched_metric=res.metric_key,
+                                     is_success=False, reject_reason="口径待确认（LLM 推断）",
+                                     mode="metric", certified=False, supervisor="reject"))
+            return {"query_id": query_id, "ok": False, "matched": True, "need_confirm": True,
+                    "certified": False, "mode": "metric", "confirm_id": cid,
+                    "reject": "口径待确认", "metric": res.metric_key,
+                    "metric_name": getattr(res, "metric_name", ""),
+                    "proposed": {"metric": spec["metric"], "metric_name": spec["metric_name"],
+                                 "dims": spec["dims"], "time_spec": spec["time_spec"],
+                                 "method": spec["method"]},
+                    "candidates": _confirm.candidates(cfg),
+                    "rewritten_question": q, "used_context": used_ctx,
+                    "supervisor": {"decision": "reject", "reason": "口径待用户确认"}}
 
     # Supervisor 路由决策：语义层优先，仅在真实缺口上升级/拒绝；reason 供 UI 展示"为什么走这条路"。
     sup = _supervise(res, llm, question)
@@ -138,6 +180,7 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     db_id = schema.get("db_id", "olist")
     spec = QuerySpec(metric=res.metric_key, dims=list(res.dims or []),
                      filters=list(res.filters or []),
+                     having=list(getattr(res, "having", None) or []),
                      time_grain=getattr(res, "time_grain", None))
     trace: List[Dict] = [{"agent": "MetricMatcher", "role": "意图识别",
                           "detail": f"指标={res.metric_key} 维度={res.dims} "

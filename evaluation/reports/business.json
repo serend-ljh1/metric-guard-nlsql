@@ -1,5 +1,5 @@
 {
-  "db": "D:\\ds harness\\metric-guard-nlsql\\data\\olist\\olist.db",
+  "db": "data/olist/olist.db",
   "n_cases": 12,
   "in_scope_hit_rate": 1.0,
   "metric_accuracy": 1.0,
@@ -39,7 +39,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1206.5,
+      "latency_ms": 934.0,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -58,7 +58,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1450.1,
+      "latency_ms": 1401.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -75,7 +75,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 640.8,
+      "latency_ms": 513.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -94,7 +94,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1675.1,
+      "latency_ms": 1213.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -111,7 +111,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 537.0,
+      "latency_ms": 419.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -130,7 +130,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 933.4,
+      "latency_ms": 771.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -147,7 +147,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 101.6,
+      "latency_ms": 101.2,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -164,7 +164,7 @@
       "reject": "客单价 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 5.0,
+      "latency_ms": 16.3,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -181,7 +181,7 @@
       "reject": "超时送达率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 6.4,
+      "latency_ms": 17.3,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -198,7 +198,7 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 5.5,
+      "latency_ms": 16.9,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -215,7 +215,7 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 5.6,
+      "latency_ms": 18.7,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -232,7 +232,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 287.1,
+      "latency_ms": 256.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true

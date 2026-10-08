@@ -860,4 +860,7 @@ def notify_anomaly(cfg: BusinessConfig, result: Dict,
         matched_metric=result["metric"], generated_sql="",
         reject_reason="\n".join(reason_lines), role="admin",
         path=path, owner=owner, ai_note=summary or "",
+        # 结构化带上时间窗与维度：`hitl.verify()` 要按它们**重跑**该指标来判定是否真的恢复
+        time_spec=result.get("current_spec") or "",
+        dims=list(result.get("dims") and [d.get("dim") for d in result["dims"]] or []),
     )

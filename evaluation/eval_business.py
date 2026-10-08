@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from sqlpa.config import ensure_utf8_console  # noqa: E402
+from sqlpa.config import ensure_utf8_console, repo_relative  # noqa: E402
 
 # ---------------------------------------------------------------- 标注集
 # 每条：(问题, 期望)
@@ -257,7 +257,7 @@ def main() -> int:
         return round(a / b, 4) if b else 0.0
 
     report = {
-        "db": str(db),
+        "db": repo_relative(db),
         "n_cases": len(CASES),
         "in_scope_hit_rate": pct(n_in_hit, n_in),
         "metric_accuracy": pct(n_metric_ok, n_in),

@@ -1,5 +1,6 @@
 {
-  "db": "D:\\ds harness\\metric-guard-nlsql\\data\\olist\\olist.db",
+  "db": "data/olist/olist.db",
+  "db_kind": "full",
   "threshold": 0.05,
   "months": 18,
   "n_cases": 72,

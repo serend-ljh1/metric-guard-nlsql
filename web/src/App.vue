@@ -17,7 +17,7 @@ const agents = ref([])                 // 归并后的 Agent 卡片（start/done
 const final = ref(null)                // 最终聚合（结论/依据/决策/chart）
 const streaming = ref(false)
 // 口径待确认（HITL 前置）：LLM 推断的口径需要用户确认后才拉数归因
-const confirmState = ref(null)         // { proposed, candidates }
+const confirmState = ref(null)         // { confirm_id, proposed, candidates }
 const selectedMetric = ref('')
 
 const SAMPLE = [
@@ -48,7 +48,7 @@ function reduceAgents(evts) {
   return Array.from(map.values())
 }
 
-async function runAnalysis(confirmMetric) {
+async function runAnalysis(confirmId) {
   if (!question.value.trim()) return
   running.value = true
   streaming.value = true
@@ -61,8 +61,8 @@ async function runAnalysis(confirmMetric) {
   try {
     // 后端 /api/analyze/stream 是 SSE（text/event-stream），用 fetch 读流逐行解析。
     const body = { question: question.value, role: 'analyst', session_id: sessionId.value }
-    // 确认口径后重跑到"部分携带 confirm_metric"，后端按该口径确定性放行
-    if (confirmMetric) body.confirm_metric = confirmMetric
+    // 确认口径后重跑：携带**落库的 confirm_id**，后端按该记录的口径逐字执行
+    if (confirmId) body.confirm_id = confirmId
     const resp = await fetch('/api/analyze/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -99,7 +99,7 @@ async function runAnalysis(confirmMetric) {
     final.value = lastDone
     // 口径待确认：回显 proposed 口径 + 候选，供用户确认/改选后重跑
     if (lastDone && lastDone.need_confirm) {
-      confirmState.value = { proposed: lastDone.proposed, candidates: lastDone.candidates || [] }
+      confirmState.value = { confirm_id: lastDone.confirm_id, proposed: lastDone.proposed, candidates: lastDone.candidates || [] }
       selectedMetric.value = lastDone.proposed?.metric || ''
     }
   } catch (e) {
@@ -110,10 +110,21 @@ async function runAnalysis(confirmMetric) {
   }
 }
 
-// 确认（或改选）口径后，携带 confirm_metric 重新发起同一分析
-function confirmAndRun() {
+// 确认口径：携带落库的 confirm_id 重新发起（改选走 override 换一张确认记录）
+async function confirmAndRun() {
   if (!selectedMetric.value || running.value) return
-  runAnalysis(selectedMetric.value)
+  const cur = confirmState.value
+  // 用户改了指标 → 先按新指标换一张确认记录（原记录置 dismissed 留痕）
+  if (cur && selectedMetric.value !== cur.proposed?.metric) {
+    const url = '/api/confirmations/' + cur.confirm_id +
+                '/override?metric=' + encodeURIComponent(selectedMetric.value)
+    const r = await fetch(url, { method: 'POST' })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) { error.value = j.detail || '改选口径失败'; return }
+    runAnalysis(j.confirm_id)
+    return
+  }
+  runAnalysis(cur && cur.confirm_id)
 }
 </script>
 

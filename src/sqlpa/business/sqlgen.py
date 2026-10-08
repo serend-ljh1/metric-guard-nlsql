@@ -98,18 +98,45 @@ def aliases_needed_for_dims(cfg, dim_keys: Sequence[str]) -> Set[str]:
     return needed
 
 
+def _self_defined_aliases(template: str) -> Set[str]:
+    """模板**自己**引入的别名（子查询里的 FROM/JOIN 别名）。
+
+    为什么需要：过滤模板可以是自包含的子查询，例如
+      `language_excl: "co.Code NOT IN (SELECT cl2.CountryCode FROM countrylanguage cl2
+                        WHERE cl2.Language = {value})"`
+    这里 `cl2` 是模板自己定义的。若把它当成"外部需要的别名"就会去 JOIN 池里找
+    `cl2` → 找不到 → 抛 JoinInjectionError → 一个本来完全自洽的过滤条件被拒绝。
+    """
+    out: Set[str] = set()
+    for m in re.finditer(
+            r"\b(?:FROM|JOIN)\s+([a-zA-Z_][\w]*)(?:\s+(?:AS\s+)?([a-zA-Z_][\w]*))?", template or "",
+            re.I):
+        table, alias = m.group(1), m.group(2)
+        if table:
+            out.add(table.lower())
+        if alias and alias.lower() not in _SQL_KEYWORDS:
+            out.add(alias.lower())
+    return out
+
+
 def aliases_needed_for_filters(cfg, filter_types: Sequence[str]) -> Set[str]:
     """某个过滤条件清单需要在 SQL 里出现的表别名。
 
     历史缺陷：过滤模板只用 dims 注入 JOIN，于是 `gmv` 加一个 state 过滤会生成
     `WHERE c.customer_state = 'SP'` 却没有 `customers` JOIN —— 编译期不报错、
     执行期报 "no such column: c.customer_state"。过滤器与维度一样需要 JOIN。
+
+    模板自带的子查询别名要排除（见 `_self_defined_aliases`）。
     """
     needed: Set[str] = set()
     for ft in filter_types or ():
         tmpl = (getattr(cfg, "filter_templates", {}) or {}).get(ft, "") or ""
+        own = _self_defined_aliases(tmpl)
         for mm in re.finditer(r"\b([a-zA-Z_][\w]*)\.", tmpl):
-            needed.add(mm.group(1).lower())
+            alias = mm.group(1).lower()
+            if alias in own:
+                continue
+            needed.add(alias)
     return needed
 
 

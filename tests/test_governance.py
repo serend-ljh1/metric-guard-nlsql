@@ -40,20 +40,25 @@ def test_explain_metric_returns_owner_version():
     assert governance.explain_metric(cfg, "nope")["ok"] is False
 
 
-def _sample_db(tmpdir_clean):
-    """造一个最小 olist 结构库，含订单时间列，供归因拆解。"""
+def _sample_db(tmpdir_clean, months):
+    """造一个最小 olist 结构库，含订单时间列，供归因拆解。
+
+    日期用 business_months 动态锚点，与「本月」语义对齐，避免日期炸弹。
+    """
     import sqlite3
     db = tmpdir_clean / "t.db"
+    cur, prev, prev_late = (months["current"], months["previous"],
+                            months["previous_late"])
     conn = sqlite3.connect(db)
-    conn.executescript("""
+    conn.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
       CREATE TABLE products(product_id TEXT, product_category_name TEXT);
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
-      INSERT INTO orders VALUES ('o1','c1','2026-08-01','delivered'),
-        ('o2','c1','2026-08-05','delivered'),('o3','c2','2026-09-01','delivered');
+      INSERT INTO orders VALUES ('o1','c1','{prev}','delivered'),
+        ('o2','c1','{prev_late}','delivered'),('o3','c2','{cur}','delivered');
       INSERT INTO order_items VALUES ('o1','p1',100),('o2','p1',50),('o3','p2',80);
       INSERT INTO products VALUES ('p1','alimentos'),('p2','alimentos');
     """)
@@ -61,9 +66,9 @@ def _sample_db(tmpdir_clean):
     return conn
 
 
-def test_attribution_parallel_dimension_split(tmpdir_clean):
+def test_attribution_parallel_dimension_split(tmpdir_clean, business_months):
     cfg = load_config()
-    conn = _sample_db(tmpdir_clean)
+    conn = _sample_db(tmpdir_clean, business_months)
     r = analyze(cfg, conn, "gmv", current_spec="本月", dims=["category"])
     conn.close()
     assert r["ok"] is True
@@ -79,21 +84,21 @@ def test_attribution_returns_empty_when_unusable(tmpdir_clean):
     assert r["ok"] is False
 
 
-def test_attribution_dims_populated_on_abnormal(tmpdir_clean):
+def test_attribution_dims_populated_on_abnormal(tmpdir_clean, business_months):
     """回归：维度拆分须在并行线程里独立取到数据（sqlite3 跨线程连接问题）。"""
-    conn = _sample_db(tmpdir_clean)
+    conn = _sample_db(tmpdir_clean, business_months)
     r = analyze(load_config(), conn, "gmv", current_spec="本月", dims=["category"],
                 threshold_pct=0.0)  # 强制触发拆分
     conn.close()
     assert r["ok"] is True
-    # 当月有订单（o1/o2 在 2026-08，o3 在 2026-09 → 本月=now 之前都算，至少 1 个维度有值）
+    # 当期（本月）orders 表有 o3 一条 → 至少 1 个维度有值
     assert any(r["dims"][i]["current"] for i in range(len(r["dims"])))
 
 
-def test_notify_anomaly_only_on_abnormal(tmpdir_clean):
+def test_notify_anomaly_only_on_abnormal(tmpdir_clean, business_months):
     import sqlite3
     from sqlpa.business.attribution import notify_anomaly
-    conn = _sample_db(tmpdir_clean)
+    conn = _sample_db(tmpdir_clean, business_months)
     r = analyze(load_config(), conn, "gmv", current_spec="本月", dims=["category"])
     conn.close()
     hitl_file = tmpdir_clean / "hitl.jsonl"

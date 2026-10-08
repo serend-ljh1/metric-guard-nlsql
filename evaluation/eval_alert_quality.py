@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from sqlpa.business.attribution import analyze          # noqa: E402
 from sqlpa.business.metric_config import load_config    # noqa: E402
-from sqlpa.config import ensure_utf8_console            # noqa: E402
+from sqlpa.config import ensure_utf8_console, repo_relative    # noqa: E402
 
 # 只跑**可加指标**：显著性检验基于"日值之和 ≈ 期间总值"，比率类不满足该前提
 ADDITIVE_METRICS = ("gmv", "order_count", "paid_order_count", "item_count")
@@ -106,7 +106,7 @@ def main() -> int:
     confirmed = [r for r in tested if r["significant"] is True]
 
     report = {
-        "db": args.db, "db_kind": db_kind, "threshold": args.threshold, "months": len(pairs),
+        "db": repo_relative(args.db), "db_kind": db_kind, "threshold": args.threshold, "months": len(pairs),
         "n_cases": len(valid),
         "n_threshold_alerts": len(alerts),
         "n_significance_tested": len(tested),

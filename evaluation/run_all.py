@@ -23,6 +23,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+from sqlpa.config import repo_relative  # noqa: E402
+
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
 
 
@@ -66,11 +69,18 @@ def main(report_dir: Path) -> int:
         "--dims", "state", "category", "--inject-pct", "0.60",
         "--topk", "1", "2", "3", "5",
     ])
+    # 外部公开基准（Spider dev）：数据集在仓库外，缺失时跳过而不是让整套评测变红。
+    spider = ROOT.parent / "spider" / "dev.json"
+    external_ok = False
+    if spider.exists():
+        external_ok = _run_eval("external_bank", report_dir) == 0
+    else:
+        print(f"\n>>> 跳过 external_bank：未找到 {spider}（Spider 数据集属仓库外资源）")
 
     overall = {
         "suite": "overall",
         "desc": "批量评测总报告（离线确定性，无需 API Key）",
-        "report_dir": str(report_dir),
+        "report_dir": repo_relative(report_dir),
         "exit_code_ok": rc == 0,
         "suites": {},
     }
@@ -111,6 +121,21 @@ def main(report_dir: Path) -> int:
         "量价因子分解命中率(factorize)": a["factorize"]["hit_rate"],
     }
 
+    # ---- 外部公开基准（Spider dev；不存在则跳过）----
+    if external_ok:
+        e = _load(report_dir, "external_bank_world_1")
+        es = e["summary"]
+        overall["suites"]["external_bank_world_1"] = {
+            "语料": f"Spider dev world_1, N={es['total']}",
+            "覆盖率(开发集口径)": es["coverage_rate"],
+            "覆盖内执行正确率": es["accuracy_on_covered"],
+            "敢答且答错": es["wrong"],
+            "拒答率": es["refusal_rate"],
+            "目标形态覆盖率": round(
+                e["by_gold_shape"].get("单聚合（语义层目标形态）", {}).get("correct", 0) /
+                max(1, e["by_gold_shape"].get("单聚合（语义层目标形态）", {}).get("total", 1)), 4),
+        }
+
     (report_dir / "overall.json").write_text(
         json.dumps(overall, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -135,6 +160,11 @@ def main(report_dir: Path) -> int:
     print("● 归因三维定位命中率（注入式真因，inject 60%）")
     for k, v in overall["suites"]["attribution"].items():
         print(f"    {k:<24}: {_fmt(v)}")
+    if external_ok:
+        print(sep)
+        print("● 外部公开基准（Spider dev，第三方问题+gold SQL）")
+        for k, v in overall["suites"]["external_bank_world_1"].items():
+            print(f"    {k:<20}: {v if not isinstance(v, float) else _pct(v)}")
     print("#" * 60)
     print(f"总报告已保存: {report_dir / 'overall.json'}")
     print(f"退出码: {rc}（{'全部通过' if rc == 0 else '存在失败'}，单个脚本的输出见上方）")

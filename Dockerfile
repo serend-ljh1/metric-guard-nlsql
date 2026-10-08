@@ -1,6 +1,10 @@
-# 多智能体 Text-to-SQL 智能取数产品 —— 一键容器化
+# 多 Agent 协作数据分析系统 —— 容器化（FastAPI 后端）
 # 构建:  docker build -t sqlpa .
-# 运行:  docker compose up  （web:8501 前端 + api:8000 后端）
+# 运行:  docker run -p 8000:8000 --env-file .env sqlpa      （/docs 有 Swagger）
+#       或 docker compose up                                （api:8000）
+#
+# 说明：前端是 Vue3 + Vite（web/），开发期用 `npm run dev`（5173）并代理到本服务；
+# 容器里只跑 API。历史上这里曾用 Streamlit（app.py），该前端已下线。
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -15,8 +19,7 @@ COPY . .
 # 预构建 Olist 同结构样本库（离线可跑；挂载真实 olist.db 可覆盖）
 RUN python tools/build_olist_sample.py
 
-# Streamlit 前端 8501 / FastAPI 后端 8000
-EXPOSE 8501 8000
+# FastAPI 后端
+EXPOSE 8000
 
-# 默认起前端；compose 里分别起 web / api
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]

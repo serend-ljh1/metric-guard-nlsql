@@ -57,7 +57,12 @@ def test_no_llm_in_sql_generation(tmpdir_clean, sample_db):
                 '{"metric":"gmv","dims":["state"],"filters":[],"note":"我随便说的"}']
     sqls, methods = [], []
     for pl in payloads:
-        r = answer("各州的GMV", CFG, sb, sample_db, llm=EchoLLM(pl))
+        # LLM 推断的口径先停在确认门（人工确认是新增的前置治理环节）
+        step1 = answer("各州的GMV", CFG, sb, sample_db, llm=EchoLLM(pl))
+        assert step1.get("need_confirm") and step1.get("confirm_id"), step1.get("reject")
+        # 用确认记录放行：执行的是**确认卡上的 spec**，与 LLM 的自由文本无关
+        r = answer("各州的GMV", CFG, sb, sample_db, llm=EchoLLM(pl),
+                   confirm_id=step1["confirm_id"])
         assert r["ok"] and r["path"] == "semantic"
         sqls.append(r["sql"])
         methods.append(r.get("agent_trace", [{}])[0].get("detail", ""))
@@ -85,10 +90,15 @@ def test_redline_boundary_is_observable(tmpdir_clean, sample_db):
     assert (r_llm.metric_key, tuple(r_llm.dims)) == (r_kw.metric_key, tuple(r_kw.dims))
 
     sb = SqlSandbox(sample_db, ExecConfig(max_rows=2000))
-    with_llm = answer("各州的GMV", CFG, sb, sample_db,
-                      llm=type("L", (), {"complete": lambda self, p: '{"metric":"gmv","dims":["state"]}'})())
+    _llm = type("L", (), {"complete": lambda self, p: '{"metric":"gmv","dims":["state"]}'})()
+    # LLM 路线：先拿确认记录（确认卡上的 spec 与 LLM 推断一致），确认后执行
+    step1 = answer("各州的GMV", CFG, sb, sample_db, llm=_llm)
+    assert step1.get("need_confirm") and step1.get("confirm_id")
+    with_llm = answer("各州的GMV", CFG, sb, sample_db, llm=_llm,
+                      confirm_id=step1["confirm_id"])
     without = answer("各州的GMV", CFG, sb, sample_db, llm=None)
-    assert with_llm["match_method"] == "llm" and without["match_method"] == "keyword"
+    # 确定性关键词命中不需要确认（不打扰用户），LLM 推断的确认后记为 confirmed
+    assert with_llm["match_method"] == "confirmed" and without["match_method"] == "keyword"
     # 关键：意图识别来源不同，但 SQL 逐字一致 → 生成区与 LLM 无关（红线守住了）
     assert with_llm["sql"] == without["sql"]
     assert with_llm["sql"] == compile_spec(CFG, QuerySpec(metric="gmv", dims=["state"])).sql

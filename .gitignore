@@ -40,6 +40,8 @@ eval_result*.json
 .tmppytest*/
 .pyt/
 ._test_tmp/
+# pytest 自建基线目录：不忽略它会让 `git add -A` 因"目录不可读"直接报错退出
+.basetemp/
 # 调试遗留（点下划线前缀的临时产物，勿提交）
 ._*/
 ._*.txt
@@ -57,15 +59,9 @@ data/reports/
 data/subscriptions.json
 *.log
 
-# ---- 评测逐题产物（**随仓库发布**）----
-# README 引用的 EX/token/成本数字只有靠这些逐题 JSON 才能被复核；
-# 去掉它们，"数字可复核"就只是口号。合计约 220KB。
-# 注意：不能用"先忽略整个目录再豁免文件"的写法（git 不会进入被忽略的目录），
-# 且例外规则必须放在上面 `*.log` 等宽规则之后才生效。
-!eval_results/
-!eval_results/*.json
-!eval_results/*.log
-!eval_results/*.md
+# ---- 评测逐题产物（**随仓库发布**，供复核 README 引用的数字）----
+# 逐题明细落在 evaluation/reports/*.json，直接入库、不做忽略。
+# （历史上曾有一份 eval_results/ 旧引擎产物，随该引擎删除一并移除。）
 
 # ---- IDE ----
 .idea/

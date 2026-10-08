@@ -1,12 +1,12 @@
 """
 api.py
 ======
-FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Streamlit 前端共用同一套
+FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Vue3 前端共用同一套
 业务服务层，保证口径一致）。
 
 端点：
   GET  /health              健康检查
-  POST /api/query           自然语言取数（分级放行：口径内认证 / 口径外降级标注）
+  POST /api/query           自然语言取数（口径内确定性编译；口径外明确拒绝）
   GET  /api/metrics         指标中心（指标/维度/过滤模板/别名）
   GET  /api/audit           审计留痕（最近 N 条）
   GET  /api/datasources     已注册数据源（密码掩码）
@@ -112,6 +112,9 @@ class QueryIn(BaseModel):
                       description="期望角色；仅可在 token 授予的权限范围内使用（不能提权）")
     history: List[dict] = Field(default_factory=list,
                                 description="对话历史 [{'question','metric','sql'}]，用于多轮追问")
+    confirm_id: Optional[str] = Field(
+        None, description="口径确认记录 id（LLM 推断口径时由上一次响应返回）。"
+                          "传入后按该记录的口径**逐字**执行；无效/已用过 → 拒绝")
 
 
 # ---------------- 鉴权 ----------------
@@ -163,7 +166,7 @@ def api_query(q: QueryIn, x_api_token: Optional[str] = Header(default=None)):
     # 角色只认凭据，不认请求体（修复越权：原实现直接 role=q.role）
     role = _resolve_role(x_api_token, q.role)
     a = answer_impl(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                    role=role, history=q.history)
+                    role=role, history=q.history, confirm_id=q.confirm_id)
     a["effective_role"] = role
     # 控制响应体积
     if isinstance(a.get("rows"), list):
@@ -186,7 +189,7 @@ def api_report(q: ReportIn, x_api_token: Optional[str] = Header(default=None)):
     from sqlpa.business.deliver import export_report
     role = _resolve_role(x_api_token, q.role)
     a = answer_impl(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                    role=role, history=q.history)
+                    role=role, history=q.history, confirm_id=q.confirm_id)
     if not a.get("ok"):
         return {"ok": False, "reject": a.get("reject", "取数未成功，无法生成报告")}
     out_dir = Path(os.environ.get("SQLPA_REPORT_DIR") or (ROOT / "data" / "reports"))
@@ -219,8 +222,6 @@ class AnalyzeIn(QueryIn):
     alert_threshold_pct: float = Field(0.05, description="波动告警阈值（0.05 = 5%")
     session_id: Optional[str] = Field(
         None, description="会话 ID：复用则会话级 Agent 记忆（跨轮续下钻）；缺省为一次性无记忆会话")
-    confirm_metric: Optional[str] = Field(
-        None, description="口径待确认时用户确认/改选后的指标 key；携带后按该口径确定性执行，跳过确认门")
 
 
 # 会话级工作记忆：session_id -> {last_drill, metric, ...}
@@ -283,7 +284,7 @@ def api_analyze(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None))
                          role=role,
                          alert_threshold_pct=q.alert_threshold_pct,
                          emit=_emit,
-                         confirm_metric=q.confirm_metric,
+                         confirm_id=q.confirm_id,
                          memory=_session_memory(q.session_id,
                                                 _caller_key(x_api_token, role)))
     return {"events": events, "final": final, "effective_role": role}
@@ -319,7 +320,7 @@ def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default
                 question=q.question, cfg=_cfg(), sb=_sandbox(), db_path=_db_path(),
                 llm=_llm(), role=role,
                 alert_threshold_pct=q.alert_threshold_pct, emit=_emit,
-                confirm_metric=q.confirm_metric,
+                confirm_id=q.confirm_id,
                 memory=_session_memory(q.session_id, caller))
         except Exception as e:  # noqa: BLE001
             import traceback
@@ -509,6 +510,105 @@ def api_check_subscriptions(dry: bool = True,
     if not dry:
         out["delivery"] = deliver_alerts(need)
     return out
+
+
+class HitlDecisionIn(BaseModel):
+    """HITL 工单状态流转。"""
+    status: str = Field(..., description="in_progress / fixed / verified / dismissed / reopened")
+    note: str = Field("", description="人工复核意见")
+
+
+@app.get("/api/hitl")
+def api_hitl(status: str = "pending", limit: int = 50,
+             x_api_token: Optional[str] = Header(default=None)):
+    """人工复核队列（SQLite 权威存储）。status=all / closed 可查全量或已关闭。"""
+    _resolve_role(x_api_token, "analyst")
+    from sqlpa.business import storage
+    if status == "closed":
+        rows = storage.list_hitl("all", limit=max(1, min(limit, 500)))
+        return [r for r in rows if r.get("status") in ("verified", "dismissed")]
+    return storage.list_hitl(status=status, limit=max(1, min(limit, 500)))
+
+
+@app.get("/api/hitl/{record_id}/history")
+def api_hitl_history(record_id: str, x_api_token: Optional[str] = Header(default=None)):
+    """工单状态流转历史（谁在什么时候把它从什么状态改成了什么）。"""
+    _resolve_role(x_api_token, "analyst")
+    from sqlpa.business import hitl
+    if not hitl.get(record_id):
+        raise HTTPException(status_code=404, detail=f"工单不存在：{record_id}")
+    return hitl.history(record_id)
+
+
+@app.post("/api/hitl/{record_id}/decide")
+def api_hitl_decide(record_id: str, body: HitlDecisionIn,
+                    x_api_token: Optional[str] = Header(default=None)):
+    """推进工单状态（**仅 admin**）——人工处理的入口，此前系统里根本不存在这个端点。"""
+    role = _resolve_role(x_api_token, "analyst")
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="推进 HITL 工单需要 admin 权限")
+    from sqlpa.business import hitl
+    if body.status not in hitl.STATUSES:
+        raise HTTPException(status_code=400,
+                            detail=f"非法状态 {body.status}，允许：{list(hitl.STATUSES)}")
+    if not hitl.resolve(record_id, body.status, human_note=body.note, actor=f"api:{role}"):
+        raise HTTPException(status_code=404, detail=f"工单不存在：{record_id}")
+    return {"ok": True, "record_id": record_id, "status": body.status}
+
+
+@app.post("/api/hitl/{record_id}/verify")
+def api_hitl_verify(record_id: str, x_api_token: Optional[str] = Header(default=None)):
+    """**重跑验证**（仅 admin）：把工单指标在其时间窗上重新算一遍，
+    仍异常 → reopened，已恢复 → verified。人工说"修好了"不算数，数据说了才算。"""
+    role = _resolve_role(x_api_token, "analyst")
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="重跑验证需要 admin 权限")
+    from sqlpa.business import hitl
+    out = hitl.verify(record_id, _cfg(), sqlite3.connect(_db_path()), _db_path(),
+                      actor=f"api:{role}")
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=out.get("reason", "重跑验证失败"))
+    return out
+
+
+@app.get("/api/confirmations")
+def api_confirmations(status: str = "pending", limit: int = 50,
+                      x_api_token: Optional[str] = Header(default=None)):
+    """待确认口径列表（HITL 前置门）：LLM 猜出来的口径在确认前不允许拉数。"""
+    _resolve_role(x_api_token, "analyst")
+    from sqlpa.business import storage
+    return storage.list_confirmations(status=status or None,
+                                      limit=max(1, min(limit, 500)))
+
+
+@app.post("/api/confirmations/{confirm_id}/override")
+def api_confirmations_override(confirm_id: str, metric: str,
+                               x_api_token: Optional[str] = Header(default=None)):
+    """**改选**口径：把待确认记录换成另一个合法指标，返回新的 confirm_id。
+
+    原记录置 dismissed（留痕），新记录继承维度/时间范围，只换指标 ——
+    改选不等于可以顺手改口径范围。
+    """
+    _resolve_role(x_api_token, "analyst")
+    from sqlpa.business import confirm as _confirm
+    new_id, err = _confirm.override(_cfg(), confirm_id, metric)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    return {"ok": True, "confirm_id": new_id, "metric": metric,
+            "replaced": confirm_id}
+
+
+@app.post("/api/confirmations/{confirm_id}/dismiss")
+def api_confirmations_dismiss(confirm_id: str,
+                              x_api_token: Optional[str] = Header(default=None)):
+    """驳回一条待确认口径（仅 admin）。"""
+    role = _resolve_role(x_api_token, "analyst")
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="处理口径确认需要 admin 权限")
+    from sqlpa.business import storage
+    if not storage.decide_confirmation(confirm_id, "dismissed", actor=f"api:{role}"):
+        raise HTTPException(status_code=404, detail=f"确认记录不存在或已处理：{confirm_id}")
+    return {"ok": True, "confirm_id": confirm_id, "status": "dismissed"}
 
 
 @app.get("/api/datasources")

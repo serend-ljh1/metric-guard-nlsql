@@ -3,8 +3,7 @@
 
 # ---- 前端 ----
 # 前端为 Vue3 + ECharts（见 web/，依赖在 web/package.json）——
-# 此处不再需要 python 前端依赖（Streamlit 已移除）。
-altair
+# 此处不需要任何 python 前端依赖。（Streamlit / Altair 已随该前端一并移除。）
 
 # ---- API 后端 ----
 fastapi
@@ -17,9 +16,6 @@ langgraph
 pydantic>=2.0
 pyyaml
 python-dotenv
-# 统计/可视化（消融实验、混淆矩阵）
-pandas
-matplotlib
 
 # ---- 测试 / CI ----
 pytest

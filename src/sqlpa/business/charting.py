@@ -1,4 +1,4 @@
-﻿"""
+"""
 sqlpa.business.charting
 =======================
 结果自动可视化：根据「列名 + 数据类型 + 行数」确定性推荐图表类型并生成 Altair 图。
@@ -61,35 +61,3 @@ def recommend(columns: List[str], rows: List[Sequence]) -> Dict:
         return {"kind": "bar", "x": x, "y": y}
 
     return {"kind": "table"}
-
-
-def build_altair(spec: Dict, columns: List[str], rows: List[Sequence]):
-    """按推荐规格构建 Altair 图表；不适用返回 None。"""
-    kind = spec.get("kind")
-    if kind not in ("bar", "line", "grouped_bar"):
-        return None
-    try:
-        import altair as alt
-        import pandas as pd
-    except ImportError:
-        return None
-
-    df = pd.DataFrame([list(r) for r in rows], columns=columns)
-    x, y = spec["x"], spec["y"]
-    if x not in df.columns or y not in df.columns:
-        return None
-    df[y] = pd.to_numeric(df[y], errors="coerce")
-
-    if kind == "line":
-        chart = alt.Chart(df).mark_line(point=True).encode(
-            x=alt.X(x, title=x, sort=None), y=alt.Y(y, title=y))
-    elif kind == "grouped_bar":
-        color = spec.get("color")
-        chart = alt.Chart(df).mark_bar().encode(
-            x=alt.X(x, title=x, sort="-y"),
-            y=alt.Y(y, title=y),
-            color=alt.Color(color, title=color) if color else alt.value("#4c78a8"))
-    else:
-        chart = alt.Chart(df).mark_bar().encode(
-            x=alt.X(x, title=x, sort="-y"), y=alt.Y(y, title=y))
-    return chart.properties(width="container", height=320)

@@ -1,8 +1,9 @@
 {
   "n_cases": 66,
-  "db_kind": "sample",
+  "db_kind": "full",
+  "db": "data/olist/olist.db",
   "engine": "semantic-first (compiler)",
-  "offline_note": "本评测离线运行（llm=None），因此**降级路径未被实际触发**：口径外问题在离线时会被明确拒绝而不是交给多 Agent 生成。线上有 LLM 时这部分会走 fallback。故这里以 'semantic_hit_rate'(落到已治理口径的比例) 为主指标，降级率仅给出上界（口径外题数占比）。",
+  "offline_note": "本评测离线运行（llm=None），走确定性关键词匹配链路，因此衡量的是**关键词词表 + 口径配置的覆盖能力**。口径外问题在离线与在线**都**是明确拒绝（自由 SQL 生成链路已删除，不存在降级路径）；线上有 LLM 时，未被关键词命中的问法会由 LLM 识别并**停在口径确认门**等人确认（method=llm 不允许直接执行），那部分能力未在本评测中度量。故这里以 'semantic_hit_rate'(落到已治理口径的比例) 为主指标，'out_of_scope' 占比即**拒绝率**。",
   "semantic_layer": {
     "metrics": 24,
     "derived": 3,
@@ -13,6 +14,7 @@
     "fallback": 0,
     "reject": 10
   },
+  "paths_note": "fallback 恒为 0：自由 SQL 生成（降级）链路已删除，口径外一律走 reject。该字段保留为回归护栏。",
   "semantic_hit_rate": 0.8485,
   "out_of_scope_rate": 0.0758,
   "reject_rate": 0.1515,
@@ -35,7 +37,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {
@@ -108,7 +110,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {
@@ -179,7 +181,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {
@@ -304,7 +306,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {
@@ -360,7 +362,7 @@
       "dims": [
         "state"
       ],
-      "rows": 13,
+      "rows": 23,
       "reject": ""
     },
     {
@@ -388,7 +390,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {
@@ -470,7 +472,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {
@@ -638,7 +640,7 @@
       "dims": [
         "category"
       ],
-      "rows": 66,
+      "rows": 75,
       "reject": ""
     },
     {
@@ -791,7 +793,7 @@
       "dims": [
         "category"
       ],
-      "rows": 65,
+      "rows": 74,
       "reject": ""
     },
     {

@@ -14,8 +14,9 @@ sqlpa.business.compiler
   - ratio@a/b  ：两个基础指标之比（如 freight_rate = 运费/GMV，各算各的、再相除）
   - share      ：占整体比例（当前口径值 / 同期不带分组的总值）
 
-注意与旧 `assembler.py` 的关系：assembler 是早期最小实现（仅供离线兜底），
-本模块是其超集并成为主路径；assembler 保留以兼容既有调用与测试。
+过滤取值支持三种形态：标量（等值）、列表（集合/或）、`{"op","value"}`（显式算子）。
+**算子名 → SQL 记号必须来自配置白名单**（`filter_ops`/`metric_ops`），
+所以"意图层/LLM"既改不了公式，也无法把任意 SQL 片段送进查询。
 """
 from __future__ import annotations
 
@@ -48,12 +49,25 @@ _JOIN_STOPWORDS = {"on", "using", "where", "group", "order", "left", "right", "i
 
 @dataclass
 class QuerySpec:
-    """语义层查询规格：意图解析的输出，编译器的输入。"""
+    """语义层查询规格：意图解析的输出，编译器的输入。
+
+    过滤取值支持三种形态（向后兼容：老调用只传标量）：
+      - 标量            → 等值（默认算子 eq）
+      - list/tuple      → 集合（算子 in，语义是"或"）
+      - {"op":名,"value":值} → 显式算子（lt/gt/lte/gte/ne/between/in/nin…）
+
+    **算子名到 SQL 记号的映射必须来自配置白名单**（`filter_ops`），规格里只出现算子名。
+    这样"用户/意图层"永远无法把任意 SQL 片段送进查询 —— 与值一样，算子也走白名单，
+    只是白名单在配置里而不是在代码里。
+    """
     metric: str
     dims: List[str] = field(default_factory=list)
     filters: List[Tuple[str, object]] = field(default_factory=list)
     time_grain: Optional[str] = None   # day/week/month/quarter；仅当 dims 含 dt 时生效
     top: int = 0                       # >0 时按指标降序取前 N
+    # 对本指标自身表达式施加的聚合后过滤（HAVING），如"语言数 > 2"的每组筛选。
+    # 元素为 (算子名, 值)，算子同样取配置白名单（`metric_ops`）。
+    having: List[Tuple[str, object]] = field(default_factory=list)
 
 
 @dataclass
@@ -87,9 +101,109 @@ def _quote(v) -> str:
 
 
 def _render_value(value) -> str:
+    # 数值不加引号：`IndepYear < '1930'` 依赖 SQLite 的类型亲和性才能正确比较，
+    # 换个方言（PG 严格类型）就会报错。数值字面量本身不可能携带注入。
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return repr(value)
     if isinstance(value, (list, tuple)):
-        return "(" + ",".join(_quote(x) for x in value) + ")"
+        return "(" + ",".join(_render_value(x) for x in value) + ")"
     return _quote(value)
+
+
+def _resolve_filter_op(cfg: BusinessConfig, ftype: str, value) -> Tuple[str, str]:
+    """把过滤取值解析成 (SQL 算子, 已渲染的值表达式)。
+
+    白名单规则：算子名 → SQL 记号的映射**只能**来自配置 `filter_ops[ftype]`。
+    规格里给的算子名不在白名单 → 编译期拒绝（绝不把名字直接拼进 SQL）。
+    为什么不能"默认放行常用算子"：`!=` 用在等值过滤上会静默改变语义
+    （"运费占比"变成"非该州的运费占比"），而配置声明是**逐过滤类型**授权的最小面。
+    """
+    ops = (getattr(cfg, "filter_ops", None) or {}).get(ftype) or {}
+    if not ops:
+        # 未声明算子白名单 → 退回历史语义：只允许等值。
+        # （不是"默认放行常用算子"：放行 != 会静默改变语义，而 `{op}` 模板也不存在。）
+        ops = {"eq": "="}
+    if isinstance(value, dict):
+        name = str(value.get("op") or "eq")
+        val = value.get("value")
+    elif isinstance(value, (list, tuple)):
+        name, val = "in", list(value)
+    else:
+        name, val = "eq", value
+
+    if name not in ops:
+        raise CompileError(
+            f"过滤「{ftype}」不支持算子「{name}」"
+            f"（已授权算子: {sorted(ops) or '仅等值'}）。"
+            "如需该语义，请在语义层配置里为该过滤声明算子白名单。")
+
+    op_sql = ops[name]
+    if name == "between":
+        if not (isinstance(val, (list, tuple)) and len(val) == 2):
+            raise CompileError(f"过滤「{ftype}」的 between 需要恰好两个边界值")
+        return op_sql, f"{_render_value(val[0])} AND {_render_value(val[1])}"
+    if name in ("in", "nin"):
+        if not isinstance(val, (list, tuple)) or not val:
+            raise CompileError(f"过滤「{ftype}」的 {name} 需要非空取值列表")
+        return op_sql, _render_value(list(val))
+    if isinstance(val, (list, tuple)):
+        raise CompileError(f"过滤「{ftype}」的算子「{name}」只接受单值")
+    return op_sql, _render_value(val)
+
+
+def render_filter(cfg: BusinessConfig, ftype: str, value) -> str:
+    tmpl = cfg.filter_templates.get(ftype)
+    if not tmpl:
+        raise CompileError(f"未知过滤类型: {ftype}")
+    if ftype == "time_range":
+        start, end = resolve_time_range(value)
+        return tmpl.format(start=start, end=end)
+    op_sql, val_sql = _resolve_filter_op(cfg, ftype, value)
+    if "{op}" in tmpl:
+        return tmpl.format(op=op_sql, value=val_sql)
+    # 模板没写 {op}：只允许等值/集合两种"模板本身已含运算符"的写法。
+    # 其余算子若被放行，运算符会无处安放（要么被丢弃、要么被拼错），因此显式拒绝。
+    if op_sql not in ("=", "IN", "NOT IN"):
+        raise CompileError(
+            f"过滤「{ftype}」的模板未包含 {{op}}，无法表达算子「{op_sql}」；"
+            "请在配置里把模板写成 `列 {op} {value}` 形式后再使用比较/区间语义")
+    return tmpl.format(value=val_sql)
+
+
+def _render_having(cfg: BusinessConfig, metric_expr: str,
+                   having: Sequence[Tuple[str, object]]) -> List[str]:
+    """把 (算子名, 值) 渲染成 HAVING 子句（对本指标自身的聚合值做后置筛选）。
+
+    为什么需要它：`每个国家的语言数 > 2` 这类问题的筛选条件作用在**聚合结果**上，
+    放进 WHERE 是错的（SQL 里 WHERE 不能引用聚合），只能进 HAVING。
+    规格原先没有 HAVING 位置，于是这类问题只能被拒答 —— 这正是"表达力不足"的一种。
+    """
+    if not having:
+        return []
+    if not re.search(r"\b(SUM|COUNT|AVG|MIN|MAX)\s*\(", metric_expr or "", re.I):
+        raise CompileError("HAVING 只能用于聚合指标（本指标表达式不是聚合函数）")
+    ops = getattr(cfg, "metric_ops", None) or {}
+    out: List[str] = []
+    for name, value in having:
+        name = str(name)
+        if name not in ops:
+            raise CompileError(f"HAVING 不支持算子「{name}」（已授权: {sorted(ops)}）")
+        op_sql = ops[name]
+        if name == "between":
+            if not (isinstance(value, (list, tuple)) and len(value) == 2):
+                raise CompileError("HAVING 的 between 需要恰好两个边界值")
+            rhs = f"{_render_value(value[0])} AND {_render_value(value[1])}"
+        elif name in ("in", "nin"):
+            rhs = _render_value(list(value))          # type: ignore[arg-type]
+        else:
+            if isinstance(value, (list, tuple)):
+                raise CompileError(f"HAVING 的算子「{name}」只接受单值")
+            rhs = _render_value(value)
+        out.append(f"{metric_expr} {op_sql} {rhs}")
+    return out
+
 
 
 def _first_of_month(d: datetime.date) -> datetime.date:
@@ -124,16 +238,6 @@ def resolve_time_range(spec: str, now: Optional[datetime.date] = None) -> Tuple[
         return _quote((now - datetime.timedelta(days=n)).isoformat()), _quote(now.isoformat())
     start = now - datetime.timedelta(days=30)
     return _quote(start.isoformat()), _quote(now.isoformat())
-
-
-def render_filter(cfg: BusinessConfig, ftype: str, value) -> str:
-    tmpl = cfg.filter_templates.get(ftype)
-    if not tmpl:
-        raise CompileError(f"未知过滤类型: {ftype}")
-    if ftype == "time_range":
-        start, end = resolve_time_range(value)
-        return tmpl.format(start=start, end=end)
-    return tmpl.format(value=_render_value(value))
 
 
 def dimension_sql(cfg: BusinessConfig, dim: str, time_grain: Optional[str] = None) -> str:
@@ -229,6 +333,9 @@ def compile_spec(cfg: BusinessConfig, spec: QuerySpec,
     """
     derived = parse_derived(spec.metric)
     if derived:
+        if spec.having:
+            raise CompileError("HAVING 暂不支持派生指标（ratio/share）："
+                               "其表达式是比值的组合，聚合后筛选的口径需单独登记")
         return _compile_derived(cfg, spec, derived, row_filters)
     m = cfg.metrics.get(spec.metric)
     if not m:
@@ -251,9 +358,11 @@ def compile_spec(cfg: BusinessConfig, spec: QuerySpec,
         where_parts.append(render_filter(cfg, ftype, value))
     join_sql = _inject(cfg, m, dim_keys, filter_types)
     where_parts += _apply_row_filters(join_sql, m.from_clause, row_filters)
+    having_parts = _render_having(cfg, m.metric_expr, spec.having or ())
 
     sql = _build_sql(select_parts, m.from_clause, join_sql, where_parts,
-                     dim_sqls, order_expr=m.metric_expr, top=spec.top)
+                     dim_sqls, order_expr=m.metric_expr, top=spec.top,
+                     having_parts=having_parts)
     return CompiledQuery(
         sql=sql, metric_key=m.key, metric_name=m.name, metric_expr=m.metric_expr,
         dims=dim_keys, filters={ft: str(v) for ft, v in (spec.filters or [])},
@@ -356,8 +465,10 @@ def _MergeProxy(a: Metric, b: Metric, ja: str, jb: str):
 
 def _build_sql(select_parts: Sequence[str], from_clause: str, join_clause: str,
                where_parts: Sequence[str], dim_sqls: Sequence[str],
-               order_expr: str = "", top: int = 0) -> str:
+               order_expr: str = "", top: int = 0,
+               having_parts: Sequence[str] = ()) -> str:
     group_sql = ("GROUP BY " + ", ".join(dim_sqls)) if dim_sqls else ""
+    having_sql = ("HAVING " + " AND ".join(having_parts)) if having_parts else ""
     order_sql = f"ORDER BY {order_expr} DESC" if (order_expr and dim_sqls) else ""
     limit_sql = f"LIMIT {int(top)}" if top else ""
     parts = [
@@ -366,6 +477,7 @@ def _build_sql(select_parts: Sequence[str], from_clause: str, join_clause: str,
         (join_clause or "").strip(),
         ("WHERE " + " AND ".join(where_parts)) if where_parts else "",
         group_sql,
+        having_sql,
         order_sql,
         limit_sql,
     ]

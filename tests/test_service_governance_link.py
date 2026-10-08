@@ -24,11 +24,13 @@ from sqlpa.business.service import answer
 from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
 
 
-def _build_db(tmpdir_clean) -> str:
-    """造一个小 olist 库，8 月(GMV150) vs 9 月(GMV80) → 明显下跌，触发归因。"""
+def _build_db(tmpdir_clean, months) -> str:
+    """造一个小 olist 库，上月(GMV150) vs 本月(GMV80) → 明显下跌，触发归因。"""
     p = tmpdir_clean / "t.db"
+    cur, prev, prev_late = (months["current"], months["previous"],
+                            months["previous_late"])
     conn = sqlite3.connect(p)
-    conn.executescript("""
+    conn.executescript(f"""
       CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
         order_purchase_timestamp TEXT, order_status TEXT);
       CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
@@ -36,8 +38,8 @@ def _build_db(tmpdir_clean) -> str:
       CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
       INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
       INSERT INTO orders VALUES
-        ('o1','c1','2026-08-10','delivered'),('o2','c1','2026-08-15','delivered'),
-        ('o3','c2','2026-09-05','delivered');
+        ('o1','c1','{prev}','delivered'),('o2','c1','{prev_late}','delivered'),
+        ('o3','c2','{cur}','delivered');
       INSERT INTO order_items VALUES ('o1','p1',100),('o2','p1',50),('o3','p2',80);
       INSERT INTO products VALUES ('p1','alimentos'),('p2','alimentos');
     """)
@@ -47,8 +49,8 @@ def _build_db(tmpdir_clean) -> str:
 
 
 @pytest.fixture
-def db(tmpdir_clean):
-    return _build_db(tmpdir_clean)
+def db(tmpdir_clean, business_months):
+    return _build_db(tmpdir_clean, business_months)
 
 
 def _answer(db, question="本月各个品类的GMV", hitl_path=None):

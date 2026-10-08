@@ -1,12 +1,12 @@
 {
   "suite": "overall",
   "desc": "批量评测总报告（离线确定性，无需 API Key）",
-  "report_dir": "D:\\ds harness\\metric-guard-nlsql\\evaluation\\reports",
+  "report_dir": "evaluation/reports",
   "exit_code_ok": true,
   "suites": {
     "business": {
       "口径内命中率": 1.0,
-      "公式防篡改拦截率": 0.75,
+      "公式防篡改拦截率": 1.0,
       "权限拦截率": 1.0,
       "PII 掩码覆盖率": 1.0,
       "审计覆盖率": 1.0
@@ -23,15 +23,23 @@
       "判定题数": 6
     },
     "attribution": {
-      "归因定位命中率(analyze)": 1.0,
+      "归因定位命中率(analyze)": 0.5357,
       "归因 top-k 命中率": {
-        "1": 1.0,
-        "2": 1.0,
-        "3": 1.0,
-        "5": 1.0
+        "1": 0.5357,
+        "2": 0.7857,
+        "3": 0.9286,
+        "5": 0.9643
       },
-      "下钻定位命中率(drill)": 1.0,
+      "下钻定位命中率(drill)": 0.3333,
       "量价因子分解命中率(factorize)": 1.0
+    },
+    "external_bank_world_1": {
+      "语料": "Spider dev world_1, N=120",
+      "覆盖率(开发集口径)": 0.25,
+      "覆盖内执行正确率": 1.0,
+      "敢答且答错": 0,
+      "拒答率": 0.75,
+      "目标形态覆盖率": 0.5833
     }
   }
 }

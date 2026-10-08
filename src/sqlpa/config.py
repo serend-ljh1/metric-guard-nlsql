@@ -79,6 +79,24 @@ def resolve_db_path(explicit: str | Path | None = None,
         "--out data/olist/olist.db`")
 
 
+def repo_relative(p: str | Path | None) -> str:
+    """把路径转成**仓库相对**形式，用于写进评测报告。
+
+    为什么必须这么做：报告 JSON 是**随仓库发布**的产物。若直接写绝对路径，
+    发布出去的就是"某台机器的目录结构"（`D:\\ds harness\\...` 或 `/home/某人/...`），
+    既是信息泄漏，也让报告看起来像本机快照而不是可复核的证据。
+    仓库外的路径（如另存的 Spider 数据集）退化为**文件名**：够用（数据集名在里面），
+    但不会暴露本机的父目录命名。
+    """
+    if not p:
+        return ""
+    try:
+        path = Path(p)
+        return path.resolve().relative_to(Path(_ROOT).resolve()).as_posix()
+    except (ValueError, OSError):
+        return Path(p).name
+
+
 def db_kind_note(kind: str) -> str:
     """给样本库运行加一句显式提示（避免把示意值当成全量口径的结论）。"""
     if kind == "sample":

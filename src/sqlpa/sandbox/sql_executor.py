@@ -33,13 +33,28 @@ _BLOCKED_KEYWORDS = {
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE",
     "REPLACE", "MERGE", "ATTACH", "DETACH", "PRAGMA", "VACUUM", "REINDEX",
     "GRANT", "REVOKE", "ANALYZE", "CALL", "EXEC", "EXECUTE",
+    # MySQL 把查询结果写到服务端文件：`SELECT ... INTO OUTFILE '/tmp/x'`。
+    # 在 SQLite 上只是语法错误，但同一套策略作用于 MySQL 连接时它就是**写文件**。
+    "OUTFILE", "DUMPFILE",
 }
 # 可能被用于绕过只读的语句
 _BLOCKED_PATTERNS = [
     re.compile(r"\b(count|sum|avg|max|min)\s*\(\s*['\"]?", re.I),  # 不是高危,排除
 ]
-# 危险 Load 扩展 / shell
-_BLOCKED_FUNCTIONS = {"load_extension", "print"}
+# 危险 Load 扩展 / shell（方言无关的负面清单）
+_BLOCKED_FUNCTIONS = {
+    "load_extension", "print",
+    # ---- 跨方言危险函数（外部对抗语料评测发现的缺口）----
+    # 这些在 SQLite 上只是"函数不存在"而执行失败，但同一套 _sanitize 也作用于 MySQL/PG
+    # 连接：一旦接真实外部库，`SELECT SLEEP(10)`（时间盲注/资源耗尽）、
+    # `SELECT LOAD_FILE('/etc/passwd')`（服务端任意文件读取并作为列返回）就是可执行的。
+    "sleep", "benchmark",                    # MySQL 时间盲注
+    "load_file",                             # MySQL 任意文件读
+    "pg_sleep",                              # PostgreSQL 时间盲注
+    "pg_read_file", "pg_ls_dir",             # PostgreSQL 任意文件读/目录列举
+    "dblink", "dblink_connect",              # PostgreSQL 外联
+    "xp_cmdshell",                           # MSSQL 命令执行
+}
 
 # 多语句分隔（单引号/双引号内不算）
 _QUOTE_CHARS = ("'", '"')
@@ -124,8 +139,20 @@ def _sanitize(sql: str, cfg: ExecConfig) -> str:
             raise SqlSecurityError(f"拦截高危关键字: {kw}", "blocked_keyword")
 
     for fn in _BLOCKED_FUNCTIONS:
-        if re.search(r"\b" + re.escape(fn) + r"\s*\(", up):
+        # 注意：`up` 是**大写**文本，模式也必须大写 —— 旧实现用小写 `fn` 去匹配大写文本，
+        # 大小写永不相等，于是这份"危险函数黑名单"**从未生效过**（`load_extension` 之前
+        # 看似被拦，实际是 SQLite 默认禁用扩展加载而报错）。由外部对抗语料评测发现。
+        if re.search(r"\b" + re.escape(fn.upper()) + r"\s*\(", up):
             raise SqlSecurityError(f"拦截危险函数: {fn}", "blocked_function")
+
+    # SQLite 的**表值 PRAGMA 函数**（`pragma_table_info(...)`、`pragma_database_list`、
+    # `pragma_table_list` …）：`\bPRAGMA\b` 的词边界匹配不到 `pragma_xxx`（下划线属于词字符），
+    # 于是这条通道能绕过"PRAGMA 一律拦截"的策略去枚举 schema。
+    # 实测（`evaluation/eval_sandbox_external.py` 的外部对抗语料）可读到表清单与列结构；
+    # 虽然只是只读信息泄露、且连接为 mode=ro 无法改库，但"策略声明被绕过"必须堵上。
+    # 注意：这里比对的是**大写文本** `up`，模式也必须大写（小写模式永远匹配不到）。
+    if re.search(r"\bPRAGMA_\w+", up):
+        raise SqlSecurityError("拦截 PRAGMA 表值函数: pragma_*", "blocked_function")
 
     return cleaned
 

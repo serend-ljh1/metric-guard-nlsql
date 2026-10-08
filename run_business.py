@@ -1,15 +1,15 @@
 """
 run_business.py
 ===============
-**业务产品模式入口**（与 run_eval.py 评测模式严格隔离）。
+**业务产品模式入口**（当前仓库唯一的运行模式）。
 
-流程：业务人员中文提问 → MetricMatcher(LLM意图识别) → 确定性组装器(公式来自配置)
+流程：业务人员中文提问 → MetricMatcher(LLM/关键词意图识别) → 编译器按配置确定性生成 SQL
       → 只读沙箱执行 → 业务口径说明 → 审计留痕。
 
-关键设计（防篡改，区别于评测模式）：
-  - 指标公式**只来自 business_config.yaml**，组装器用纯代码生成 SQL；
-  - 因此业务模式下**对指标 SQL 关闭自愈修复**（不让 LLM 改写公式），执行出错即报告；
-  - 引擎的多Agent自愈能力保留在评测模式(自由SQL)使用——这正是两套模式的分工。
+关键设计（防篡改）：
+  - 指标公式**只来自 business_config.yaml**，编译器用纯代码拼装 SQL；
+  - 因此**没有任何"让 LLM 改写公式/自愈重试"的路径**，执行出错即如实报告；
+  - 口径外问题明确拒绝并给出可操作原因，不生成未认证 SQL。
 
 用法：
   # 真实业务查询（使用 .env 的 LLM Key；数据默认 data/olist/olist.db）
@@ -34,10 +34,6 @@ sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from sqlpa.business.metric_config import load_config  # noqa: E402
-from sqlpa.business.metric_matcher import match  # noqa: E402
-from sqlpa.business.assembler import assemble  # noqa: E402
-from sqlpa.business.audit import append_audit, AuditRecord  # noqa: E402
-from sqlpa.business.permissions import check_access, mask_result  # noqa: E402
 from sqlpa.sandbox.sql_executor import SqlSandbox, ExecConfig  # noqa: E402
 
 REAL_DB = ROOT / "data" / "olist" / "olist.db"
@@ -67,18 +63,14 @@ def run_question(question: str, cfg, sb, db_path, llm, role: str = "analyst",
     if a.get("used_context"):
         print(f"  [多轮] 已结合上下文改写为: {a.get('rewritten_question')}")
     if not a["ok"]:
-        tag = "口径内拦截" if a.get("matched") else "自由查询失败"
+        tag = "口径内拦截" if a.get("matched") else "口径外拒绝"
         print(f"  [{tag}] {a['reject']}")
         return
-    if a["mode"] == "metric":
-        m = cfg.metrics[a["metric"]]
-        print("  【口径已认证】业务口径说明")
-        print(f"    - {m.name} = {m.desc}")
-        print(f"    - 公式来自配置(硬约束,已校验): {a['metric_expr']}")
-        print(f"    - 来源: {a['source']}   维度: {a['dims']}")
-    else:
-        print("  【自由查询 · 未经口径认证】结果仅供参考，请自行核对口径")
-        print(f"    - 来源: {a['source']}")
+    m = cfg.metrics[a["metric"]]
+    print("  【口径已认证】业务口径说明")
+    print(f"    - {m.name} = {m.desc}")
+    print(f"    - 公式来自配置(硬约束,已校验): {a['metric_expr']}")
+    print(f"    - 来源: {a['source']}   维度: {a['dims']}")
     print("  【SQL】"); print(" " + a["sql"])
     print(f"  结果 ok={a['ok']} rows={len(a['rows'])}")
     for r in a["rows"][:8]:
@@ -110,7 +102,7 @@ def main() -> int:
     for q in questions:
         run_question(q, cfg, sb, sb_path, llm, role=args.role)
 
-    print("\n审计已记录到 data/business_audit.jsonl")
+    print("\n审计已记录（权威存储 SQLite: data/app.db；JSONL 镜像: data/business_audit.jsonl）")
     return 0
 
 
