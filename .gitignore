@@ -45,8 +45,9 @@ eval_result*.json
 # 调试遗留（点下划线前缀的临时产物，勿提交）
 ._*/
 ._*.txt
-# 临时探针脚本（我调试时生成的一次性脚本）
-_*.py
+# 临时探针脚本（仅限仓库根目录的一次性调试脚本；限定根目录，
+# 否则 "_*.py" 会把包内的 __init__.py 一并忽略，导致新克隆缺文件）
+/_*.py
 .pytest_cache/
 data/business_audit.jsonl
 data/hitl_queue.jsonl
