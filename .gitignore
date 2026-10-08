@@ -32,6 +32,7 @@ data/*.tar.gz
 
 # ---- 个人文档（不上传）----
 docs/面试准备.md
+docs/项目过程问题与解决.md
 
 # ---- 运行产物 ----
 eval_result*.json

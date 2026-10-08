@@ -282,7 +282,6 @@ sqlpa/
 │   ├── eval_attribution_llm_baseline.py # ★ 纯 LLM 对照臂（同信息条件，防稻草人）
 │   ├── sandbox_corpus/sqli_corpus.jsonl # ★ 61 条显式来源对抗语料（48 破坏性 + 13 只读）
 │   └── reports/                    #   评测产物（含 external_bank_world_1.md / sandbox_external.md）
-├── docs/                           # 项目过程问题与解决（面试准备文档不入库）
 └── data/                           # olist(真实公开数据，gitignored) / reports / audit
 ```
 
@@ -401,7 +400,7 @@ curl -X POST http://localhost:8000/api/query \
 - 💼 **业务产品模式**（`api.py` / `run_business.py` / `web/`）：开启业务语义层 + 护栏 + 审计，面向**业务人员自然语言取数**。
 - 口径外问题的处理方式是**明确拒绝并给出可操作原因**，不降级生成未认证 SQL。
   历史上曾有一条"自由 SQL 生成 + Writer↔Critic 评审 + 自愈重试"的兜底引擎，**已整体删除**
-  （失败模式不可接受：口径漂移、无法审计、错误伪装成合理数字）；相关过程记录见 `docs/项目过程问题与解决.md`。
+  （失败模式不可接受：口径漂移、无法审计、错误伪装成合理数字）。
 
 ### ⚠️ 价值锚点：**这不是"教业务写 SQL"**
 这个项目**不是**"把中文翻译成 SQL、帮不会写 SQL 的人写 SQL"（那是 NL-to-SQL 最容易被问倒的伪定位）。真正的价值是 **指标语义层 + 治理 + 长尾自助取数**：
