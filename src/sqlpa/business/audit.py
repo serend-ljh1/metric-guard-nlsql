@@ -53,9 +53,9 @@ class AuditRecord:
     result_rows: int = 0
     reject_reason: str = ""
     create_time: str = ""
-    mode: str = "metric"        # metric=口径内(认证) / free=自由查询(未认证)
+    mode: str = "metric"        # 口径内(认证)；系统不提供自由查询，故无 free 模式
     certified: bool = False
-    supervisor: str = ""        # Supervisor 路由决策标签：direct/drill/escalate/reject
+    supervisor: str = ""        # Supervisor 路由决策标签：direct/drill/reject
     # 可观测性：这次查询花了多少次 LLM 调用、多少 token、多少钱、多久
     llm_calls: int = 0
     total_tokens: int = 0

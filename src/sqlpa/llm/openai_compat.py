@@ -9,7 +9,7 @@ sqlpa.llm.openai_compat
   LLM_API_BASE  默认 https://api.deepseek.com/v1
   LLM_API_KEY   必填（DEEPSEEK_API_KEY 或 OPENAI_API_KEY 兜底）
   LLM_MODEL     默认 deepseek-chat
-  LLM_TEMPERATURE 默认 0.0（Text-to-SQL 要稳定）
+  LLM_TEMPERATURE 默认 0.0（判断/表述类调用需要稳定输出）
 """
 from __future__ import annotations
 
@@ -164,76 +164,6 @@ class OpenAICompatLLM(LLMProvider):
             # 当前模型结束循环，短暂等待避免连续失败，继续下一个模型
             time.sleep(0.3)
         raise RuntimeError(f"LLM 调用失败（已尝试模型池 {self.model_pool}）: {last_err}")
-
-    # ---- 面向 Text-to-SQL 的封装 ----
-    def generate_sql(self, question: str, schema_text: str, plan: str = "",
-                     previous_try: Optional[Dict] = None,
-                     metric_constraint: str = "", dialect_hint: str = "") -> str:
-        dialect = dialect_hint or "目标数据库是 SQLite，请生成 SQLite 可执行的查询。"
-        sys = ("你是 Text-to-SQL 专家。只输出一条 SQL（不要 markdown/解释）。"
-               f"基于给定 schema，从自然语言问题生成 SQL。{dialect}")
-        ctx = f"【schema】\n{schema_text}\n\n【问题】{question}\n"
-        if metric_constraint:
-            ctx += f"\n【业务指标硬约束】{metric_constraint}\n（必须在 SELECT 中原样使用该计算表达式，不得改动；请围绕它构建完整的 FROM/JOIN/GROUP BY。)\n"
-        if plan:
-            ctx += f"\n【计划】{plan}\n"
-        if previous_try:
-            if previous_try.get("feedback"):
-                ctx += (f"\n【评审意见】{previous_try['feedback']}\n"
-                        f"请按该意见修改 SQL 后重新输出（保持 schema/表名一致）。\n")
-            if previous_try.get("sql") or previous_try.get("error"):
-                ctx += (f"\n【上一条 SQL】{previous_try.get('sql')}\n"
-                        f"【执行报错】{previous_try.get('error')}\n请修复后重新输出。\n")
-        return self._chat([{"role": "system", "content": sys},
-                           {"role": "user", "content": ctx}]).strip()
-
-    def review_sql(self, question: str, sql: str, schema_text: str,
-                   exec_result: Optional[Dict] = None) -> Dict:
-        sys = ("你是 SQL 结果评审专家（与写SQL者是不同角色）。"
-               "你的任务是基于【执行结果】判断 SQL 是否回答了用户问题，而不是评审 SQL 写法风格。\n"
-               "核心原则：\n"
-               "① 先看执行结果是否合理回答了问题——如果结果数据明显对题，就 pass=True，不要因为写法不够'优雅'就打回；\n"
-               "② 只有当执行结果明显没回答问题（如返回空、返回了无关列、聚合维度错误、数值明显不对）时，才 pass=False 并给出修改建议；\n"
-               "③ 不要做风格改写（如把 JOIN 改成 LEFT JOIN、加 DISTINCT、调换表顺序）——这类改动容易把正确答案改错；\n"
-               "④ 修改建议必须指向'结果为什么不对'，而非'写法可以更好'。\n"
-               "只输出 JSON：{\"pass\": bool, \"issues\": [\"...\"], \"feedback\": \"<具体的修改建议>\"}。")
-        ctx = (f"【问题】{question}\n【schema】\n{schema_text}\n【待审SQL】\n{sql}\n")
-        if exec_result:
-            ctx += f"【执行结果】{json.dumps(exec_result, ensure_ascii=False)[:2000]}\n"
-        text = self._chat([{"role": "system", "content": sys},
-                           {"role": "user", "content": ctx}], temperature=0.0)
-        try:
-            text = text.strip().strip("`").removeprefix("json").removeprefix("JSON")
-            obj = json.loads(text)
-            obj.setdefault("pass", True)
-            obj.setdefault("issues", [])
-            obj.setdefault("feedback", "")
-            return obj
-        except Exception:
-            return {"pass": True, "issues": [], "feedback": ""}
-
-    def diagnose_error(self, sql: str, error: str, schema_text: str) -> str:
-        sys = ("你是 SQL 错误诊断专家。基于报错信息，指出根因并给出修复建议（简短）。")
-        ctx = f"schema:\n{schema_text}\n\nSQL:\n{sql}\n\n报错:\n{error}\n"
-        return self._chat([{"role": "system", "content": sys},
-                           {"role": "user", "content": ctx}]).strip()
-
-    def validate_semantics(self, question: str, sql: str, exec_result: Dict) -> Dict:
-        sys = ("判断给定 SQL 的执行结果是否回答了用户问题。返回 JSON {\"valid\": bool, \"reason\": str}。")
-        ctx = (f"问题:{question}\nSQL:{sql}\n执行结果(JSON):{json.dumps(exec_result, ensure_ascii=False)[:2000]}\n")
-        text = self._chat([{"role": "system", "content": sys},
-                           {"role": "user", "content": ctx}], temperature=0.0)
-        try:
-            text = text.strip().strip("`").removeprefix("json")
-            return json.loads(text)
-        except Exception:
-            return {"valid": True, "reason": "parse-fallback"}
-
-    def difficulty_judge(self, question: str, schema_text: str) -> str:
-        sys = ("判断该 Text-to-SQL 问题难度：只输出 simple 或 complex。"
-               "complex=需要跨表连接/聚合/排序/子查询等逻辑；simple=单表直接检索。")
-        return self._chat([{"role": "system", "content": sys},
-                           {"role": "user", "content": question}]).strip().lower()
 
     def complete(self, prompt: str) -> str:
         return self._chat([{"role": "user", "content": prompt}], temperature=0.0)

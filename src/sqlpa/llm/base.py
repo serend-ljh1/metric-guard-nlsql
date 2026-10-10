@@ -4,50 +4,22 @@ sqlpa.llm.base
 LLM 抽象层：定义各 Agents 需要的最小接口，便于"真实 API / 离线 Mock / 其他后端"可插拔。
 
 原则（对齐"推理归 LLM、计算归代码"）：
-  - 本层只负责"语义/规划/纠错"类调用；SQL 执行与安全校验永远走 sandbox 确定性代码。
+  - 本层只负责**文本理解与表述**类调用（意图识别兜底、结论/归因讲解、续问改写）；
+  - **不提供 SQL 生成接口**：SQL 由 sqlpa.business.compiler 从指标配置确定性编译，
+    系统不做开放式 SQL 生成；SQL 执行与安全校验永远走 sandbox 确定性代码。
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Dict
 
 
 class LLMProvider(ABC):
     """所有 LLM 后端的统一接口。"""
 
     @abstractmethod
-    def generate_sql(self, question: str, schema_text: str, plan: str = "",
-                     previous_try: Optional[Dict] = None,
-                     metric_constraint: str = "",
-                     dialect_hint: str = "") -> str:
-        """根据问题 + schema(+规划) 生成一条 SQL。
-
-        metric_constraint: 业务模式注入的"指标公式硬约束"，要求 Writer 在 SELECT 中
-        必须原样使用该计算表达式（防止大模型篡改 GMV/退货率公式）。
-        dialect_hint: 目标数据库方言提示（如 MySQL/PostgreSQL），默认 SQLite。
-        """
-
-    @abstractmethod
-    def diagnose_error(self, sql: str, error: str, schema_text: str) -> str:
-        """对执行错误做诊断，返回根因与修复建议。"""
-
-    @abstractmethod
-    def validate_semantics(self, question: str, sql: str,
-                           exec_result: Dict) -> Dict:
-        """校验 SQL 执行结果与问题语义是否一致，返回 {"valid": bool, "reason": str}。"""
-
-    @abstractmethod
-    def difficulty_judge(self, question: str, schema_text: str) -> str:
-        """LLM 层面的难度二次判断（用于兜底路由边界情形），返回 simple/complex。"""
-
-    @abstractmethod
     def complete(self, prompt: str) -> str:
         """通用补全：业务语义层(MetricMatcher)等用它做自由度较高的文本理解。"""
-
-    @abstractmethod
-    def review_sql(self, question: str, sql: str, schema_text: str,
-                   exec_result: Optional[Dict] = None) -> Dict:
-        """评审 Agent：用独立标准审核 SQL，返回 {"pass":bool,"issues":[...],"feedback":str}。"""
 
     # ---- 用量/成本统计（可选能力，默认零成本实现）----
     # 真实客户端（OpenAICompatLLM）会覆盖这两个方法，累计 token 与估算成本；

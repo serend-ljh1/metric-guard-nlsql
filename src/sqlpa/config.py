@@ -26,7 +26,7 @@ def load(path: str | Path | None = None) -> Dict[str, Any]:
 
 
 def get(path: str, default: Any = None) -> Any:
-    """按点号路径取值，如 get('pipeline.max_repair_round', 3)。"""
+    """按点号路径取值，如 get('security.timeout_seconds', 5.0)。"""
     if not _CACHE:
         _CACHE.update(load())
     node: Any = _CACHE

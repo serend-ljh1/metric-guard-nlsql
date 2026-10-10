@@ -337,7 +337,7 @@ flowchart TD
 ```bash
 git clone <repo> && cd <repo>
 pip install -r requirements.txt
-pytest tests -q            # 334 项离线测试（无需 Key、无需外部数据）
+pytest tests -q            # 329 项离线测试（无需 Key、无需外部数据）
 python evaluation/eval_business.py   # 语义层/治理护栏评测（样本库即可）
 python evaluation/eval_product.py    # 产品指标评测（样本库即可）
 python evaluation/eval_sandbox_external.py  # 沙箱外部对抗语料（自带语料，离线可跑）
@@ -673,13 +673,16 @@ python tools/build_olist_sample.py            # 默认每天抽 5 单
 ## 测试与 CI
 
 ```bash
-pytest tests -q    # 334 项离线测试（334 passed，0 xfail）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/权限与掩码/行级权限/业务语义层/治理闭环/语义层编译器/语义层红线契约(编译确定性与生成区零LLM)/口径真值对照/归因可加性与日历口径/量价分解/统计门控/审计与可观测性/凭据加固/指标版本历史/订阅告警/归因下钻/归因决策/因子分解/交付物/外部语料接入(可配置词表·取值域·判据闸)/QuerySpec 表达力(算子白名单·集合·区间·HAVING·否定反连接)
+pytest tests -q    # 329 项离线测试（329 passed，0 xfail）：沙箱安全/查询超时/配置化/方言适配/多Agent编排/分级放行/多轮/图表/指标CRUD/数据源/REST API/权限与掩码/行级权限/业务语义层/治理闭环/语义层编译器/语义层红线契约(编译确定性与生成区零LLM)/口径真值对照/归因可加性与日历口径/量价分解/统计门控/审计与可观测性/凭据加固/指标版本历史/订阅告警/归因下钻/归因决策/因子分解/交付物/外部语料接入(可配置词表·取值域·判据闸)/QuerySpec 表达力(算子白名单·集合·区间·HAVING·否定反连接)
 ```
 > **测试数口径**：274（历史 176 + 两轮 98）之后，第三轮新增 `test_attribution_eval_truth.py`（评测尺子独立于被测引擎）、
 > `test_hitl_loop.py`（工单幂等/状态流转/重跑验证/确认记录单次有效）、`test_external_semantic_layer.py`（13 项：换域词表、取值域与词形别名、
 > 判据闸、**不得跨长度换口径**、世界配置自洽性）、`test_sandbox_external_corpus.py`（8 项：外部对抗语料）、
 > 第四轮新增 `test_query_spec_expressiveness.py`（20 项：算子白名单与注入、集合/区间、HAVING、否定反连接取补集、旧配置零回归），
 > 合计 **334**。
+> 其后清理了 LLM 抽象层中遗留的 Text-to-SQL 死接口（`generate_sql` / `review_sql` / `validate_semantics` /
+> `diagnose_error` / `difficulty_judge`）——它们属于已移除的"自由生成 + Writer↔Critic 评审 + 自愈重试"引擎，
+> 在现架构下**无任何调用点**（LLM 只保留 `complete` 一个触点）；连同对应的 5 个用例一并删除，**现为 329 项**。
 > 此前唯一的 xfail（公式子串校验可绕过）已随结构绑定修复转为**通过**，因此不再有 xfail。
 > 依赖真实 Olist 库的用例在缺数据时**跳过**（`real_olist_db` / `sample_db` fixture），
 > 因此公开 CI 上不会把"环境缺数据"误报成"代码回归"。

@@ -158,61 +158,6 @@ def test_chat_all_models_fail_raises():
             llm._chat([{"role": "user", "content": "hi"}])
 
 
-# ---------- prompt 构造 ----------
-
-def test_generate_sql_injects_metric_constraint():
-    """业务硬约束必须原样拼进 user context（防模型篡改公式）。"""
-    calls: list = []
-    with patch("urllib.request.urlopen", _patch_urlopen([_ok("SELECT ...")], calls)), \
-         patch("sqlpa.llm.openai_compat.time.sleep"):
-        llm = _make_llm()
-        llm.generate_sql("总GMV是多少", "<schema>", metric_constraint="SUM(oi.price) AS gmv")
-    ctx = calls[0][1]["messages"][1]["content"]
-    assert "业务指标硬约束" in ctx
-    assert "SUM(oi.price) AS gmv" in ctx
-
-
-def test_generate_sql_injects_previous_error_for_repair():
-    calls: list = []
-    with patch("urllib.request.urlopen", _patch_urlopen([_ok("SELECT 2")], calls)), \
-         patch("sqlpa.llm.openai_compat.time.sleep"):
-        llm = _make_llm()
-        llm.generate_sql("q", "<schema>",
-                         previous_try={"sql": "SELECT 1",
-                                       "error": "no such column: x"})
-    ctx = calls[0][1]["messages"][1]["content"]
-    assert "上一条 SQL" in ctx and "no such column: x" in ctx
-
-
-# ---------- JSON 解析兜底 ----------
-
-def test_review_sql_parses_strict_json():
-    with patch("urllib.request.urlopen",
-               _patch_urlopen([_ok('{"pass": false, "issues": ["a"], "feedback": "f"}')])), \
-         patch("sqlpa.llm.openai_compat.time.sleep"):
-        r = _make_llm().review_sql("q", "SQL", "<schema>")
-    assert r == {"pass": False, "issues": ["a"], "feedback": "f"}
-
-
-def test_review_sql_falls_back_on_bad_json():
-    """LLM 返回非 JSON → 兜底 pass=True，不让评审阻塞流程。"""
-    with patch("urllib.request.urlopen", _patch_urlopen([_ok("sorry i cant")])), \
-         patch("sqlpa.llm.openai_compat.time.sleep"):
-        r = _make_llm().review_sql("q", "SQL", "<schema>")
-    assert r == {"pass": True, "issues": [], "feedback": ""}
-
-
-def test_validate_semantics_parse_and_fallback():
-    with patch("urllib.request.urlopen",
-               _patch_urlopen([_ok('{"valid": false, "reason": "not matched"}')])), \
-         patch("sqlpa.llm.openai_compat.time.sleep"):
-        assert _make_llm().validate_semantics("q", "SQL", {"rows": []})["valid"] is False
-    with patch("urllib.request.urlopen", _patch_urlopen([_ok("garbage")])), \
-         patch("sqlpa.llm.openai_compat.time.sleep"):
-        assert _make_llm().validate_semantics("q", "SQL", {"rows": []}) == \
-            {"valid": True, "reason": "parse-fallback"}
-
-
 # ---------- token 计价 ----------
 
 def test_usage_pricing():

@@ -71,11 +71,10 @@ def _supervise(res, llm, question: str, drill_decision: Optional[Dict] = None) -
     语义层优先是产品设计约束，因此 Supervisor **不做 50/50 乱选**，只在真实缺口上
     升级/拒绝，并始终给出可展示给用户的"为什么走这条路"。
 
-       decision ∈ {direct, drill, escalate, reject}
+       decision ∈ {direct, drill, reject}   # **没有第三条路**：未命中一律拒绝
          - direct   命中口径配置 → 语义层确定性编译（结果已认证）
          - drill    命中口径 + 归因 Agent 判定需继续下钻/换维/因子分解 → 叠加归因路径
-         - escalate 未命中口径且当前有 LLM → 升级到多 Agent 兜底引擎自由生成（未经认证）
-         - reject   未命中口径且无 LLM（离线）→ 不生成未经认证的结果，明确拒绝
+         - reject   未命中口径 → 不生成未经认证的结果，明确拒绝（系统不提供自由 SQL 生成）
     有 llm 时归因决策的 reason 已被 LLM 产出（decision_source=llm），此处直接采纳，
     不额外调 LLM、不改变既有分级放行行为，仅新增"路由+理由"这一可观测层。
     """
