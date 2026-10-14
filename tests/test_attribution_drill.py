@@ -78,7 +78,9 @@ def test_drill_applies_path_filter(db):
     d = drill(CFG, db, "gmv", current_spec="本月",
               path=[{"dim": "state", "value": "SP"}])
     assert d["ok"]
-    assert d["path_desc"] == "state=SP"
+    # path_desc 是**展示文案**（供卡片/报告/图表标题用），已按语义层把 state=SP 显示成中文
+    # "州=圣保罗"；过滤是否真的生效由下面"SP 当期无值"与 SQL 断言保证。
+    assert d["path_desc"] == "州=圣保罗"
     # SP 在当月只有 0 值（9 月只有 RJ 下单），故各维度当期应为 0 或空
     for dim_block in d["dims"]:
         for v in dim_block["current"].values():

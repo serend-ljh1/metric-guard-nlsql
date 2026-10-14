@@ -47,6 +47,34 @@ from sqlpa.sandbox.sql_executor import SqlSandbox  # noqa: E402
 
 _DEFAULT_SPIDER = ROOT.parent / "spider"
 _DEFAULT_CONFIG = ROOT / "config" / "semantic_world.yaml"
+# 仓库内样本语料：完整 Spider 数据集属**仓库外**资源，换台机器就没了 → 评测不可复现。
+# 这里内联 world_1 的题面 + gold SQL（`world_1_dev_sample.json`）与库文件（`world_1.sqlite`），
+# 保证任何机器 clone 后都能离线重跑同一批第三方问题、核对同一组数字。
+_PROBE_DIR = ROOT / "evaluation" / "spider_probe"
+
+
+def _resolve_corpus(spider_root: Path, db_id: str):
+    """定位语料与库：优先完整 Spider，缺失时退回**仓库内**样本语料。
+
+    返回 (cases, db_path, info)。info 里记下用的是哪一份、其 sha256 是多少，
+    写进报告 provenance —— 这样"这个覆盖率是在哪份语料上算的"永远可复核。
+    两者都不可得 → (None, None, None)。
+    """
+    dev_json = spider_root / "dev.json"
+    db_path = spider_root / "database" / db_id / f"{db_id}.sqlite"
+    if dev_json.exists() and db_path.exists():
+        dev = json.loads(dev_json.read_text(encoding="utf-8"))
+        return ([d for d in dev if d["db_id"] == db_id], db_path,
+                {"source": "full", "corpus_file": dev_json,
+                 "corpus_label": "Spider dev 全量（仓库外数据集）"})
+    probe_json = _PROBE_DIR / f"{db_id}_dev_sample.json"
+    probe_db = _PROBE_DIR / f"{db_id}.sqlite"
+    if probe_json.exists() and probe_db.exists():
+        return (json.loads(probe_json.read_text(encoding="utf-8")), probe_db,
+                {"source": "in_repo_probe", "corpus_file": probe_json,
+                 "corpus_label": f"仓库内样本语料（Spider dev {db_id} 全量子集）"})
+    return None, None, None
+
 
 
 def _default_spider_root() -> Path:
@@ -179,14 +207,17 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.spider_root)
-    dev_json = root / "dev.json"
-    db_path = root / "database" / args.db_id / f"{args.db_id}.sqlite"
-    if not dev_json.exists():
-        print(f"❌ 找不到 {dev_json}（用 --spider-root 指定 Spider 根目录）")
+    cases, db_path, corpus_info = _resolve_corpus(root, args.db_id)
+    if cases is None:
+        print(f"❌ 既找不到 {root / 'dev.json'}，也找不到仓库内样本语料 "
+              f"{_PROBE_DIR / f'{args.db_id}_dev_sample.json'}。\n"
+              f"  这不该发生（样本语料随仓库发布）。如需跑全量，请用 --spider-root 指定 Spider 根目录，"
+              f"或设 SQLPA_SPIDER_ROOT。")
         return 2
-    if not db_path.exists():
-        print(f"❌ 找不到 {db_path}")
-        return 2
+    dev_json = Path(corpus_info["corpus_file"])
+    if corpus_info["source"] == "in_repo_probe":
+        print(f"[i] 未找到完整 Spider 数据集（{root / 'dev.json'}）→ 改用仓库内样本语料 "
+              f"{dev_json.name}（{len(cases)} 题，与 dev 集 {args.db_id} 子集完全一致，可离线复现）")
 
     cfg = load_config(args.config, value_provider=_sqlite_value_provider(db_path))
     fv = (cfg.matcher_keywords or {}).get("filter_values") or {}
@@ -196,8 +227,6 @@ def main() -> int:
           f"过滤模板 {len(cfg.filter_templates)} 种")
     print(f"  过滤取值词表: {len(fv)} 类共 {n_values} 个取值（来自库自身的列）")
 
-    dev = json.loads(dev_json.read_text(encoding="utf-8"))
-    cases = [d for d in dev if d["db_id"] == args.db_id]
     if args.limit:
         cases = cases[:args.limit]
     print(f"语料: {dev_json.name} 中 db_id={args.db_id} 共 {len(cases)} 题 "
@@ -250,6 +279,8 @@ def main() -> int:
             "dataset": "Spider (Yale LILY) — dev split",
             "note": ("问题与 gold SQL 由第三方数据集定义；本文件的分母/分子由脚本计算，"
                      "可复跑核对。world_1 属 dev 集，建层时看过题面 → 覆盖率为**开发集**口径。"),
+            "corpus_source": corpus_info["source"],
+            "corpus_label": corpus_info["corpus_label"],
             "spider_root": repo_relative(root), "split": "dev", "db_id": args.db_id,
             "dev_json_sha256": hashlib.sha256(dev_json.read_bytes()).hexdigest(),
             "db_sha256": hashlib.sha256(db_path.read_bytes()).hexdigest(),

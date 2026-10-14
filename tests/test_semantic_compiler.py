@@ -180,6 +180,35 @@ def test_resolve_time_range_variants():
     assert s2.startswith("'") and e2.startswith("'")
 
 
+def test_llm_span_timespec_collapses_to_asked_month():
+    """回归：LLM 对"含比较语义"的问题会回出"上一期+当期"拼接串（如
+    `2018-05-01,2018-06-30`）。此前 compiler/attribution 都解析不了它 →
+    **静默回落到"最近30天"** → 取数与归因双双落在用户没问的窗口上，恒报"数据不足"。
+    修复后应在两个入口都归一成"用户所问当月"，且取数与归因落到同一窗口。"""
+    import datetime
+    from sqlpa import config as _config
+    from sqlpa.business import attribution
+
+    span = "2018-05-01,2018-06-30"
+    assert _config.canonical_time_spec(span) == "2018-06"
+
+    # 取数侧：SQL 窗口 = 2018-06
+    s, e = resolve_time_range(span)
+    assert (s, e) == ("'2018-06-01'", "'2018-07-01'")
+
+    # 归因侧：当期 = 2018-06，上期 = 2018-05（与"比上月跌"的比较模型一致）
+    asof = datetime.date(2018, 10, 17)
+    assert attribution._resolve_window(span, asof) == (datetime.date(2018, 6, 1),
+                                                       datetime.date(2018, 7, 1))
+    assert attribution._previous_window(span, asof) == (datetime.date(2018, 5, 1),
+                                                        datetime.date(2018, 6, 1))
+    assert attribution._prev_label(span, asof) == "2018-05"
+
+    # 相对时间词不受影响（仍按数据基准日解析）
+    assert _config.canonical_time_spec("上月") == "上月"
+    assert _config.canonical_time_spec("最近30天") == "最近30天"
+
+
 def test_unknown_filter_type_rejected():
     with pytest.raises(CompileError):
         compile_spec(CFG, QuerySpec(metric="gmv", filters=[("no_such_filter", "x")]))

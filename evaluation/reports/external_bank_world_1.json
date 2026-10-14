@@ -2,6 +2,8 @@
   "provenance": {
     "dataset": "Spider (Yale LILY) — dev split",
     "note": "问题与 gold SQL 由第三方数据集定义；本文件的分母/分子由脚本计算，可复跑核对。world_1 属 dev 集，建层时看过题面 → 覆盖率为**开发集**口径。",
+    "corpus_source": "full",
+    "corpus_label": "Spider dev 全量（仓库外数据集）",
     "spider_root": "spider",
     "split": "dev",
     "db_id": "world_1",
@@ -18,7 +20,7 @@
       "district": 1366,
       "isofficial": 1
     },
-    "generated_at": "2026-09-21T05:51:22+00:00",
+    "generated_at": "2026-10-14T10:21:49+00:00",
     "llm": null
   },
   "summary": {

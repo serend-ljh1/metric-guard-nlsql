@@ -40,6 +40,54 @@ def test_explain_metric_returns_owner_version():
     assert governance.explain_metric(cfg, "nope")["ok"] is False
 
 
+def _metric(key, name, expr, owner="财务线", version="v1"):
+    return Metric(key, name, "测试口径", expr, "FROM orders o", "1=1",
+                  support_dims=[], support_filters=[], owner=owner, version=version)
+
+
+def test_detect_conflicts_same_name_diff_expr():
+    """同名不同式：key 不同、展示名相同、公式不同 → error 级（同名不同数）。"""
+    cfg = BusinessConfig(
+        metrics={"gmv_a": _metric("gmv_a", "GMV成交总额", "SUM(oi.price)"),
+                 "gmv_b": _metric("gmv_b", "GMV成交总额", "SUM(oi.price)+SUM(oi.freight_value)")},
+        dimensions={})
+    hits = [c for c in governance.detect_conflicts(cfg, history={})
+            if c["type"] == "同名不同式"]
+    assert hits and sorted(hits[0]["keys"]) == ["gmv_a", "gmv_b"]
+    assert hits[0]["severity"] == "error"
+
+
+def test_detect_conflicts_same_expr_diff_name():
+    """同式不同名：公式（归一后）相同但名称不同 → info 级（口径冗余）。"""
+    cfg = BusinessConfig(
+        metrics={"gmv": _metric("gmv", "GMV成交总额", "SUM(oi.price)"),
+                 "gmv_dup": _metric("gmv_dup", "支付金额", "  sum( oi.price )  ")},
+        dimensions={})
+    hits = [c for c in governance.detect_conflicts(cfg, history={})
+            if c["type"] == "同式不同名"]
+    assert hits and set(hits[0]["keys"]) == {"gmv", "gmv_dup"}
+    assert hits[0]["severity"] == "info"
+
+
+def test_detect_conflicts_version_drift_uses_metric_versions():
+    """版本漂移：当前配置公式 ≠ metric_versions 里最后登记的公式 → warning；一致则不报。"""
+    import json
+    cfg = BusinessConfig(
+        metrics={"gmv": _metric("gmv", "GMV成交总额", "SUM(oi.price)", version="v2")},
+        dimensions={})
+    drift = {"gmv": {"version_seq": 3, "action": "update", "actor": "admin",
+                     "after_json": json.dumps(
+                         {"metric_expr": "SUM(oi.price) - SUM(r.refund)"}, ensure_ascii=False)}}
+    hits = [c for c in governance.detect_conflicts(cfg, history=drift)
+            if c["type"] == "版本漂移"]
+    assert hits and hits[0]["keys"] == ["gmv"] and hits[0]["severity"] == "warning"
+
+    same = {"gmv": {"version_seq": 3, "action": "update", "actor": "admin",
+                    "after_json": json.dumps({"metric_expr": "SUM(oi.price)"}, ensure_ascii=False)}}
+    assert not [c for c in governance.detect_conflicts(cfg, history=same)
+                if c["type"] == "版本漂移"]
+
+
 def _sample_db(tmpdir_clean, months):
     """造一个最小 olist 结构库，含订单时间列，供归因拆解。
 

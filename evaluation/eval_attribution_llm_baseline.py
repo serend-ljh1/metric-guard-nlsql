@@ -53,7 +53,8 @@ def _inject_and_query(real_db: str, dim: str, value: str, cur_spec: str,
          排序仅按当期体量（中性顺序，不泄漏 |变动| 排名）。
     """
     c0, c1 = _ea.attribution._range_spec(cur_spec)
-    p0, _p1 = _ea.attribution._range_spec(_ea.attribution._default_previous_spec(cur_spec))
+    p0, _p1 = _ea.attribution._range_spec(
+        _ea.attribution._prev_label(cur_spec, _ea.attribution._now()))
     _ea._TMP.mkdir(parents=True, exist_ok=True)
     work = _ea._TMP / f"llm-att-{uuid.uuid4().hex[:10]}.db"
     shutil.copyfile(real_db, work)

@@ -58,6 +58,20 @@ def _require_significance() -> bool:
         return True
 
 
+def _is_directed_dim_question(question: str) -> bool:
+    """问题是否在**定向询问某个维度的取值**（如"下滑主要出在哪个州？"）。
+
+    为什么要区分：告警判定回答的是"**是否异常**"，而这类问题回答的是"**哪个维度值**"。
+    对定向查询跑告警显著性门控、并输出"无需告警/判定为噪声"，属于答非所问 ——
+    用户没问要不要告警，却收到一句"不告警"，真正的主因反被这一句盖住。
+
+    判据是确定性的中文疑问词，不依赖 LLM；注意"那…呢"（那 ≠ 哪）不会误命中。
+    """
+    q = str(question or "")
+    return any(k in q for k in ("哪个", "哪些", "哪一", "哪几", "哪里",
+                                "集中在哪", "出在哪"))
+
+
 def _llm_usage_snapshot(llm) -> Optional[Dict]:
     """取 LLM 客户端的累计用量快照（不支持统计的实现返回 None）。"""
     if llm is None:
@@ -156,9 +170,15 @@ def _route(question: str, cfg: BusinessConfig, llm, memory: Optional[Dict] = Non
             matched = True
 
     metric = res.metric_key if matched else None
-    time_spec = memory.get("time_spec") or (
-        next((v for ft, v in res.filters if ft == "time_range") or [],
-             None) if matched else None)
+    # 时间范围：**本轮问题自己解析出来的优先**，会话记忆只在"本轮没解析出时间"时兜底。
+    # 修复的真实故障：同一会话里先问过一次含相对时间词的提问（如"比上月跌"，解析为
+    # "上月"），记忆里的 time_spec 被写成"上月"；之后用户明确问"2018年9月 GMV 为什么
+    # 比上月跌？"，旧代码仍拿记忆的"上月"去查 —— 相对词按**今天**解析会落到当前真实月
+    # （2026 年），在真实数据窗口（Olist 2016-09~2018-10）内必然查不到，归因于是误报
+    # "当期/上期无结果"，把用户显式写明的月份彻底吞掉了。
+    now_time = (next((v for ft, v in res.filters if ft == "time_range"), None)
+                if matched else None)
+    time_spec = now_time or (memory.get("time_spec") if memory else None)
     return {
         "route": "analyze" if (matched and time_spec) else "query_only" if matched else "unmatched",
         "matched": matched,
@@ -461,15 +481,14 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
         _confirm.consume(confirm_id, actor=username)
 
     merged = state["merged"]
+    # 终帧必须带**完整 final**：前端的结果区（诊断结论/图表/数据溯源/SQL/决策卡）全部
+    # 读的是 done 事件的 payload。此前这里只发 conclusion/decision/chart 三个字段、
+    # 不带 payload，导致前端 final 恒为 null —— 结果区整块不渲染，用户只看得到 Agent 流水。
     final = summarize_final(question, aid, {
         **merged, "route": state["routing"]["route"],
         "conclusion": state["conclusion"], "decision": state["decision"],
         "observability": obs,
-    }, _emit, emit_done=False)
-    _emit({"type": "done", "analysis_id": aid,
-           "conclusion": final["conclusion"],
-           "decision": final["decision"],
-           "chart": final.get("chart", {}), "at": _now()})
+    }, _emit, emit_done=True)
     return final
 
 
@@ -601,7 +620,11 @@ def _attribution_chain(cfg: BusinessConfig, db_path: str, res, routing: Dict, ll
                                                     "继续", "下钻", "再看", "拆"))
         last = memory.get("last_drill") if memory else None
         resumed = False
-        if followup_tone and last and last.get("metric") == routing.get("metric"):
+        # 续钻前提：本轮当期**确实取到了数据**（current_total 非空）。
+        # 否则会出现自相矛盾的一幕：analyze 判"当期无数据"，却又按记忆强制 drill 出一串
+        # 变化值（那串值其实来自落错窗口的查询）——结论说"数据不足"、证据里却有下钻数字。
+        if (followup_tone and last and last.get("metric") == routing.get("metric")
+                and att.get("current_total") is not None):
             # 沿上轮主因续钻：即便本轮 analyze 判 none，也强制继续下钻那一个主因
             action = "drill"
             decision = {"action": "drill", "reason": f"追问续钻上轮主因「{last.get('dim')}·{last.get('value')}」",
@@ -735,9 +758,14 @@ def _conclusion(merged: Dict, routing: Dict, llm, _emit: "_Emitter",
     # "波动 0%、正常波动、无需干预"——把一次失败伪装成一个结论，是最危险的一类错。
     analysis_failed = bool(att) and att.get("ok") is False
     insufficient_reason = str(att.get("reason") or "当期或上期数据不足")
+    # 归因侧已算出"哪一期没数据 + 为什么"（见 attribution.analyze 的无结果分支），
+    # 这里原样透出，用户不必对着"数据不足"猜原因。
+    insufficient_hint = str(att.get("hint") or "")
     if analysis_failed:
         evidence.append({"type": "数据不足",
                          "detail": f"归因未取得可比较的当期/上期数据：{insufficient_reason}"})
+        if insufficient_hint:
+            evidence.append({"type": "数据窗口提示", "detail": insufficient_hint})
     if att and not analysis_failed:
         evidence.append({
             "type": "基准波动",
@@ -780,18 +808,22 @@ def _conclusion(merged: Dict, routing: Dict, llm, _emit: "_Emitter",
     # ---------- 兜底结论（确定性，永远有输出） ----------
     def _fallback() -> str:
         if analysis_failed:
-            return (f"数据不足，暂时无法给出「{metric_name}」的诊断结论："
-                    f"{insufficient_reason}。请确认时间范围与数据覆盖后再试。")
+            msg = (f"数据不足，暂时无法给出「{metric_name}」的诊断结论："
+                   f"{insufficient_reason}。请确认时间范围与数据覆盖后再试。")
+            if insufficient_hint:
+                msg += f"\n提示：{insufficient_hint}"
+            return msg
         if not att:
             return f"未得到可用的波动归因结果，暂无诊断结论。"
         if not att.get("is_abnormal"):
             return (f"指标「{metric_name}」当期 {att.get('current_total')}、"
                     f"上期 {att.get('previous_total')}，波动 {att.get('change_pct', 0) * 100:+.1f}%，"
                     f"未超过告警阈值，属于正常波动，无需干预。")
-        parts = [f"「{metric_name}」出现明显波动（{att.get('change_pct', 0) * 100:+.1f}%）"]
-        for c in (att.get("top_contributors") or [])[:3]:
-            parts.append(c.get("desc", ""))
-        return "。主因来自：\n" + "\n".join(parts) + "。"
+        head = (f"「{metric_name}」出现明显波动（{att.get('change_pct', 0) * 100:+.1f}%）。")
+        lines = [c.get("desc", "") for c in (att.get("top_contributors") or [])[:3]]
+        if not lines:
+            return head
+        return head + "主因来自：\n" + "\n".join(lines) + "。"
 
     conclusion_text = _fallback()
     # ---------- 建议动作（结构化的，给决策 Agent 用） ----------
@@ -869,16 +901,26 @@ def _decision(merged: Dict, routing: Dict, llm, cfg: BusinessConfig, hitl_path,
 
     # ---- 统计门控（零 token、确定性）：阈值过了但没过显著性检验 → 视为噪声，不告警 ----
     # 这是本系统"减少假阳性"的核心开关：单期环比里几个百分点的差异常常只是日间波动。
+    # 注意：**定向查询**（"主要出在哪个州？"）不做这个门控 —— 用户问的是维度值、不是
+    # "要不要告警"，硬塞一句"未过显著性检验、不告警"只会盖住主因（答非所问）。
+    directed = _is_directed_dim_question(str(routing.get("question") or ""))
     sig = att.get("significance") or {}
     require_sig = _require_significance()
-    noise_suppressed = bool(is_abnormal and require_sig and sig.get("tested")
-                            and not sig.get("is_significant"))
+    noise_suppressed = bool(is_abnormal and require_sig and not directed
+                            and sig.get("tested") and not sig.get("is_significant"))
     if noise_suppressed:
         is_abnormal = False
 
     if inconclusive:
         _emit.agent_step("DecisionAgent", "inconclusive",
                          f"分析未取得可比较数据 → 不下结论、不告警：{att.get('reason', '')}")
+    elif directed:
+        top = att.get("top_contributors") or []
+        lead = (f"{top[0].get('dim_name') or top[0].get('dim')}="
+                f"{top[0].get('key_label') or top[0].get('key')}") if top else ""
+        _emit.agent_step("DecisionAgent", "query",
+                         "本次为定向归因查询（问『哪个维度值』）→ 已定位主因"
+                         + (f"「{lead}」" if lead else "") + "；未触发告警评估")
     elif noise_suppressed:
         _emit.agent_step(
             "DecisionAgent", "suppressed",
@@ -900,6 +942,16 @@ def _decision(merged: Dict, routing: Dict, llm, cfg: BusinessConfig, hitl_path,
     if inconclusive:
         alert_level, reason = "inconclusive", \
             f"数据不足，无法判定是否异常（{att.get('reason', '')}）→ 本轮不告警、不下结论"
+    elif directed:
+        # 定向查询（"哪个州"）答的是主因维度值，不是"是否异常"——不跑告警评估，
+        # reason 直接给主因，避免用"无需告警/显著性抑制"盖住用户真正要的答案。
+        top = att.get("top_contributors") or []
+        lead = (f"{top[0].get('dim_name') or top[0].get('dim')}="
+                f"{top[0].get('key_label') or top[0].get('key')}") if top else ""
+        alert_level = "query"
+        reason = ("本次为定向归因查询（问『哪个维度值』），已定位主因"
+                  + (f"「{lead}」" if lead else "")
+                  + "；未触发告警评估（告警针对『是否异常』，与本次提问无关）")
     elif noise_suppressed:
         # 阈值过了但没过显著性检验：不是"正常"，而是"证据不足"——降级为观察项，
         # 原文数字全部保留在 decision 里，避免把"没敢报"伪装成"没问题"。
@@ -917,17 +969,18 @@ def _decision(merged: Dict, routing: Dict, llm, cfg: BusinessConfig, hitl_path,
         reason = "波动在正常范围，无需告警"
 
     decision = {
-        "alert": None if inconclusive else is_abnormal,
+        "alert": None if inconclusive else (False if directed else is_abnormal),
         "alert_level": alert_level,
         "inconclusive": inconclusive,
         "significance": sig or None,
         "reason": reason,
         "owner": owner,
-        "channel": "none" if inconclusive else ("hitl" if is_abnormal else "none"),
+        "channel": "none" if (inconclusive or directed) else ("hitl" if is_abnormal else "none"),
         "hitl_id": hitl_id,
     }
     _emit.agent_step("DecisionAgent", "decide",
                      (f"告警=不适用（数据不足）" if inconclusive
+                      else f"告警=不适用（定向查询，已给主因）" if directed
                       else f"告警={decision['alert']}（{alert_level}）→ 负责人「{owner or '未指定'}」"
                            + (f"，HITL工单 {hitl_id}" if hitl_id else "")),
                      alert=decision["alert"], alert_level=alert_level, owner=owner,
@@ -949,7 +1002,7 @@ def _build_chart(merged: Dict) -> Dict:
     if att:
         prev = float(att.get("previous_total") or 0)
         cur = float(att.get("current_total") or 0)
-        waterfall["labels"] = ["上期"] + [c.get("key", "") for c in (att.get("top_contributors") or [])[:5]] + ["当期"]
+        waterfall["labels"] = ["上期"] + [c.get("key_label") or c.get("key", "") for c in (att.get("top_contributors") or [])[:5]] + ["当期"]
         deltas = [c.get("delta", 0.0) for c in (att.get("top_contributors") or [])[:5]]
         # 尾项 = 当期 - 上期 - 已列主因增量（其余/误差收敛到 Other）
         other = cur - prev - sum(deltas)
@@ -960,7 +1013,7 @@ def _build_chart(merged: Dict) -> Dict:
     # 主因占比（占波动的比例）
     share = {"dims": [], "values": []}
     for c in (att.get("top_contributors") or [])[:6]:
-        share["dims"].append(f"{c.get('dim')}·{c.get('key')}")
+        share["dims"].append(f"{c.get('dim_name') or c.get('dim')}·{c.get('key_label') or c.get('key')}")
         share["values"].append(c.get("delta", 0.0))
 
     # 下钻树：ROOT → path 各层 → 各维主因
@@ -1014,6 +1067,10 @@ def summarize_final(question: str, aid: str, result: Dict, _emit: "_Emitter",
         "metric_name": result.get("metric_name", ""),
         "certified": result.get("certified", False),
         "sql": result.get("sql", ""),
+        # 可追溯性（前端"数据溯源"卡）：把口径编译产物一并透出 ——
+        # 用到的表(sources)/口径公式(metric_expr)/负责人(owner)/版本(version)。
+        # 否则用户只看得到结论，看不到"这数从哪张表、按什么公式来的"，像黑箱。
+        "compile": result.get("compile") or {},
         "rows": result.get("rows", [])[:50],
         "columns": result.get("columns", []),
         "attribution": result.get("attribution"),

@@ -1,7 +1,7 @@
 <script setup>
 // 炫的可视化面板：归因瀑布图 + 主因占比 + 因子占比 + 下钻链。
 // 消费后端 /api/analyze/* 的 final.chart 结构：{waterfall, share, tree, factors, summary}
-import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 
 const props = defineProps({
@@ -15,6 +15,9 @@ const els = {
   factors: ref(null),
   tree: ref(null),
 }
+// 每张图是否真的画出了数据；没画出的格子显示"名称 + 暂无数据"占位，
+// 否则一排空框会让人不知道这块是干嘛的（本次提问里 factors/tree 常常确实没有数据）。
+const drawn = reactive({ waterfall: false, share: false, factors: false, tree: false })
 let charts = {}
 
 function disposeAll() {
@@ -25,6 +28,7 @@ function disposeAll() {
 function render() {
   const c = props.chart
   disposeAll()
+  for (const k in drawn) drawn[k] = false
   if (!c) return
   const theme = { text: '#c9d2ff', muted: '#8b96c9', brand: '#7c6bff', accent: '#22d3ee',
                   ok: '#34d399', danger: '#f87171', line: '#262f52' }
@@ -53,7 +57,7 @@ function render() {
         itemStyle: { color: (p) => p.dataIndex === 0 ? '#7c6bff' : (w.deltas[p.dataIndex] >= 0 ? 'transparent' : 'transparent') },
         data: heights, label: { show: true, position: 'top', color: theme.muted, fontSize: 10 } },
     ]
-    charts.waterfall = echarts.init(wEl)
+    charts.waterfall = echarts.init(wEl); drawn.waterfall = true
     charts.waterfall.setOption({
       ...base('归因瀑布', `${props.metric_name} 从基期到当期的变化`),
       grid: { left: 50, right: 16, top: 44, bottom: 8, containLabel: true },
@@ -65,10 +69,10 @@ function render() {
 
   // ---- 主因占比（横向条形：用 delta 绝对值显示各维度贡献） ----
   let sEl = els.share.value
-  if (sEl && c.share && c.share.dims) {
+  if (sEl && c.share && (c.share.dims || []).length) {
     const dims = c.share.dims || []
     const vals = c.share.values || []
-    charts.share = echarts.init(sEl)
+    charts.share = echarts.init(sEl); drawn.share = true
     charts.share.setOption({
       ...base('主因贡献', '各维度对波动的贡献（绝对值）'),
       grid: { left: 130, right: 30, top: 44, bottom: 20, containLabel: true },
@@ -89,7 +93,7 @@ function render() {
   if (fEl && c.factors && c.factors.labels && c.factors.labels.length) {
     const labels = c.factors.labels || []
     const shares = c.factors.shares || []
-    charts.factors = echarts.init(fEl)
+    charts.factors = echarts.init(fEl); drawn.factors = true
     charts.factors.setOption({
       ...base('因子占比', c.summary?.metric_name ? `${c.summary.metric_name} 拆解` : ''),
       tooltip: { trigger: 'item',
@@ -107,7 +111,7 @@ function render() {
   // ---- 下钻树（drill 定位） ----
   let tEl = els.tree.value
   if (tEl && c.tree && c.tree.length) {
-    charts.tree = echarts.init(tEl)
+    charts.tree = echarts.init(tEl); drawn.tree = true
     charts.tree.setOption({
       ...base('下钻定位链', '沿路径逐层拆到主因'),
       tooltip: { trigger: 'item' },
@@ -132,16 +136,35 @@ watch(() => props.chart, () => nextTick(render))
 
 <template>
   <section v-if="chart" class="board">
-    <div class="cell" ref="els.waterfall.value"></div>
-    <div class="cell" ref="els.share.value"></div>
-    <div class="cell" ref="els.factors.value"></div>
-    <div class="cell" ref="els.tree.value"></div>
+    <!-- 注意：不能用 ref="els.waterfall.value" —— 模板里的 ref 是**字符串名字**，不求值表达式，
+         那样 els.waterfall.value 永远是 null，四张图全画不出来。必须用函数式 ref 绑定。 -->
+    <div class="cell">
+      <div class="plot" :ref="el => (els.waterfall.value = el)"></div>
+      <div v-if="!drawn.waterfall" class="ph">归因瀑布<br><small>本次无可比的当期/上期数据</small></div>
+    </div>
+    <div class="cell">
+      <div class="plot" :ref="el => (els.share.value = el)"></div>
+      <div v-if="!drawn.share" class="ph">主因贡献<br><small>本次无可拆解的维度主因</small></div>
+    </div>
+    <div class="cell">
+      <div class="plot" :ref="el => (els.factors.value = el)"></div>
+      <div v-if="!drawn.factors" class="ph">因子占比<br><small>本次未做量价/因子分解（问「订单少了还是客单价低了」才会有）</small></div>
+    </div>
+    <div class="cell">
+      <div class="plot" :ref="el => (els.tree.value = el)"></div>
+      <div v-if="!drawn.tree" class="ph">下钻定位链<br><small>本次未发生下钻（追问某个维度值后出现）</small></div>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .board { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.cell { height: 300px; background: var(--surface); border: 1px solid var(--border);
-        border-radius: 16px; padding: 6px; }
+.cell { position: relative; height: 300px; background: var(--surface);
+        border: 1px solid var(--border); border-radius: 16px; padding: 6px; }
+.plot { width: 100%; height: 100%; }
+.ph { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 6px;
+      align-items: center; justify-content: center; text-align: center; padding: 16px;
+      color: var(--text-muted); font-size: 14px; pointer-events: none; }
+.ph small { font-size: 12px; opacity: .75; }
 @media (max-width: 820px) { .board { grid-template-columns: 1fr; } }
 </style>

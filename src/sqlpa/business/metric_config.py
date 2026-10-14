@@ -52,6 +52,14 @@ class Dimension:
     key: str
     name: str
     sql_fragment: str
+    # 维度取值的**业务可读名称**：库里常存代码/英文（如州代码 SP、订单状态 delivered），
+    # 直接展示业务人员读不懂。这里是"展示名"映射，只影响 desc/图表/报告的文案，
+    # **不影响取数与过滤的取值**（过滤仍用原始代码，否则 SQL 会查空）。
+    labels: Dict[str, str] = field(default_factory=dict)
+
+    def label(self, value) -> str:
+        """把维度取值转成展示名：有配置用人话名，没有则回落原值（永不报错）。"""
+        return self.labels.get(str(value), str(value))
 
 
 @dataclass
@@ -154,7 +162,8 @@ def load_config(path: str | Path | None = None, value_provider=None) -> Business
                                              else bool(m.get("additive"))),
                                    weight_metric=(m.get("weight_metric") or "").strip())
     dims = {d["key"]: Dimension(key=d["key"], name=d.get("name", d["key"]),
-                                sql_fragment=d["sql_fragment"])
+                                sql_fragment=d["sql_fragment"],
+                                labels={str(k): str(v) for k, v in (d.get("labels") or {}).items()})
             for d in data.get("dimensions", [])}
     mk = dict(data.get("matcher_keywords") or {})
     if mk.get("filter_values"):

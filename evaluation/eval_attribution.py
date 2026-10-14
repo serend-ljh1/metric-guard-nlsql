@@ -486,7 +486,8 @@ def main() -> int:
     real = sqlite3.connect(args.db)
     scenarios, drill_targets, factor_periods = [], [], []
     for cur_spec in args.periods:
-        prev_spec = attribution._default_previous_spec(cur_spec)
+        # 上期写法与时间窗解析统一走归因模块的日历工具（锚定数据基准日）
+        prev_spec = attribution._prev_label(cur_spec, attribution._now())
         c0, c1 = attribution._range_spec(cur_spec)
         # 跳过窗口边界（当月无前月数据）与只有几单的月份
         cur_orders = real.execute(

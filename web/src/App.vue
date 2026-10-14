@@ -3,6 +3,7 @@ import { ref, reactive } from 'vue'
 import AgentPanel from './components/AgentPanel.vue'
 import ChartsBoard from './components/ChartsBoard.vue'
 import DecisionCard from './components/DecisionCard.vue'
+import DataLineageCard from './components/DataLineageCard.vue'
 
 // ---- 提问输入 ----
 const question = ref('2018年6月 GMV 为什么比上月跌？')
@@ -126,6 +127,52 @@ async function confirmAndRun() {
   }
   runAnalysis(cur && cur.confirm_id)
 }
+
+// ---- 报告导出（Markdown 预览 + Word 下载）----
+const reportBusy = ref(false)
+const reportOpen = ref(false)
+const reportMd = ref('')
+
+// 把**当前持有的 final 原样回传**给后端出报告：不重跑分析、不再调 LLM（零额外成本）。
+// 后端同时返回 Markdown（前端预览）与 Word 的 base64（直接触发下载）。
+async function exportReport() {
+  if (!final.value || running.value || reportBusy.value) return
+  reportBusy.value = true
+  error.value = ''
+  try {
+    const resp = await fetch('/api/analyze/report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: question.value, role: 'analyst', final: final.value }),
+    })
+    const body = await resp.json().catch(() => ({}))
+    if (!resp.ok || !body.ok) throw new Error(body.detail || body.reject || ('导出报告失败 HTTP ' + resp.status))
+    reportMd.value = body.markdown || body.report || ''
+    if (body.docx_b64) downloadDocx(body.docx_b64, body.filename || 'analysis-report.docx')
+    reportOpen.value = true
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    reportBusy.value = false
+  }
+}
+
+function downloadDocx(b64, filename) {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  const blob = new Blob([bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 </script>
 
 <template>
@@ -141,8 +188,8 @@ async function confirmAndRun() {
     <section class="ask">
       <div class="input-row">
         <input v-model="question" class="q" maxlength="120"
-               placeholder="例如：2018年6月 GMV 为什么跌？" @keyup.enter="runAnalysis" />
-        <button class="run" :disabled="running" @click="runAnalysis">
+               placeholder="例如：2018年6月 GMV 为什么跌？" @keyup.enter="runAnalysis()" />
+        <button class="run" :disabled="running" @click="runAnalysis()">
           {{ running ? '分析中…' : '开始分析' }}
         </button>
       </div>
@@ -175,6 +222,21 @@ async function confirmAndRun() {
     </div>
 
     <div v-if="final && !final.need_confirm" class="results">
+      <div class="report-bar">
+        <span class="hint">本次分析可一键导出为可交付报告（结论 / 依据 / 决策闭环 / 复现 SQL）。</span>
+        <button class="export" :disabled="reportBusy" @click="exportReport()">
+          {{ reportBusy ? '正在生成报告…' : '↓ 导出分析报告（Markdown 预览 + 下载 Word）' }}
+        </button>
+      </div>
+
+      <section v-if="reportOpen" class="outcome card report-view">
+        <div class="report-head">
+          <h2>报告预览（Markdown）</h2>
+          <button class="ghost" @click="reportOpen = false">收起</button>
+        </div>
+        <pre class="md">{{ reportMd }}</pre>
+      </section>
+
       <section class="outcome card">
         <h2>诊断结论</h2>
         <p class="conclusion">{{ final.conclusion }}</p>
@@ -190,6 +252,9 @@ async function confirmAndRun() {
       </section>
 
       <ChartsBoard :chart="final.chart" :metric_name="final.metric_name" />
+
+      <DataLineageCard :compile="final.compile" :sql="final.sql"
+                       :row-count="(final.rows || []).length" />
 
       <DecisionCard :decision="final.decision" />
     </div>
@@ -242,6 +307,30 @@ async function confirmAndRun() {
 .confirm-card h2 { color: #fbbf24; }
 .confirm-row { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
 .confirm-row .q { flex: 1; padding: 12px 14px; }
+
+.report-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px;
+              padding: 12px 16px; border-radius: 14px; border: 1px dashed var(--border);
+              background: var(--surface-muted); }
+.report-bar .hint { color: var(--text-muted); font-size: 13px; }
+/* 导出报告做成显眼按钮：这是"分析结果可交付"的唯一入口，不该藏在角落当次要操作 */
+.report-bar .export { border: none; cursor: pointer; white-space: nowrap;
+         background: linear-gradient(135deg, var(--brand), var(--brand-2));
+         color: #fff; border-radius: 11px; padding: 11px 20px; font-size: 13.5px;
+         font-weight: 700; letter-spacing: .2px;
+         box-shadow: 0 6px 18px -6px var(--brand); transition: .15s; }
+.report-bar .export:hover:not(:disabled) { transform: translateY(-1px);
+         box-shadow: 0 10px 24px -8px var(--brand); }
+.report-bar .export:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; }
+.ghost { border: 1px solid var(--border); background: transparent; color: var(--text);
+         border-radius: 10px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+         transition: .15s; }
+.ghost:hover:not(:disabled) { border-color: var(--brand); color: var(--brand-2); }
+.ghost:disabled { opacity: .6; cursor: not-allowed; }
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.report-head h2 { margin: 0; }
+.md { margin: 12px 0 0; padding: 14px; border-radius: 10px; background: #0b1020;
+      color: #d7dcf0; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap;
+      word-break: break-word; overflow-x: auto; }
 
 .foot { margin-top: 30px; color: var(--text-muted); font-size: 13px; text-align: center; }
 </style>

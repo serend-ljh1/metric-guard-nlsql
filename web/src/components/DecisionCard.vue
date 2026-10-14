@@ -10,13 +10,15 @@ defineProps({
 <template>
   <section v-if="decision" class="card decision" :class="{ alert: decision.alert }">
     <div class="head">
-      <span class="badge" :class="decision.alert ? 'on' : 'ok'">
-        {{ decision.alert ? '● 已告警推送' : '○ 无需告警' }}
+      <span class="badge"
+            :class="decision.alert_level === 'query' ? 'query' : (decision.alert ? 'on' : 'ok')">
+        {{ decision.alert_level === 'query' ? '◎ 定向查询'
+           : (decision.alert ? '● 已告警推送' : '○ 无需告警') }}
       </span>
-      <h2>决策收口</h2>
+      <h2>{{ decision.alert_level === 'query' ? '归因定位' : '决策收口' }}</h2>
     </div>
     <p class="reason">{{ decision.reason }}</p>
-    <div class="meta">
+    <div class="meta" v-if="decision.alert_level !== 'query'">
       <div><b>推送对象</b><span>{{ decision.owner || '未指定' }}</span></div>
       <div><b>通道</b><span>{{ decision.channel === 'hitl' ? 'HITL 工单' : '—' }}</span></div>
       <div v-if="decision.hitl_id"><b>工单号</b><span class="mono">{{ decision.hitl_id }}</span></div>
@@ -32,6 +34,7 @@ defineProps({
 .badge { font-size: 13px; padding: 5px 12px; border-radius: 999px; font-weight: 600; }
 .badge.on { background: #f8717122; color: var(--danger); }
 .badge.ok { background: #34d39922; color: var(--ok); }
+.badge.query { background: #60a5fa22; color: var(--accent); }
 .reason { margin: 14px 0 0; color: var(--text-muted); font-size: 14px; line-height: 1.6; }
 .meta { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
         gap: 12px; }

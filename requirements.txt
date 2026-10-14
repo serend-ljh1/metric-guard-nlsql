@@ -17,6 +17,9 @@ pydantic>=2.0
 pyyaml
 python-dotenv
 
+# ---- 交付物：Word 报告导出 ----
+python-docx
+
 # ---- 测试 / CI ----
 pytest
 

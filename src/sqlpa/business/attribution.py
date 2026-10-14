@@ -27,57 +27,134 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from .metric_config import BusinessConfig
 from .sqlgen import metric_source
+from .. import config as _config
 
 
 def _now() -> datetime.date:
-    return datetime.date.today()
+    """归因的时间基准日。
 
-
-def _default_previous_spec(current_spec: str) -> str:
-    """取「上一期」的默认写法。
-
-    关键：禁止把显式月份（如 "2018-06"）的上期默认成相对今天的 "上月" —— 那会解析成
-    当前真实月（如 2026），在真实数据窗口（Olist 2016-09~2018-10）内必然查不到上期，
-    归因会误报"当期或上期无结果"。对显式月份，上期应取**该月的前一个月**（字面量），
-    时间语义始终落在同一数据窗口内。
+    关键：**不是系统当天**，而是数据基准日（见 config.data_asof）。
+    否则「本月 / 上月」会解析到系统当月（如 2026-10），落在 Olist 真实数据窗口
+    （2016-09~2018-10）之外 → 当期/上期永远查空，归因恒报"数据不足"。
     """
-    s = str(current_spec or "")
-    m = re.fullmatch(r"(\d{4})[年\-](\d{1,2})月?", s)
-    if m:
-        y, mo = int(m.group(1)), int(m.group(2))
-        prev = datetime.date(y, mo, 1) - datetime.timedelta(days=1)  # 退一个月
-        return f"{prev.year:04d}-{prev.month:02d}"
-    if "上月" in s or "上个月" in s:
-        return "上月"
-    if "本月" in s or "这个月" in s:
-        return "上月"
-    return "上一期"
+    return _config.data_asof()
 
 
-def _range_spec(spec: str) -> Tuple[str, str]:
-    """把 '上月' / '本月' / '2026-08' 转成 (start,end) 已加引号的字面量。"""
-    now = _now()
-    s = str(spec).strip()
+def _shift_month(y: int, mo: int, k: int) -> Tuple[int, int]:
+    """(年, 月) 平移 k 个月（k 可负）。"""
+    total = y * 12 + (mo - 1) + k
+    return total // 12, total % 12 + 1
+
+
+def _month_span(y: int, mo: int) -> Tuple[datetime.date, datetime.date]:
+    """整月区间 [当月 1 号, 下月 1 号)。"""
+    ny, nm = _shift_month(y, mo, 1)
+    return datetime.date(y, mo, 1), datetime.date(ny, nm, 1)
+
+
+def _resolve_window(spec: str, asof: datetime.date) -> Tuple[datetime.date, datetime.date]:
+    """把时间语义解析成日期区间 [start, end)；**相对时间词锚定 asof**（数据基准日）。
+
+    支持：显式 `YYYY-MM` / `上上个月` / `上月|上个月` / `本月|这个月` / `最近N天`（默认 30 天）。
+    """
+    s = _config.canonical_time_spec(spec)
     m = re.fullmatch(r"(\d{4})[年\-](\d{1,2})月?", s)
     if m:
-        y, mo = int(m.group(1)), int(m.group(2))
-        start = datetime.date(y, mo, 1)
-        end = datetime.date(y + (mo == 12), ((mo % 12) + 1), 1)
-        return "'" + start.isoformat() + "'", "'" + end.isoformat() + "'"
+        return _month_span(int(m.group(1)), int(m.group(2)))
+    # 注意顺序：「上上个月」里含子串「上个月」，必须先判"上上"。
+    if "上上" in s:
+        y, mo = _shift_month(asof.year, asof.month, -2)
+        return _month_span(y, mo)
     if "上月" in s or "上个月" in s:
-        fm = datetime.date(now.year, now.month, 1)
-        start = (fm - datetime.timedelta(days=1)).replace(day=1)
-        return "'" + start.isoformat() + "'", "'" + fm.isoformat() + "'"
+        y, mo = _shift_month(asof.year, asof.month, -1)
+        return _month_span(y, mo)
     if "本月" in s or "这个月" in s:
-        fm = datetime.date(now.year, now.month, 1)
-        end = (fm + datetime.timedelta(days=31)).replace(day=1)
-        return "'" + fm.isoformat() + "'", "'" + end.isoformat() + "'"
+        return _month_span(asof.year, asof.month)
     n = 30
     mm = re.search(r"(\d+)\s*天|最近(\d+)天", s)
     if mm:
         n = int(mm.group(1) or mm.group(2))
-    return ("'" + (now - datetime.timedelta(days=n)).isoformat() + "'",
-            "'" + now.isoformat() + "'")
+    return asof - datetime.timedelta(days=n), asof
+
+
+def _quote(win: Tuple[datetime.date, datetime.date]) -> Tuple[str, str]:
+    """日期区间 → 已加引号的 SQL 字面量。"""
+    return "'" + win[0].isoformat() + "'", "'" + win[1].isoformat() + "'"
+
+
+def _dim_label(cfg: BusinessConfig, dim: str, value) -> str:
+    """维度取值的**展示名**：有配置用人话名（如 SP→圣保罗），无则回落原值。
+
+    只用于文案（desc/图表/报告），不参与过滤取值 —— 过滤仍用原始代码。
+    """
+    d = cfg.dimensions.get(dim) if cfg else None
+    return d.label(value) if d else str(value)
+
+
+def _dim_name(cfg: BusinessConfig, dim: str) -> str:
+    """维度中文名（有配置用配置名，无则回落维度 key）。"""
+    d = cfg.dimensions.get(dim) if cfg else None
+    return d.name if d else str(dim)
+
+
+def _range_spec(spec: str, asof: Optional[datetime.date] = None) -> Tuple[str, str]:
+    """把 '上月' / '本月' / '2018-06' 转成 (start,end) 已加引号的字面量。"""
+    return _quote(_resolve_window(spec, asof or _now()))
+
+
+def _previous_window(spec: str, asof: datetime.date) -> Tuple[datetime.date, datetime.date]:
+    """当前时间窗的"上一期"：整月窗口退一个月；其余（最近N天）按同跨度平移。"""
+    s = _config.canonical_time_spec(spec)
+    m = re.fullmatch(r"(\d{4})[年\-](\d{1,2})月?", s)
+    if m:
+        y, mo = _shift_month(int(m.group(1)), int(m.group(2)), -1)
+        return _month_span(y, mo)
+    if "上上" in s:
+        y, mo = _shift_month(asof.year, asof.month, -3)
+        return _month_span(y, mo)
+    if "上月" in s or "上个月" in s:
+        y, mo = _shift_month(asof.year, asof.month, -2)
+        return _month_span(y, mo)
+    if "本月" in s or "这个月" in s:
+        y, mo = _shift_month(asof.year, asof.month, -1)
+        return _month_span(y, mo)
+    c0, c1 = _resolve_window(s, asof)
+    span = (c1 - c0).days
+    return c0 - datetime.timedelta(days=span), c1 - datetime.timedelta(days=span)
+
+
+def _prev_label(spec: str, asof: datetime.date) -> str:
+    """"上一期"的**可展示且可再解析**的写法（同时作为 previous_spec 落进结果/工单）。
+
+    约束：必须仍能被 `_resolve_window` 解析回正确区间（HITL 重跑验证会用它）。
+    """
+    s = _config.canonical_time_spec(spec)
+    m = re.fullmatch(r"(\d{4})[年\-](\d{1,2})月?", s)
+    if m:                                     # 显式月份 → 具体上月（如 2018-05）
+        y, mo = _shift_month(int(m.group(1)), int(m.group(2)), -1)
+        return f"{y:04d}-{mo:02d}"
+    if "上上" in s:                           # 上上月 → 再退一个月（具体月份）
+        y, mo = _shift_month(asof.year, asof.month, -3)
+        return f"{y:04d}-{mo:02d}"
+    if "上月" in s or "上个月" in s:
+        return "上上个月"
+    if "本月" in s or "这个月" in s:
+        return "上月"
+    mm = re.search(r"(\d+)\s*天", s)
+    if mm:
+        return f"前{int(mm.group(1))}天"
+    return "上一期"
+
+
+def _window_hint(win: Tuple[datetime.date, datetime.date],
+                 asof: datetime.date) -> str:
+    """"这段区间根本没被数据覆盖"的显式提示（而不是让用户对着空结果猜）。"""
+    if win[0] > asof:
+        return (f"该时间范围自 {win[0].isoformat()} 起，晚于数据窗口最新日 "
+                f"{asof.isoformat()}，数据尚未覆盖。相对时间词（本月/上月）按"
+                f"**数据最新日**解析，请改用数据窗口内的月份（如 2018-06）")
+    return ""
+
 
 
 def _scalar(db: sqlite3.Connection, sql: str) -> Optional[object]:
@@ -268,14 +345,36 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         return {"ok": False, "reason": "指标或数据库不可用"}
 
     dims = [d for d in (dims or ["dt"]) if d in cfg.dimensions]
-    prev_spec = previous_spec or _default_previous_spec(current_spec)
-    c0, c1 = _range_spec(current_spec)
-    p0, p1 = _range_spec(prev_spec)
+    asof = _now()
+    cur_win = _resolve_window(current_spec, asof)
+    c0, c1 = _quote(cur_win)
+    if previous_spec:
+        prev_win = _resolve_window(previous_spec, asof)
+        prev_spec = previous_spec
+    else:
+        prev_win = _previous_window(current_spec, asof)
+        prev_spec = _prev_label(current_spec, asof)
+    p0, p1 = _quote(prev_win)
 
     cur_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, c0, c1)}")
     prev_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, p0, p1)}")
     if cur_total is None or prev_total is None:
-        return {"ok": False, "reason": "归因查询失败（当期或上期无结果）"}
+        # "哪一期没数据"必须说清楚，否则用户只能对着"归因失败"猜。
+        missing = []
+        if cur_total is None:
+            missing.append(f"当期「{current_spec}」{cur_win[0].isoformat()}~"
+                           f"{cur_win[1].isoformat()} 无数据")
+        if prev_total is None:
+            missing.append(f"上期「{prev_spec}」{prev_win[0].isoformat()}~"
+                           f"{prev_win[1].isoformat()} 无数据")
+        hint = _window_hint(cur_win, asof) or _window_hint(prev_win, asof)
+        return {"ok": False, "metric": metric_key, "metric_name": m.name,
+                "reason": "；".join(missing) or "归因查询失败（当期或上期无结果）",
+                "current_spec": current_spec, "previous_spec": prev_spec,
+                "window": {"current": [cur_win[0].isoformat(), cur_win[1].isoformat()],
+                           "previous": [prev_win[0].isoformat(), prev_win[1].isoformat()],
+                           "asof": asof.isoformat()},
+                "hint": hint, "dims": []}
 
     change = float(cur_total) - float(prev_total)
     change_pct = change / float(prev_total) if float(prev_total) else 0.0
@@ -343,9 +442,11 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         if delta:
             top_key, top_delta = max(delta.items(), key=lambda kv: abs(kv[1]))
             contributors.append(
-                {"dim": d, "key": top_key, "delta": top_delta,
+                {"dim": d, "dim_name": _dim_name(cfg, d),
+                 "key": top_key, "key_label": _dim_label(cfg, d, top_key),
+                 "delta": top_delta,
                  "pct_of_change": round(top_delta / change, 4) if change else 0.0,
-                 "desc": f"{cfg.dimensions[d].name}「{top_key}」变化{top_delta:+.2f}"})
+                 "desc": f"{_dim_name(cfg, d)}「{_dim_label(cfg, d, top_key)}」变化{top_delta:+.2f}"})
     result["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
 
     # ---- 守恒自检：分段之和对不上总变化就**该维度**不许说"占波动 X%" ----
@@ -505,15 +606,24 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
             return _exec_map(db, sql)
         return _q
 
-    c0, c1 = _range_spec(current_spec)
-    prev_spec = previous_spec or _default_previous_spec(current_spec)
-    p0, p1 = _range_spec(prev_spec)
+    asof = _now()
+    cur_win = _resolve_window(current_spec, asof)
+    c0, c1 = _quote(cur_win)
+    if previous_spec:
+        prev_win = _resolve_window(previous_spec, asof)
+        prev_spec = previous_spec
+    else:
+        prev_win = _previous_window(current_spec, asof)
+        prev_spec = _prev_label(current_spec, asof)
+    p0, p1 = _quote(prev_win)
 
     out = {
         "ok": True, "metric": metric_key, "metric_name": m.name,
         "current_spec": current_spec, "previous_spec": prev_spec,
         "path": list(path or []),
-        "path_desc": " → ".join(f"{p.get('dim')}={p.get('value')}" for p in (path or [])) or "（全局）",
+        "path_desc": " → ".join(
+            f"{_dim_name(cfg, p.get('dim'))}={_dim_label(cfg, p.get('dim'), p.get('value'))}"
+            for p in (path or [])) or "（全局）",
         "dims": [], "top_contributors": [], "next_dims": cand,
     }
     if not cand:
@@ -530,8 +640,10 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                             "previous": prev_map, "delta": delta})
         if delta:
             k, d = max(delta.items(), key=lambda kv: abs(kv[1]))
-            contributors.append({"dim": dim, "key": k, "delta": d,
-                                 "desc": f"{cfg.dimensions[dim].name}「{k}」变化{d:+.2f}"})
+            contributors.append({"dim": dim, "dim_name": _dim_name(cfg, dim),
+                                 "key": k, "key_label": _dim_label(cfg, dim, k),
+                                 "delta": d,
+                                 "desc": f"{_dim_name(cfg, dim)}「{_dim_label(cfg, dim, k)}」变化{d:+.2f}"})
     out["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
     return out
 
@@ -745,9 +857,16 @@ def factorize(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                f"{_time_where(fm.where_core, start, end)}")
         return _scalar(db, sql)
 
-    c0, c1 = _range_spec(current_spec)
-    prev_spec = previous_spec or _default_previous_spec(current_spec)
-    p0, p1 = _range_spec(prev_spec)
+    asof = _now()
+    cur_win = _resolve_window(current_spec, asof)
+    c0, c1 = _quote(cur_win)
+    if previous_spec:
+        prev_win = _resolve_window(previous_spec, asof)
+        prev_spec = previous_spec
+    else:
+        prev_win = _previous_window(current_spec, asof)
+        prev_spec = _prev_label(current_spec, asof)
+    p0, p1 = _quote(prev_win)
 
     cur_gmv = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, [])}\n"
                           f"{_time_where(m.where_core, c0, c1)}")

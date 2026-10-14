@@ -37,8 +37,27 @@ jobs:
         # 外部对抗语料（61 条）：危险拦截率 / **只读误杀率** / 库不变性 / 过滤值注入。
         # 语料在仓库内（evaluation/sandbox_corpus/），因此可进 CI：
         # 危险拦截必须 100%、库文件 sha256 与行数必须一字不变。
-        # 注：外部基准 eval_external_bank.py 需要仓库外的 Spider 数据集，故不在此运行。
         run: python evaluation/eval_sandbox_external.py --report-dir /tmp/eval_reports
+
+      - name: Attribution eval (injection-based ground truth, offline, no LLM)
+        # 注入式真因：在真实 Olist 上注入可控原因，由评测侧独立复算真值，
+        # 度量 analyze / drill / factorize 三维定位命中率。**无 LLM、纯算术**，
+        # 因此可离线进 CI —— 这是本项目的核心能力，必须防回归。
+        run: |
+          python evaluation/eval_attribution.py --report-dir /tmp/eval_reports \
+            --periods 2018-05 2018-06 2018-07 \
+            --dims state category --inject-pct 0.60 --topk 1 2 3 5
+
+      - name: Alert quality eval (threshold vs threshold+significance)
+        # 告警质量：5% 阈值报了多少警、其中多少被统计门控抑制、多少是月长假象。
+        # 离线确定性（相邻月对遍历），用于防止"改阈值/改门控"悄悄改变告警行为。
+        run: python evaluation/eval_alert_quality.py --report-dir /tmp/eval_reports
+
+      - name: External public benchmark eval (Spider dev world_1, in-repo corpus)
+        # 第三方语料（问题与 gold SQL 来自 Spider dev world_1，非本项目自编）。
+        # 完整 Spider 数据集属仓库外资源，故此处退回**仓库内样本语料**
+        # evaluation/spider_probe/（题面+gold SQL+库文件随仓库发布）→ 任意机器可离线重跑。
+        run: python evaluation/eval_external_bank.py --report-dir /tmp/eval_reports
 
       - name: Compile-check entrypoints
         # 入口脚本语法自检（此前的 Streamlit app.py 冒烟步骤在 app.py 下线后一直让 CI 失败，

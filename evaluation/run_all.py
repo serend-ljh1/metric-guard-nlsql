@@ -1,23 +1,33 @@
-"""批量评测入口：一次跑业务层 / 产品 / 决策 / 归因命中率四套评测，汇总成一份总报告。
+"""批量评测入口：一次跑完全部**离线确定性**评测线，汇总成一份总报告。
 
 用法：
     python evaluation/run_all.py
     python evaluation/run_all.py --report-dir evaluation/reports
+    python evaluation/run_all.py --llm          # 额外跑"确定性引擎 vs 纯LLM"对照（需 API Key）
 
-默认全部**离线确定性**运行（不接 LLM），因此无需 API Key、可复现；_decisions 走
-离线规则基线（判断题判不出），如需接真实 LLM 手动跑 `eval_decisions.py --llm`。
+评测线（7 条，默认全部离线、无需 API Key、可复现）：
+    1. business          业务语义层：口径命中 / 口径外拒绝 / 权限拦截 / PII 掩码 / 公式防篡改 / 审计
+    2. product           产品模式（北极星）：语义层命中率 / 指标与维度识别 / 认证率
+    3. decisions         归因决策质量（离线规则基线；接真实 LLM 请单独跑 `eval_decisions.py --llm`）
+    4. attribution       归因三维定位命中率（注入式真因：analyze / drill / factorize）
+    5. alert_quality     告警质量：阈值告警 vs 阈值+统计门控（抑制了多少噪声、多少是月长假象）
+    6. sandbox_external  外部对抗语料：危险拦截率 / 只读误杀率 / 库不变性 / 过滤值注入
+    7. external_bank     第三方公开基准（Spider dev world_1）：覆盖率 / 覆盖内正确率 / 拒答率
+                         —— 优先用仓库内除样本语料跑；只有它跑不起来才跳过，并在总报告里标"未运行"
+
+可选第 8 条（`--llm` 才跑，需 LLM_API_KEY）：
+    attribution_llm_baseline   同一批注入真因判题上，确定性算术引擎 vs 纯 LLM 的 top@1 对照，
+                               并由此得出 llm_value（引擎相对纯 LLM 的增量）。无 Key 时**显式标注未运行**，
+                               绝不静默跳过。
 
 产物：
-    evaluation/reports/business.json      # 业务语义层口径/治理命中率
-    evaluation/reports/product.json       # 产品模式语义层命中率（北极星）
-    evaluation/reports/decisions.json     # 归因决策质量（离线规则基线）
-    evaluation/reports/attribution.json   # 归因三维定位命中率（注入式真因）
-    evaluation/reports/overall.json       # 汇总总报告（本脚本产出）
+    evaluation/reports/*.json  各线明细 + overall.json（本脚本产出的总报告）
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,13 +38,16 @@ from sqlpa.config import repo_relative  # noqa: E402
 
 REPORT_DIR = Path(__file__).resolve().parent / "reports"
 
+# 需要 `--out <file>` 的脚本（其余统一用 `--report-dir <dir>`）
+_OUT_STYLE = {"decisions", "attribution_llm_baseline"}
 
-def _run_eval(name: str, report_dir: Path, extra: list = None) -> int:
+
+def _run_eval(name: str, report_dir: Path, extra: list | None = None) -> int:
     """运行 evaluation/eval_<name>.py，并返回其退出码。"""
     script = Path(__file__).resolve().parent / f"eval_{name}.py"
     cmd = [sys.executable, str(script)]
-    if name == "decisions":
-        cmd += ["--out", str(report_dir / "decisions.json")]
+    if name in _OUT_STYLE:
+        cmd += ["--out", str(report_dir / f"{name}.json")]
     else:
         cmd += ["--report-dir", str(report_dir)]
     cmd += (extra or [])
@@ -43,8 +56,12 @@ def _run_eval(name: str, report_dir: Path, extra: list = None) -> int:
     return subprocess.call(cmd, cwd=str(ROOT))
 
 
-def _load(report_dir: Path, name: str) -> dict:
-    return json.loads((report_dir / f"{name}.json").read_text(encoding="utf-8"))
+def _load(report_dir: Path, name: str) -> dict | None:
+    """读取某条线的报告；不存在（该线本轮跳过）返回 None，而不是让汇总崩掉。"""
+    p = report_dir / f"{name}.json"
+    if not p.exists():
+        return None
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _pct(x: float) -> str:
@@ -52,15 +69,33 @@ def _pct(x: float) -> str:
 
 
 def _fmt(v) -> str:
-    """报告值可能是百分数或 dict（如 top-k= {k1: .., k2: ..}），统一成字符串。"""
+    """报告值可能是百分数 / dict（如 top-k）/ 布尔 / 整数 / 字符串，统一成可读串。"""
+    if isinstance(v, bool):
+        return "是" if v else "否"
     if isinstance(v, dict):
         return "  ".join(f"{k}={_pct(val)}" for k, val in v.items())
-    return _pct(v)
+    if isinstance(v, float):
+        return _pct(v)
+    return str(v)
 
 
-def main(report_dir: Path) -> int:
+def _print_suite(title: str, mapping: dict) -> None:
+    print("=" * 68)
+    print(f"● {title}")
+    for k, v in mapping.items():
+        print(f"    {k:<26}: {_fmt(v)}")
+
+
+def _llm_key_present() -> bool:
+    return bool(os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
+                or os.environ.get("OPENAI_API_KEY"))
+
+
+def main(report_dir: Path, with_llm: bool = False) -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     rc = 0
+
+    # ---- 7 条离线评测线（顺序执行，后面的线依赖前面的产物）----
     rc |= _run_eval("business", report_dir)
     rc |= _run_eval("product", report_dir)
     rc |= _run_eval("decisions", report_dir)
@@ -69,105 +104,160 @@ def main(report_dir: Path) -> int:
         "--dims", "state", "category", "--inject-pct", "0.60",
         "--topk", "1", "2", "3", "5",
     ])
-    # 外部公开基准（Spider dev）：数据集在仓库外，缺失时跳过而不是让整套评测变红。
-    spider = ROOT.parent / "spider" / "dev.json"
-    external_ok = False
-    if spider.exists():
-        external_ok = _run_eval("external_bank", report_dir) == 0
-    else:
-        print(f"\n>>> 跳过 external_bank：未找到 {spider}（Spider 数据集属仓库外资源）")
+    rc |= _run_eval("alert_quality", report_dir)
+    rc |= _run_eval("sandbox_external", report_dir)
+
+    # 外部公开基准（Spider dev world_1）：优先用**仓库内**样本语料（见 evaluation/spider_probe/），
+    # 只有它也不可得时才跳过；跳过与否都写进总报告，不静默。
+    external_ok = _run_eval("external_bank", report_dir) == 0
+
+    # ---- 可选第 8 条：确定性引擎 vs 纯 LLM 对照（需 API Key）----
+    llm_baseline_ran = False
+    llm_baseline_note = "未运行（未加 --llm）"
+    if with_llm:
+        if _llm_key_present():
+            llm_baseline_ran = _run_eval("attribution_llm_baseline", report_dir, [
+                "--cases", str(report_dir / "attribution.json"),
+                "--limit", "30",
+            ]) == 0
+            llm_baseline_note = "已运行" if llm_baseline_ran else "运行失败（见上方输出）"
+        else:
+            llm_baseline_note = ("未运行（--llm 已开启，但未检测到 LLM_API_KEY / "
+                                 "DEEPSEEK_API_KEY / OPENAI_API_KEY）")
+            print(f"\n>>> 跳过 attribution_llm_baseline：{llm_baseline_note}")
 
     overall = {
         "suite": "overall",
-        "desc": "批量评测总报告（离线确定性，无需 API Key）",
+        "desc": ("批量评测总报告（7 条离线确定性评测线 + 可选 LLM 对照；"
+                 "离线线无需 API Key、可复现）"),
         "report_dir": repo_relative(report_dir),
         "exit_code_ok": rc == 0,
+        "suite_count_offline": 7,
         "suites": {},
     }
 
-    # ---- 业务语义层 ----
+    # ---- 1. 业务语义层 ----
     b = _load(report_dir, "business")
-    overall["suites"]["business"] = {
-        "口径内命中率": b["in_scope_hit_rate"],
-        "公式防篡改拦截率": b["guard_block_rate"],
-        "权限拦截率": b["permission_block_rate"],
-        "PII 掩码覆盖率": b["pii_mask_rate"],
-        "审计覆盖率": b["audit_coverage"],
-    }
+    if b:
+        overall["suites"]["business"] = {
+            "口径内命中率": b["in_scope_hit_rate"],
+            "公式防篡改拦截率": b["guard_block_rate"],
+            "权限拦截率": b["permission_block_rate"],
+            "PII 掩码覆盖率": b["pii_mask_rate"],
+            "审计覆盖率": b["audit_coverage"],
+        }
 
-    # ---- 产品模式（北极星 = 语义层命中率） ----
+    # ---- 2. 产品模式（北极星 = 语义层命中率） ----
     p = _load(report_dir, "product")
-    overall["suites"]["product"] = {
-        "语义层命中率(北极星)": p["semantic_hit_rate"],
-        "口径内执行成功率": p["in_scope_ok_rate"],
-        "指标识别准确率": p["metric_accuracy"],
-        "维度识别准确率": p["dims_accuracy"],
-        "口径认证率": p["certified_rate"],
-    }
+    if p:
+        overall["suites"]["product"] = {
+            "语义层命中率(北极星)": p["semantic_hit_rate"],
+            "口径内执行成功率": p["in_scope_ok_rate"],
+            "指标识别准确率": p["metric_accuracy"],
+            "维度识别准确率": p["dims_accuracy"],
+            "口径认证率": p["certified_rate"],
+        }
 
-    # ---- 归因决策（离线规则基线） ----
+    # ---- 3. 归因决策（离线规则基线） ----
     d = _load(report_dir, "decisions")
-    overall["suites"]["decisions"] = {
-        "决策准确率": d.get("decision_accuracy"),
-        "判定题数": d.get("judgment_cases", 0),
-    }
+    if d:
+        overall["suites"]["decisions"] = {
+            "决策准确率": d.get("decision_accuracy"),
+            "判定题数": d.get("judgment_cases", 0),
+        }
 
-    # ---- 归因二维/下钻/因子分解命中率 ----
+    # ---- 4. 归因二维/下钻/因子分解命中率 ----
     a = _load(report_dir, "attribution")
-    overall["suites"]["attribution"] = {
-        "归因定位命中率(analyze)": a["attribution"]["hit_rate"],
-        "归因 top-k 命中率": a["attribution"]["topk_hit_rate"],
-        "下钻定位命中率(drill)": a["drill"]["hit_rate"],
-        "量价因子分解命中率(factorize)": a["factorize"]["hit_rate"],
-    }
+    if a:
+        overall["suites"]["attribution"] = {
+            "归因定位命中率(analyze)": a["attribution"]["hit_rate"],
+            "归因 top-k 命中率": a["attribution"]["topk_hit_rate"],
+            "下钻定位命中率(drill)": a["drill"]["hit_rate"],
+            "量价因子分解命中率(factorize)": a["factorize"]["hit_rate"],
+        }
 
-    # ---- 外部公开基准（Spider dev；不存在则跳过）----
-    if external_ok:
-        e = _load(report_dir, "external_bank_world_1")
+    # ---- 5. 告警质量（阈值 vs 阈值+统计门控） ----
+    aq = _load(report_dir, "alert_quality")
+    if aq:
+        alerts = aq.get("n_threshold_alerts", 0)
+        overall["suites"]["alert_quality"] = {
+            "样本组合数": aq.get("n_cases", 0),
+            "阈值告警率(旧行为)": aq.get("alert_rate_threshold_only"),
+            "统计门控抑制率": aq.get("suppression_rate"),
+            "月长假象告警占比": (round(aq.get("n_calendar_driven_alerts", 0) / alerts, 4)
+                                 if alerts else None),
+        }
+        overall["suites"]["alert_quality"]["口径说明"] = aq.get("offline_note", "")
+
+    # ---- 6. 沙箱外部对抗语料 ----
+    se = _load(report_dir, "sandbox_external")
+    if se:
+        fv = se.get("filter_value_injection") or []
+        fv_ok = sum(1 for x in fv if x.get("value_is_literal"))
+        overall["suites"]["sandbox_external"] = {
+            "对抗语料条数": se.get("corpus_size", 0),
+            "危险语料拦截率": se.get("dangerous_block_rate"),
+            "只读语料误杀率": se.get("readonly_false_positive_rate"),
+            "库不变性(文件hash)": bool(se.get("db_unchanged_hash")),
+            "库不变性(表行数)": bool(se.get("db_unchanged_counts")),
+            "过滤值转义合规率": (round(fv_ok / len(fv), 4) if fv else None),
+        }
+
+    # ---- 7. 外部公开基准（Spider dev world_1） ----
+    e = _load(report_dir, "external_bank_world_1")
+    if e:
         es = e["summary"]
+        shape = e["by_gold_shape"].get("单聚合（语义层目标形态）", {})
         overall["suites"]["external_bank_world_1"] = {
             "语料": f"Spider dev world_1, N={es['total']}",
             "覆盖率(开发集口径)": es["coverage_rate"],
             "覆盖内执行正确率": es["accuracy_on_covered"],
             "敢答且答错": es["wrong"],
             "拒答率": es["refusal_rate"],
-            "目标形态覆盖率": round(
-                e["by_gold_shape"].get("单聚合（语义层目标形态）", {}).get("correct", 0) /
-                max(1, e["by_gold_shape"].get("单聚合（语义层目标形态）", {}).get("total", 1)), 4),
+            "目标形态覆盖率": (round(shape.get("correct", 0) / max(1, shape.get("total", 1)), 4)
+                               if shape else None),
         }
+    else:
+        overall["suites"]["external_bank_world_1"] = {"状态": "未运行（语料不可得）"}
+
+    # ---- 8. 可选：确定性引擎 vs 纯 LLM ----
+    if llm_baseline_ran:
+        lb = _load(report_dir, "attribution_llm_baseline")
+        st = lb or {}
+        overall["suites"]["attribution_llm_baseline"] = {
+            "模型": st.get("model"),
+            "判题数": st.get("n", 0),
+            "确定性引擎 top@1": st.get("engine_top1"),
+            "纯LLM top@1": st.get("llm_top1"),
+            "llm_value(引擎增量)": (round((st.get("engine_top1") or 0)
+                                          - (st.get("llm_top1") or 0), 4)),
+        }
+    else:
+        overall["suites"]["attribution_llm_baseline"] = {"状态": llm_baseline_note}
 
     (report_dir / "overall.json").write_text(
         json.dumps(overall, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # ---- 打印汇总 ----
-    sep = "=" * 60
-    print("\n\n" + "#" * 60)
-    print("# 批量评测总报告")
-    print("#" * 60)
-    print(sep)
-    print("● 业务语义层")
-    for k, v in overall["suites"]["business"].items():
-        print(f"    {k:<12}: {_pct(v)}")
-    print(sep)
-    print("● 产品模式")
-    for k, v in overall["suites"]["product"].items():
-        print(f"    {k:<16}: {_pct(v)}")
-    print(sep)
-    print("● 归因决策（离线规则基线）")
-    print(f"    决策准确率    : {_pct(d.get('decision_accuracy', 0))}")
-    print(f"    判定题数      : {d.get('judgment_cases', 0)}")
-    print(sep)
-    print("● 归因三维定位命中率（注入式真因，inject 60%）")
-    for k, v in overall["suites"]["attribution"].items():
-        print(f"    {k:<24}: {_fmt(v)}")
-    if external_ok:
-        print(sep)
-        print("● 外部公开基准（Spider dev，第三方问题+gold SQL）")
-        for k, v in overall["suites"]["external_bank_world_1"].items():
-            print(f"    {k:<20}: {v if not isinstance(v, float) else _pct(v)}")
-    print("#" * 60)
+    print("\n\n" + "#" * 68)
+    print("# 批量评测总报告（7 条离线线 + 可选 LLM 对照）")
+    print("#" * 68)
+    titles = {
+        "business": "1. 业务语义层（口径/治理护栏）",
+        "product": "2. 产品模式（北极星=语义层命中率）",
+        "decisions": "3. 归因决策（离线规则基线）",
+        "attribution": "4. 归因三维定位命中率（注入式真因，inject 60%）",
+        "alert_quality": "5. 告警质量（阈值 vs 阈值+统计门控）",
+        "sandbox_external": "6. 沙箱外部对抗语料",
+        "external_bank_world_1": "7. 第三方公开基准（Spider dev world_1）",
+        "attribution_llm_baseline": "8. 可选对照：确定性引擎 vs 纯 LLM",
+    }
+    for key, title in titles.items():
+        if key in overall["suites"]:
+            _print_suite(title, overall["suites"][key])
+    print("#" * 68)
     print(f"总报告已保存: {report_dir / 'overall.json'}")
-    print(f"退出码: {rc}（{'全部通过' if rc == 0 else '存在失败'}，单个脚本的输出见上方）")
+    print(f"退出码: {rc}（{'全部通过' if rc == 0 else '存在失败'}，单线输出见上方）")
     return rc
 
 
@@ -175,8 +265,10 @@ def _cli() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--report-dir", default=str(REPORT_DIR),
                     help=f"报告输出目录（默认 {REPORT_DIR}）")
+    ap.add_argument("--llm", action="store_true",
+                    help="额外跑 attribution_llm_baseline 对照（需 LLM_API_KEY；无 Key 会显式标注未运行）")
     args = ap.parse_args()
-    return main(Path(args.report_dir))
+    return main(Path(args.report_dir), with_llm=args.llm)
 
 
 if __name__ == "__main__":

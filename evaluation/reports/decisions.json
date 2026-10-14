@@ -361,7 +361,7 @@
       {
         "check": "drill-主因隔离收敛",
         "ok": true,
-        "detail": "path=category=alimentos atti_delta=-200.0 drill_top=州「SP」变化-200.00 (-200.0)"
+        "detail": "path=品类=alimentos atti_delta=-200.0 drill_top=时间「2026-09-01」变化-200.00 (-200.0)"
       }
     ]
   }

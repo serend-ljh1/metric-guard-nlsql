@@ -248,6 +248,116 @@ def export_analysis_report(path: str | Path, question: str, final: Dict, *,
     return {"report": str(p)}
 
 
+def build_analysis_report_docx(question: str, final: Dict, *, username: str = "",
+                               generated_at: Optional[str] = None):
+    """构建「多 Agent 分析」Word 报告，返回 python-docx 的 Document 对象（未落盘）。
+
+    内容与 Markdown 报告同源：诊断结论 + 结构化依据 + 建议动作 + 决策收口 +
+    归因/因子/下钻 + 复现 SQL。Word 才是业务侧真正会转发、归档、贴进评审的载体。
+
+    python-docx **惰性导入**：未安装时抛出带安装指引的 RuntimeError，
+    而不是让 ImportError 裸抛（部署侧看到一句"pip install python-docx"即可自愈）。
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt
+    except ImportError as e:  # pragma: no cover —— 部署缺依赖时的明确指引
+        raise RuntimeError("生成 Word 报告需要 python-docx：pip install python-docx") from e
+
+    ts = generated_at or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    doc = Document()
+    doc.add_heading(f"分析报告：{question}", level=0)
+    doc.add_paragraph(f"生成时间：{ts}")
+    if username:
+        doc.add_paragraph(f"分析人：{username}")
+    doc.add_paragraph(f"指标：{final.get('metric_name') or final.get('metric', '-')}"
+                      f"（{final.get('metric', '-')}）")
+    doc.add_paragraph(f"路径：{final.get('route', '-')}"
+                      + ("（语义层确定性取数，口径已认证）" if final.get("certified") else ""))
+
+    doc.add_heading("诊断结论", level=1)
+    doc.add_paragraph(str(final.get("conclusion") or "（归因未完成）"))
+
+    evidence = final.get("evidence") or []
+    if evidence:
+        doc.add_heading("依据（结构化证据）", level=1)
+        for e in evidence:
+            doc.add_paragraph(f"{e.get('type')}：{e.get('detail')}", style="List Bullet")
+
+    act = final.get("actions") or {}
+    if act.get("action"):
+        doc.add_heading("建议动作", level=1)
+        doc.add_paragraph(str(act["action"]))
+
+    dec = final.get("decision") or {}
+    doc.add_heading("决策收口", level=1)
+    doc.add_paragraph(f"告警：{'是' if dec.get('alert') else '否'}（{dec.get('reason', '')}）")
+    if dec.get("owner"):
+        doc.add_paragraph(f"推送负责人：{dec.get('owner')}")
+    if dec.get("hitl_id"):
+        doc.add_paragraph(f"HITL 工单：{dec.get('hitl_id')}（含 AI 分析草稿，供复核）")
+
+    att = final.get("attribution")
+    if att:
+        doc.add_heading("波动归因", level=1)
+        doc.add_paragraph(f"当期 {att.get('current_total')} / 上期 {att.get('previous_total')}，"
+                          f"波动 {att.get('change_pct', 0) * 100:+.1f}%"
+                          + ("（异常）" if att.get("is_abnormal") else "（正常）"))
+        for c in (att.get("top_contributors") or [])[:4]:
+            doc.add_paragraph(f"{c.get('desc', '')}"
+                              + (f"（占波动 {abs(c.get('pct_of_change', 0)) * 100:.0f}%）"
+                                 if c.get("pct_of_change") else ""), style="List Bullet")
+        for dim, decomp in (att.get("ratio_decomposition") or {}).items():
+            if not decomp.get("valid"):
+                continue
+            doc.add_paragraph(
+                f"量价分解（按 {dim}）：比率/价格效应 {decomp['rate_effect']:+.4g}、"
+                f"结构效应 {decomp['mix_effect']:+.4g}、交互 {decomp['interaction']:+.4g}"
+                f"（合计 = 总变化 {decomp['change']:+.4g}）", style="List Bullet")
+        if att.get("contribution_note"):
+            doc.add_paragraph(f"口径提示：{att['contribution_note']}", style="List Bullet")
+        if (att.get("calendar") or {}).get("note"):
+            doc.add_paragraph(f"日历提示：{att['calendar']['note']}", style="List Bullet")
+
+    fz = final.get("factor_split")
+    if fz:
+        doc.add_heading("因子分解", level=1)
+        factors = fz.get("factors") or []
+        if factors:
+            table = doc.add_table(rows=1, cols=3)
+            table.style = "Table Grid"
+            head = table.rows[0].cells
+            head[0].text, head[1].text, head[2].text = "因子", "变化", "对总变动贡献"
+            for f in factors:
+                cells = table.add_row().cells
+                cells[0].text = str(f.get("label"))
+                cells[1].text = f"{f.get('change', 0):+.2f}"
+                cells[2].text = f"{f.get('share', 0) * 100:+.1f}%"
+        doc.add_paragraph(f"交互项占总变动："
+                          f"{(fz.get('interaction') or {}).get('share', 0) * 100:+.1f}%")
+
+    drill = final.get("drill")
+    if drill:
+        doc.add_heading(f"下钻分析（{drill.get('path_desc', '')}）", level=1)
+        for c in (drill.get("top_contributors") or [])[:3]:
+            doc.add_paragraph(c.get("desc", ""), style="List Bullet")
+
+    doc.add_heading("复现 SQL", level=1)
+    run = doc.add_paragraph().add_run(str(final.get("sql") or "-"))
+    run.font.name = "Consolas"
+    run.font.size = Pt(9)
+    return doc
+
+
+def export_analysis_report_docx(path: str | Path, question: str, final: Dict, *,
+                                username: str = "") -> Dict:
+    """导出多 Agent 分析报告（Word .docx），返回产物路径。"""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    build_analysis_report_docx(question, final, username=username).save(str(p))
+    return {"report": str(p), "docx": str(p)}
+
+
 # ---------------------------------------------------------------- 订阅 / 告警
 
 def _subs_path(path: Optional[str | Path]) -> Path:

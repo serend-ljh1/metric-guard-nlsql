@@ -7,8 +7,10 @@ sqlpa.config
 """
 from __future__ import annotations
 
+import datetime
+import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import yaml
 
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
@@ -95,6 +97,120 @@ def repo_relative(p: str | Path | None) -> str:
         return path.resolve().relative_to(Path(_ROOT).resolve()).as_posix()
     except (ValueError, OSError):
         return Path(p).name
+
+
+# ---------------------------------------------------------------- 数据基准日（相对时间的锚点）
+# 为什么必须有：Olist 数据窗口是 2016-09~2018-10，而「本月 / 上月 / 最近 30 天」这类
+# 相对时间词若按系统当天（date.today()）解析，会落到 2026 年 —— 落在数据窗口之外，
+# 于是任何相对时间提问都必然查空，表现为"能跑通流程但永远没有结果"。
+# 正确做法：相对时间词一律锚定**数据自身的最新日期**（max(order_purchase_timestamp)）。
+# 该锚点由入口层（api.py）按当前业务库探测并绑定；未绑定时回落系统当天（保持
+# 纯离线/单元测试里"本月 = 系统当月"的语义不变）。
+_DATA_ASOF: Dict[str, Any] = {"date": None, "source": "", "path": None}
+
+
+def set_data_asof(day: Optional[datetime.date | str],
+                  source: str = "") -> None:
+    """显式设置数据基准日；传 None 表示清除（回落 date.today()）。"""
+    if day is None:
+        _DATA_ASOF["date"] = None
+        _DATA_ASOF["source"] = ""
+        _DATA_ASOF["path"] = None
+        return
+    if isinstance(day, str):
+        day = datetime.date.fromisoformat(str(day)[:10])
+    _DATA_ASOF["date"] = day
+    _DATA_ASOF["source"] = source or ""
+
+
+def data_asof() -> datetime.date:
+    """当前生效的数据基准日：已绑定则用绑定值，否则用系统当天。"""
+    return _DATA_ASOF["date"] or datetime.date.today()
+
+
+def data_asof_source() -> str:
+    """基准日来源（写进报告/审计，让"这个相对时间落在哪一段"可复核）。"""
+    return str(_DATA_ASOF["source"] or "")
+
+
+def resolve_data_asof(db_path: str | Path, *,
+                      table: str = "orders",
+                      column: str = "order_purchase_timestamp") -> Optional[datetime.date]:
+    """**只读**探测业务库的数据基准日（最新订单日期）。探测失败/空表 → None。
+
+    用 URI `mode=ro` 打开，保证这一步不会（也不该）改动业务库。
+    """
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+        try:
+            row = con.execute(f"SELECT max({column}) FROM {table}").fetchone()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 —— 探测失败不阻塞取数
+        return None
+    val = row[0] if row else None
+    if not val:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(val)[:10])
+    except ValueError:
+        return None
+
+
+def bind_data_asof(db_path: str | Path) -> Optional[datetime.date]:
+    """探测并绑定基准日；探测不到则保持原有绑定（不误清）。"""
+    day = resolve_data_asof(db_path)
+    if day is not None:
+        set_data_asof(day, source=f"{Path(db_path).name}::max(order_purchase_timestamp)")
+    return day
+
+
+def bind_data_asof_once(db_path: str | Path) -> Optional[datetime.date]:
+    """按库路径缓存绑定：同一个库只探测一次，换库则重绑（幂等、零重复 IO）。"""
+    p = str(db_path or "")
+    if not p:
+        return None
+    if _DATA_ASOF.get("path") == p and _DATA_ASOF.get("date") is not None:
+        return _DATA_ASOF["date"]
+    day = bind_data_asof(p)
+    _DATA_ASOF["path"] = p
+    return day
+
+
+_ISO_YMD_RE = re.compile(r"(\d{4})[年\-/](\d{1,2})(?:[月\-/]\d{1,2})?")
+
+
+def canonical_time_spec(spec: Any) -> str:
+    """把"能识别的显式时间语义"归一成**规范月份 token**（`YYYY-MM`）。
+
+    为什么必须做：LLM 意图层对"2018年6月 GMV 为什么比上月跌？"这类**含比较语义**的问题，
+    常把时间窗回成"上一期+当期"的拼接串，例如 `2018-05-01,2018-06-30` /
+    `2018-05-01~2018-06-30`。这类串在 `compiler.resolve_time_range` 与
+    `attribution._resolve_window` 里**都解析不了**，旧实现会**静默回落到"最近30天"**
+    （数据基准日前 30 天）—— 于是当期被查到用户根本没问的窗口上，归因恒报"当期无数据"
+    （表现为"流程跑通了、但结果永远是数据不足"）。
+
+    归一规则（确定性、可复核）：
+      - 串里出现"年月"（`2018年6月` / `2018-06` / `2018-05-01,2018-06-30`）→ 取**最后一个月**
+        作为当期。含比较语义的拼接串总以"用户所问当月"结尾（…-05-01,2018-06-30 → 2018-06），
+        与系统既定的"当期 vs 上月"比较模型一致；
+      - 相对时间词（上月/本月/最近N天）原样保留，交给下游按数据基准日解析；
+      - 无法识别 → 原样返回（保持既有默认行为，不新增语义）。
+
+    放在解析**之前**（compiler 取数与 attribution 归因两个入口都调用），保证同一句话在
+    "取数"和"归因"两条链上落到**同一个窗口**，不会一边查 6 月、一边查 9 月。
+    """
+    s = str(spec or "").strip()
+    if not s:
+        return s
+    if any(k in s for k in ("上月", "上个月", "上上", "本月", "这个月", "天")):
+        return s
+    hits = _ISO_YMD_RE.findall(s)
+    if hits:
+        y, mo = hits[-1]
+        return f"{int(y):04d}-{int(mo):02d}"
+    return s
 
 
 def db_kind_note(kind: str) -> str:

@@ -90,6 +90,21 @@ def isolate_storage(tmpdir_clean, monkeypatch):
     return tmpdir_clean / "app.db"
 
 
+@pytest.fixture(autouse=True)
+def isolate_data_asof():
+    """每个用例重置「数据基准日」锚点（相对时间词的时间基准）。
+
+    生产/演示由 api 层按业务库探测数据最新日并绑定（让「上月」落在数据窗口内）；
+    而本仓库的测试夹具是按**系统当天**造的（business_months），因此这里统一清除绑定，
+    让 `config.data_asof()` 回落 `date.today()`——否则一条 api 用例绑定过的锚点会污染
+    后续直接调用归因/编译器的用例（时间窗整体漂移到 2018 年，夹具数据全部落在窗外）。
+    """
+    from sqlpa.config import set_data_asof
+    set_data_asof(None)
+    yield
+    set_data_asof(None)
+
+
 @pytest.fixture(scope="session")
 def real_olist_db() -> str:
     """可用的业务库路径：优先真实全量库，其次**仓库自带样本库**。

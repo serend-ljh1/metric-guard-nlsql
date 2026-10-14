@@ -2490,7 +2490,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=SP",
+        "path_desc": "州=圣保罗",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2505,7 +2505,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "relogios_presentes",
+            "key_label": "relogios_presentes",
             "delta": -12435.9,
             "desc": "品类「relogios_presentes」变化-12435.90"
           }
@@ -2518,7 +2520,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=RJ",
+        "path_desc": "州=里约热内卢",
         "hit": false,
         "wrong_direction": false,
         "rank": 2,
@@ -2533,7 +2535,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "ferramentas_jardim",
+            "key_label": "ferramentas_jardim",
             "delta": 5102.97,
             "desc": "品类「ferramentas_jardim」变化+5102.97"
           }
@@ -2546,7 +2550,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=MG",
+        "path_desc": "州=米纳斯吉拉斯",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2561,7 +2565,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "relogios_presentes",
+            "key_label": "relogios_presentes",
             "delta": -5799.418,
             "desc": "品类「relogios_presentes」变化-5799.42"
           }
@@ -2574,7 +2580,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "cama_mesa_banho",
-        "path_desc": "state=RS",
+        "path_desc": "州=南里奥格兰德",
         "hit": false,
         "wrong_direction": false,
         "rank": 4,
@@ -2589,7 +2595,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "bebes",
+            "key_label": "bebes",
             "delta": -3629.39,
             "desc": "品类「bebes」变化-3629.39"
           }
@@ -2602,7 +2610,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=PR",
+        "path_desc": "州=巴拉那",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2617,7 +2625,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "relogios_presentes",
+            "key_label": "relogios_presentes",
             "delta": -4792.056,
             "desc": "品类「relogios_presentes」变化-4792.06"
           }
@@ -2630,7 +2640,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "automotivo",
-        "path_desc": "state=SC",
+        "path_desc": "州=圣卡塔琳娜",
         "hit": false,
         "wrong_direction": false,
         "rank": 7,
@@ -2645,7 +2655,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "bebes",
+            "key_label": "bebes",
             "delta": -4024.74,
             "desc": "品类「bebes」变化-4024.74"
           }
@@ -2658,7 +2670,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "beleza_saude",
-        "path_desc": "state=BA",
+        "path_desc": "州=巴伊亚",
         "hit": false,
         "wrong_direction": false,
         "rank": 6,
@@ -2673,7 +2685,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "ferramentas_jardim",
+            "key_label": "ferramentas_jardim",
             "delta": 2022.37,
             "desc": "品类「ferramentas_jardim」变化+2022.37"
           }
@@ -2686,7 +2700,7 @@
         "cur_spec": "2018-05",
         "prev_spec": "2018-04",
         "injected_category": "beleza_saude",
-        "path_desc": "state=DF",
+        "path_desc": "州=联邦区",
         "hit": false,
         "wrong_direction": false,
         "rank": 18,
@@ -2701,7 +2715,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "ferramentas_jardim",
+            "key_label": "ferramentas_jardim",
             "delta": 2300.31,
             "desc": "品类「ferramentas_jardim」变化+2300.31"
           }
@@ -2714,7 +2730,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "beleza_saude",
-        "path_desc": "state=SP",
+        "path_desc": "州=圣保罗",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2729,7 +2745,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "beleza_saude",
+            "key_label": "beleza_saude",
             "delta": -26144.592,
             "desc": "品类「beleza_saude」变化-26144.59"
           }
@@ -2742,7 +2760,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "beleza_saude",
-        "path_desc": "state=MG",
+        "path_desc": "州=米纳斯吉拉斯",
         "hit": false,
         "wrong_direction": false,
         "rank": 2,
@@ -2757,7 +2775,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "automotivo",
+            "key_label": "automotivo",
             "delta": -3331.86,
             "desc": "品类「automotivo」变化-3331.86"
           }
@@ -2770,7 +2790,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=RJ",
+        "path_desc": "州=里约热内卢",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2785,7 +2805,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "relogios_presentes",
+            "key_label": "relogios_presentes",
             "delta": -12755.042,
             "desc": "品类「relogios_presentes」变化-12755.04"
           }
@@ -2798,7 +2820,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "cama_mesa_banho",
-        "path_desc": "state=RS",
+        "path_desc": "州=南里奥格兰德",
         "hit": false,
         "wrong_direction": false,
         "rank": 2,
@@ -2813,7 +2835,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "automotivo",
+            "key_label": "automotivo",
             "delta": 2625.25,
             "desc": "品类「automotivo」变化+2625.25"
           }
@@ -2826,7 +2850,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "beleza_saude",
-        "path_desc": "state=PR",
+        "path_desc": "州=巴拉那",
         "hit": false,
         "wrong_direction": false,
         "rank": 3,
@@ -2841,7 +2865,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "portateis_casa_forno_e_cafe",
+            "key_label": "portateis_casa_forno_e_cafe",
             "delta": -3598.0,
             "desc": "品类「portateis_casa_forno_e_cafe」变化-3598.00"
           }
@@ -2854,7 +2880,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "pcs",
-        "path_desc": "state=BA",
+        "path_desc": "州=巴伊亚",
         "hit": false,
         "wrong_direction": false,
         "rank": 3,
@@ -2869,7 +2895,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "instrumentos_musicais",
+            "key_label": "instrumentos_musicais",
             "delta": 4187.7,
             "desc": "品类「instrumentos_musicais」变化+4187.70"
           }
@@ -2882,7 +2910,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "utilidades_domesticas",
-        "path_desc": "state=SC",
+        "path_desc": "州=圣卡塔琳娜",
         "hit": false,
         "wrong_direction": false,
         "rank": 15,
@@ -2897,7 +2925,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "eletronicos",
+            "key_label": "eletronicos",
             "delta": -2687.15,
             "desc": "品类「eletronicos」变化-2687.15"
           }
@@ -2910,7 +2940,7 @@
         "cur_spec": "2018-06",
         "prev_spec": "2018-05",
         "injected_category": "beleza_saude",
-        "path_desc": "state=DF",
+        "path_desc": "州=联邦区",
         "hit": false,
         "wrong_direction": false,
         "rank": 2,
@@ -2925,7 +2955,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "ferramentas_jardim",
+            "key_label": "ferramentas_jardim",
             "delta": -2409.01,
             "desc": "品类「ferramentas_jardim」变化-2409.01"
           }
@@ -2938,7 +2970,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "beleza_saude",
-        "path_desc": "state=SP",
+        "path_desc": "州=圣保罗",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2953,7 +2985,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "beleza_saude",
+            "key_label": "beleza_saude",
             "delta": -27223.69,
             "desc": "品类「beleza_saude」变化-27223.69"
           }
@@ -2966,7 +3000,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=RJ",
+        "path_desc": "州=里约热内卢",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -2981,7 +3015,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "relogios_presentes",
+            "key_label": "relogios_presentes",
             "delta": -13727.644,
             "desc": "品类「relogios_presentes」变化-13727.64"
           }
@@ -2994,7 +3030,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "beleza_saude",
-        "path_desc": "state=MG",
+        "path_desc": "州=米纳斯吉拉斯",
         "hit": true,
         "wrong_direction": false,
         "rank": 1,
@@ -3009,7 +3045,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "beleza_saude",
+            "key_label": "beleza_saude",
             "delta": -7328.036,
             "desc": "品类「beleza_saude」变化-7328.04"
           }
@@ -3022,7 +3060,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "relogios_presentes",
-        "path_desc": "state=PR",
+        "path_desc": "州=巴拉那",
         "hit": false,
         "wrong_direction": false,
         "rank": 10,
@@ -3037,7 +3075,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "utilidades_domesticas",
+            "key_label": "utilidades_domesticas",
             "delta": 2843.7,
             "desc": "品类「utilidades_domesticas」变化+2843.70"
           }
@@ -3050,7 +3090,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "automotivo",
-        "path_desc": "state=BA",
+        "path_desc": "州=巴伊亚",
         "hit": false,
         "wrong_direction": false,
         "rank": 24,
@@ -3065,7 +3105,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "pcs",
+            "key_label": "pcs",
             "delta": -4580.0,
             "desc": "品类「pcs」变化-4580.00"
           }
@@ -3078,7 +3120,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "utilidades_domesticas",
-        "path_desc": "state=RS",
+        "path_desc": "州=南里奥格兰德",
         "hit": false,
         "wrong_direction": false,
         "rank": 7,
@@ -3093,7 +3135,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "cama_mesa_banho",
+            "key_label": "cama_mesa_banho",
             "delta": -3395.66,
             "desc": "品类「cama_mesa_banho」变化-3395.66"
           }
@@ -3106,7 +3150,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "cool_stuff",
-        "path_desc": "state=SC",
+        "path_desc": "州=圣卡塔琳娜",
         "hit": false,
         "wrong_direction": false,
         "rank": 11,
@@ -3121,7 +3165,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "utilidades_domesticas",
+            "key_label": "utilidades_domesticas",
             "delta": -2787.25,
             "desc": "品类「utilidades_domesticas」变化-2787.25"
           }
@@ -3134,7 +3180,7 @@
         "cur_spec": "2018-07",
         "prev_spec": "2018-06",
         "injected_category": "telefonia_fixa",
-        "path_desc": "state=ES",
+        "path_desc": "州=圣埃斯皮里图",
         "hit": false,
         "wrong_direction": false,
         "rank": 2,
@@ -3149,7 +3195,9 @@
         "drill_category": [
           {
             "dim": "category",
+            "dim_name": "品类",
             "key": "pcs",
+            "key_label": "pcs",
             "delta": 6729.0,
             "desc": "品类「pcs」变化+6729.00"
           }

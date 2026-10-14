@@ -25,6 +25,7 @@ FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Vue3 前
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -87,6 +88,22 @@ def _db_path() -> str:
 
 
 _DB_KIND_WARNED = False
+
+
+def _bind_asof() -> None:
+    """把相对时间词（本月/上月/最近N天）锚定到**数据自身的最新日期**。
+
+    为什么必须在入口做：Olist 数据窗口只到 2018-10，而系统当天是 2026 年。
+    若相对时间按 date.today() 解析，任何"上月 GMV 为什么跌"都会落在数据窗口之外
+    → 当期/上期永远查空 → 用户看到的就只是"流程跑完、没有结果"。
+    这里按业务库探测 max(order_purchase_timestamp) 并绑定（按库路径缓存，只探测一次）；
+    探测失败不阻塞请求，回落系统当天。
+    """
+    try:
+        from sqlpa.config import bind_data_asof_once
+        bind_data_asof_once(_db_path())
+    except Exception:  # noqa: BLE001 —— 探测失败不应让取数/分析请求失败
+        pass
 
 
 def _sandbox():
@@ -163,6 +180,7 @@ def health():
 
 @app.post("/api/query")
 def api_query(q: QueryIn, x_api_token: Optional[str] = Header(default=None)):
+    _bind_asof()
     # 角色只认凭据，不认请求体（修复越权：原实现直接 role=q.role）
     role = _resolve_role(x_api_token, q.role)
     a = answer_impl(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
@@ -187,6 +205,7 @@ def api_report(q: ReportIn, x_api_token: Optional[str] = Header(default=None)):
     能贴进周报、能转发复核的产物，且必须自带口径来源（否则数字不可信）。
     """
     from sqlpa.business.deliver import export_report
+    _bind_asof()
     role = _resolve_role(x_api_token, q.role)
     a = answer_impl(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
                     role=role, history=q.history, confirm_id=q.confirm_id)
@@ -217,11 +236,31 @@ def api_metrics():
     }
 
 
+@app.get("/api/governance/conflicts")
+def api_governance_conflicts(run_llm: bool = False):
+    """口径冲突检测（治理提示）：四类冲突 + 可选 LLM 解读。
+
+    - **同名不同式 / 同式不同名 / 版本漂移**：纯确定性规则，毫秒级、无需 API Key；
+    - **近义不同式**：别名族启发式（原逻辑）；
+    - `run_llm=true` 时对每条冲突追加 `ai_analysis`（LLM 只做解释，不改判定）。
+    """
+    from sqlpa.business import governance
+    cfg = _cfg()
+    items = governance.detect_conflicts(cfg, llm=_llm() if run_llm else None)
+    by_type: Dict[str, int] = {}
+    for c in items:
+        by_type[c["type"]] = by_type.get(c["type"], 0) + 1
+    return {"total": len(items), "by_type": by_type, "conflicts": items}
+
+
 class AnalyzeIn(QueryIn):
     """多 Agent 分析请求：沿用查询入参，可用 alert_threshold_pct 覆盖默认告警阈值。"""
     alert_threshold_pct: float = Field(0.05, description="波动告警阈值（0.05 = 5%")
     session_id: Optional[str] = Field(
         None, description="会话 ID：复用则会话级 Agent 记忆（跨轮续下钻）；缺省为一次性无记忆会话")
+    final: Optional[Dict] = Field(
+        None, description="前一次 /api/analyze 返回的 final 载荷。传入则**直接据此生成报告**"
+                          "（不重跑分析、零额外 LLM 成本）；缺省则按 question 重跑一次分析")
 
 
 # 会话级工作记忆：session_id -> {last_drill, metric, ...}
@@ -274,6 +313,7 @@ def api_analyze(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None))
     与 /api/analyze/stream 同一套编排，只是把流式事件收集成一个数组返回。
     """
     from sqlpa.analysis.orchestrator import run_analysis
+    _bind_asof()
     role = _resolve_role(x_api_token, q.role)
     events: List[Dict] = []
 
@@ -316,6 +356,7 @@ def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default
         done 也收不到 error，只能干等 300 秒后拿到一句假的"分析超时"。
         """
         try:
+            _bind_asof()
             run_analysis(
                 question=q.question, cfg=_cfg(), sb=_sandbox(), db_path=_db_path(),
                 llm=_llm(), role=role,
@@ -359,17 +400,31 @@ def api_analyze_chart_template():
 
 @app.post("/api/analyze/report")
 def api_analyze_report(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None)):
-    """导出「多 Agent 分析」的 Markdown 报告（诊断结论+依据+动作+决策闭环）。"""
-    from sqlpa.business.deliver import export_analysis_report
+    """导出「多 Agent 分析」报告：Markdown + Word(.docx)。
+
+    前端把刚拿到的 `final` 一并回传（q.final）即可**零成本**出报告——不重跑分析、
+    不再调用 LLM；不带 final 时按 question 重跑一次分析（兼容脚本/测试用法）。
+    """
+    from sqlpa.business.deliver import (export_analysis_report,
+                                        export_analysis_report_docx)
     role = _resolve_role(x_api_token, q.role)
-    a = _analyze_run(q, role, _caller_key(x_api_token, role))
-    if not a.get("ok"):
-        return {"ok": False, "reject": a.get("reject", "分析未完成，无法生成报告")}
+    if isinstance(q.final, dict) and q.final:
+        final = q.final
+    else:
+        _bind_asof()
+        final = _analyze_run(q, role, _caller_key(x_api_token, role))
+    if not final.get("ok"):
+        return {"ok": False, "reject": final.get("reject") or "分析未完成，无法生成报告"}
     out_dir = Path(os.environ.get("SQLPA_REPORT_DIR") or (ROOT / "data" / "reports"))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    target = out_dir / f"analysis-{stamp}.md"
-    paths = export_analysis_report(target, q.question, a, username=role)
-    return {"ok": True, "report": open(paths["report"], encoding="utf-8").read()}
+    md_path = out_dir / f"analysis-{stamp}.md"
+    docx_path = out_dir / f"analysis-{stamp}.docx"
+    export_analysis_report(md_path, q.question, final, username=role)
+    export_analysis_report_docx(docx_path, q.question, final, username=role)
+    md = md_path.read_text(encoding="utf-8")
+    return {"ok": True, "report": md, "markdown": md,
+            "filename": docx_path.name,
+            "docx_b64": base64.b64encode(docx_path.read_bytes()).decode("ascii")}
 
 
 def _analyze_run(q: AnalyzeIn, role: str, caller: str = "role:analyst") -> Dict:
@@ -504,6 +559,7 @@ def api_check_subscriptions(dry: bool = True,
     if role != "admin":
         raise HTTPException(status_code=403, detail="检查订阅需要 admin 权限")
     from sqlpa.business.deliver import check_subscriptions, deliver_alerts
+    _bind_asof()
     alerts = check_subscriptions(_cfg(), sqlite3.connect(_db_path()))
     need = [a for a in alerts if a.get("status") == "alert"]
     out = {"alerts": alerts, "need_push": len(need), "dry": dry}
@@ -564,6 +620,7 @@ def api_hitl_verify(record_id: str, x_api_token: Optional[str] = Header(default=
     if role != "admin":
         raise HTTPException(status_code=403, detail="重跑验证需要 admin 权限")
     from sqlpa.business import hitl
+    _bind_asof()
     out = hitl.verify(record_id, _cfg(), sqlite3.connect(_db_path()), _db_path(),
                       actor=f"api:{role}")
     if not out.get("ok"):

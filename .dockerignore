@@ -19,6 +19,10 @@ eval_result*.json
 *.log
 
 # ---- 本地运行产物 / 隐私数据（不要打进镜像）----
+# ---- 前端依赖与产物（后端镜像不需要；web 镜像有自己的 build 上下文）----
+web/node_modules/
+web/dist/
+
 .tmp/
 .tmp*/
 .tmppytest*/

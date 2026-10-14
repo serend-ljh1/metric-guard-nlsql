@@ -1,8 +1,9 @@
-# 一键启动：docker compose up
+# 一键启动：docker compose up  →  浏览器打开 http://localhost:8080 即可用
+#   web -> http://localhost:8080  (Nginx 托管 Vue3 前端，并把 /api 反代到 api:8000)
 #   api -> http://localhost:8000  (FastAPI 后端, /docs 有 Swagger)
-# 前端（Vue3 + Vite）不在容器里跑：开发期在 web/ 下 `npm run dev`（5173，已代理到 8000），
-# 生产部署请构建 web/dist 后用任意静态服务器托管。
-#   （历史：这里曾有 web -> 8501 的 Streamlit 服务，该前端已下线。）
+#
+# 前端在 web/ 里多阶段构建（Node 编译 dist → Nginx 托管），运行时不需要 Node，
+# 也不用手动 `npm run dev`。开发期若要热更新，仍可在 web/ 下本地 `npm run dev`。
 #
 # 可选：把真实 Olist 库挂载进去覆盖样本库
 #   volumes: - ./data/olist/olist.db:/app/data/olist/olist.db:ro
@@ -15,3 +16,10 @@ services:
       - path: .env
         required: false
     command: uvicorn api:app --host 0.0.0.0 --port 8000
+
+  web:
+    build: ./web
+    ports:
+      - "8080:80"
+    depends_on:
+      - api

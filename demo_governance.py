@@ -30,12 +30,16 @@ def main():
     print(sep)
     conflicts = governance.detect_conflicts(cfg)
     if conflicts:
+        by_type = {}
         for c in conflicts:
-            print(f"\n[严重度 {c['severity']}]")
+            by_type[c["type"]] = by_type.get(c["type"], 0) + 1
+        print("检出冲突类型统计：" + "；".join(f"{t}×{n}" for t, n in by_type.items()))
+        for c in conflicts:
+            print(f"\n[{c['type']}｜严重度 {c['severity']}]")
             print(c["reason"])
             for i, k in enumerate(c["keys"]):
                 print(f"  - {c['names'][i]} ({k}) 公式={c['exprs'][k]}  "
-                      f"负责人={c['owners'][k]}  {c['versions'][k]}")
+                      f"负责人={c['owners'].get(k, '')}  {c['versions'].get(k, '')}")
     else:
         print("当前指标中心健康，未检测到口径冲突。")
         print("\n>>> 注入演示：人为新增一名近义但公式不同的指标（净成交额），触发冲突告警：")

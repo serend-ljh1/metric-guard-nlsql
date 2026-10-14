@@ -350,9 +350,54 @@ metrics:
 # dt 维度可按时间粒度改写（day/week/month/quarter），见 compiler.TIME_GRAINS
 dimensions:
   - {key: dt, name: 时间, sql_fragment: "DATE(o.order_purchase_timestamp)"}
-  - {key: state, name: 州, sql_fragment: "c.customer_state"}
+  # state：库里存的是 2 位巴西州代码（SP/RJ/MG…），业务人员读不懂 ——
+  # 在语义层预置"代码 → 中文州名"映射，供结论/依据/图表/报告**展示**用；
+  # 注意：过滤取值仍用原始代码（只改文案，不改 SQL 取值，否则会查空）。
+  - key: state
+    name: 州
+    sql_fragment: "c.customer_state"
+    labels:
+      AC: 阿克里
+      AL: 阿拉戈斯
+      AM: 亚马孙
+      AP: 阿马帕
+      BA: 巴伊亚
+      CE: 塞阿拉
+      DF: 联邦区
+      ES: 圣埃斯皮里图
+      GO: 戈亚斯
+      MA: 马拉尼昂
+      MG: 米纳斯吉拉斯
+      MS: 南马托格罗索
+      MT: 马托格罗索
+      PA: 帕拉
+      PB: 帕拉伊巴
+      PE: 伯南布哥
+      PI: 皮奥伊
+      PR: 巴拉那
+      RJ: 里约热内卢
+      RN: 北里奥格兰德
+      RO: 朗多尼亚
+      RR: 罗赖马
+      RS: 南里奥格兰德
+      SC: 圣卡塔琳娜
+      SE: 塞尔希培
+      SP: 圣保罗
+      TO: 托坎廷斯
   - {key: category, name: 品类, sql_fragment: "p.product_category_name"}
-  - {key: status, name: 订单状态, sql_fragment: "o.order_status"}
+  # status：订单状态同样存英文枚举，给出中文名
+  - key: status
+    name: 订单状态
+    sql_fragment: "o.order_status"
+    labels:
+      created: 已创建
+      approved: 已批准
+      invoiced: 已开票
+      processing: 处理中
+      shipped: 已发货
+      delivered: 已送达
+      unavailable: 不可用
+      canceled: 已取消
 
 # ---------- 4) 过滤条件模板（参数化）----------
 filter_templates:

@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from .metric_config import BusinessConfig, Metric
 from .sqlgen import JoinInjectionError, inject_dim_joins, tables_of
+from .. import config as _config
 
 # 时间粒度：把基础维度 dt 按粒度转成对应 SQL 表达式
 TIME_GRAINS: Dict[str, str] = {
@@ -212,9 +213,15 @@ def _first_of_month(d: datetime.date) -> datetime.date:
 
 
 def resolve_time_range(spec: str, now: Optional[datetime.date] = None) -> Tuple[str, str]:
-    """把时间语义（本月/上月/最近N天/YYYY-MM）转成 SQL 字面量 (start, end)。"""
-    now = now or datetime.date.today()
-    s = str(spec).strip()
+    """把时间语义（本月/上月/最近N天/YYYY-MM）转成 SQL 字面量 (start, end)。
+
+    相对时间词的基准日**不是系统当天**，而是数据基准日（config.data_asof()）——
+    否则「本月 / 上月」会落在数据窗口之外（Olist 只到 2018-10），查询必然为空。
+    """
+    now = now or _config.data_asof()
+    # 归一显式时间语义（把 LLM 可能给出的"上一期+当期"拼接串收敛成单个月份 token），
+    # 否则"2018-05-01,2018-06-30"这类串会落到下面"最近30天"的静默默认分支 → 查空窗。
+    s = _config.canonical_time_spec(spec)
     m = re.fullmatch(r"(\d{4})[年\-](\d{1,2})月?", s)
     if m:
         y, mo = int(m.group(1)), int(m.group(2))
