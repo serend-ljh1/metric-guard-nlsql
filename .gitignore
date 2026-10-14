@@ -35,6 +35,11 @@ docs/面试准备.md
 docs/项目过程问题与解决.md
 
 # ---- 运行产物 ----
+# 覆盖率产物（pytest-cov 本地生成，勿提交）
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
 eval_result*.json
 .pytest_tmp/
 .tmp/

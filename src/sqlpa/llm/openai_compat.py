@@ -29,6 +29,12 @@ except Exception:  # noqa: BLE001  未装 python-dotenv 时依赖环境变量
 DEFAULT_BASE = os.environ.get("LLM_API_BASE", "https://api.deepseek.com/v1")
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 DEFAULT_TEMP = float(os.environ.get("LLM_TEMPERATURE", "0.0"))
+# 单次 HTTP 调用的超时（秒）与**整次 complete() 的总预算**（秒）。
+# 此前只有单次 urlopen 超时，而模型池最多 8 个模型 × (max_retries+1) 次尝试，
+# 最坏情况可挂 8×3×60s ≈ 24 分钟 —— 远超编排层 300s 的 SSE 总超时。因此这里
+# 再加一层"总预算"：无论如何，一次 complete() 不会超过 LLM_TOTAL_TIMEOUT 秒。
+DEFAULT_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "30"))
+DEFAULT_TOTAL_TIMEOUT = float(os.environ.get("LLM_TOTAL_TIMEOUT", "90"))
 
 # 模型池：逗号分隔的模型名列表，按顺序尝试，前一个失败/空内容自动切换。
 # 未设置 MODEL_POOL 环境变量时使用以下默认池（qwen3.8-27b 优先，其次 qwen3.8-max）。
@@ -74,7 +80,8 @@ def _should_switch(msg: str) -> bool:
 class OpenAICompatLLM(LLMProvider):
     def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None,
                  model: Optional[str] = None, temperature: float = DEFAULT_TEMP,
-                 max_retries: int = 2, timeout: float = 60.0,
+                 max_retries: int = 2, timeout: float = DEFAULT_TIMEOUT,
+                 total_timeout: float = DEFAULT_TOTAL_TIMEOUT,
                  model_pool: Optional[list] = None):
         self.api_key = api_key or os.environ.get("LLM_API_KEY") \
             or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
@@ -87,6 +94,7 @@ class OpenAICompatLLM(LLMProvider):
         self.temperature = temperature
         self.max_retries = max_retries
         self.timeout = timeout
+        self.total_timeout = total_timeout
         # ---- 用量/成本统计 ----
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.cost = 0.0
@@ -130,6 +138,8 @@ class OpenAICompatLLM(LLMProvider):
         """
         url = f"{self.base_url}/chat/completions"
         last_err: Optional[Exception] = None
+        # 整次调用的总预算：跨所有模型/重试，超过即放弃（避免在 SSE 超时前还挂着）。
+        deadline = time.monotonic() + float(self.total_timeout or 0) if self.total_timeout else None
         for model_name in self.model_pool:
             payload = {"model": model_name,
                        "messages": messages,
@@ -137,12 +147,22 @@ class OpenAICompatLLM(LLMProvider):
                        "stream": False}
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             for attempt in range(self.max_retries + 1):
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"LLM 调用超时（总预算 {self.total_timeout}s 已用尽，"
+                        f"已尝试模型池 {self.model_pool}）: {last_err}")
+                # 单次请求超时取"单次超时"与"剩余预算"的较小值
+                per_call = self.timeout
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining > 0:
+                        per_call = min(self.timeout, remaining)
                 try:
                     req = urllib.request.Request(
                         url, data=body,
                         headers={"Content-Type": "application/json",
                                  "Authorization": f"Bearer {self.api_key}"})
-                    with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                    with urllib.request.urlopen(req, timeout=per_call) as r:
                         data = json.loads(r.read().decode("utf-8"))
                     content = data["choices"][0]["message"]["content"]
                     if not content or not content.strip():

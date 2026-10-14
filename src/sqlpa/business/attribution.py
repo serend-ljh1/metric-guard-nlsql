@@ -165,6 +165,21 @@ def _scalar(db: sqlite3.Connection, sql: str) -> Optional[object]:
         return None
 
 
+def _scalar_checked(db: sqlite3.Connection,
+                    sql: str) -> Tuple[Optional[object], Optional[str]]:
+    """执行标量查询，返回 (值, 错误)。
+
+    **区分"查询失败"与"无数据"**：失败返回 (None, 错误信息)，无数据返回 (None, None)。
+    此前两者都返回 None，于是"SQL 执行失败"被静默当成"该期无数据"报给用户 ——
+    明明是查询报错，却提示"当期/上期无结果"，掩盖了真正的问题。
+    """
+    try:
+        row = db.execute(sql).fetchone()
+        return (row[0] if row else None), None
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+
+
 def _calendar_note(cur: Tuple[str, str], prev: Tuple[str, str],
                    change: float, change_pct: float) -> Optional[Dict]:
     """当月天数差异提示（不静默改判，只把"这段波动的多少来自天数"摆出来）。
@@ -356,8 +371,16 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         prev_spec = _prev_label(current_spec, asof)
     p0, p1 = _quote(prev_win)
 
-    cur_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, c0, c1)}")
-    prev_total = _scalar(db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, p0, p1)}")
+    cur_total, cur_err = _scalar_checked(
+        db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, c0, c1)}")
+    prev_total, prev_err = _scalar_checked(
+        db, f"SELECT {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n{_time_where(m.where_core, p0, p1)}")
+    if cur_err or prev_err:
+        # 查询**失败** ≠ 无数据：如实报错，不要伪装成"某期无结果"。
+        return {"ok": False, "metric": metric_key, "metric_name": m.name,
+                "reason": f"归因查询失败：{cur_err or prev_err}",
+                "query_error": {"current": cur_err, "previous": prev_err},
+                "current_spec": current_spec, "previous_spec": prev_spec, "dims": []}
     if cur_total is None or prev_total is None:
         # "哪一期没数据"必须说清楚，否则用户只能对着"归因失败"猜。
         missing = []
@@ -403,31 +426,36 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
     except Exception:  # noqa: BLE001
         db_path = None
 
-    def _split(dim: str, start: str, end: str) -> Dict:
+    def _split(dim: str, start: str, end: str) -> Tuple[Dict, Optional[str]]:
         frag = cfg.dimensions[dim].sql_fragment
         sql = (f"SELECT {frag} AS d, {m.metric_expr} AS v\n{metric_source(cfg, m, dims)}\n"
                f"{_time_where(m.where_core, start, end)}\nGROUP BY {frag}")
         if not db_path:
-            return {}
+            return {}, None
         wc = sqlite3.connect(db_path)
         try:
-            return {row[0]: row[1] for row in wc.execute(sql).fetchall()}
-        except Exception:  # noqa: BLE001
-            return {}
+            return {row[0]: row[1] for row in wc.execute(sql).fetchall()}, None
+        except Exception as e:  # noqa: BLE001
+            # 失败要带错误返回给调用方（记入 dim_errors），不要静默回 {}。
+            return {}, str(e)
         finally:
             wc.close()
 
     dim_results: Dict[str, Tuple[Dict, Dict]] = {}
+    dim_errors: Dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=min(len(dims), 8)) as ex:
         futures = {ex.submit(_split, d, c0, c1): (d, "cur") for d in dims}
         futures.update({ex.submit(_split, d, p0, p1): (d, "prev") for d in dims})
         for f in futures:
             d, tag = futures[f]
             cur_map, prev_map = dim_results.get(d, ({}, {}))
+            data, err = f.result()
+            if err:
+                dim_errors[d] = err
             if tag == "cur":
-                dim_results[d] = (f.result(), prev_map)
+                dim_results[d] = (data, prev_map)
             else:
-                dim_results[d] = (cur_map, f.result())
+                dim_results[d] = (cur_map, data)
 
     contributors = []
     for d in dims:
@@ -438,7 +466,11 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
             cv = float(cur_map.get(k, 0.0))
             pv = float(prev_map.get(k, 0.0))
             delta[k] = round(cv - pv, 4)
-        result["dims"].append({"dim": d, "current": cur_map, "previous": prev_map, "delta": delta})
+        row = {"dim": d, "current": cur_map, "previous": prev_map, "delta": delta}
+        if d in dim_errors:
+            # 该维度查询失败 → 显式标注，避免其空结果被误读成"该维度没波动"。
+            row["error"] = dim_errors[d]
+        result["dims"].append(row)
         if delta:
             top_key, top_delta = max(delta.items(), key=lambda kv: abs(kv[1]))
             contributors.append(
@@ -448,6 +480,8 @@ def analyze(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                  "pct_of_change": round(top_delta / change, 4) if change else 0.0,
                  "desc": f"{_dim_name(cfg, d)}「{_dim_label(cfg, d, top_key)}」变化{top_delta:+.2f}"})
     result["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
+    if dim_errors:
+        result["dim_errors"] = dim_errors
 
     # ---- 守恒自检：分段之和对不上总变化就**该维度**不许说"占波动 X%" ----
     # 比率/均值类指标天然对不上（数学不成立）；可加指标也可能是某个维度没覆盖全部行
@@ -584,8 +618,8 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
     from .compiler import render_filter
 
     def _split_for(dim: str):
-        """在当前下钻路径的约束下，按 dim 拆当期/上期。"""
-        def _q(start: str, end: str) -> Dict:
+        """在当前下钻路径的约束下，按 dim 拆当期/上期（返回 (映射, 错误)）。"""
+        def _q(start: str, end: str) -> Tuple[Dict, Optional[str]]:
             frag = cfg.dimensions[dim].sql_fragment
             wheres = [m.where_core] if m.where_core not in ("", "1=1") else []
             for seg in (path or []):
@@ -631,13 +665,20 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         return out
 
     contributors = []
+    dim_errors: Dict[str, str] = {}
     for dim in cand:
         fn = _split_for(dim)
-        cur_map, prev_map = fn(c0, c1), fn(p0, p1)
+        cur_map, cur_err = fn(c0, c1)
+        prev_map, prev_err = fn(p0, p1)
+        err = cur_err or prev_err
+        if err:
+            dim_errors[dim] = err
         delta = {k: round(float(cur_map.get(k, 0.0)) - float(prev_map.get(k, 0.0)), 4)
                  for k in (set(cur_map) | set(prev_map))}
-        out["dims"].append({"dim": dim, "current": cur_map,
-                            "previous": prev_map, "delta": delta})
+        row = {"dim": dim, "current": cur_map, "previous": prev_map, "delta": delta}
+        if err:
+            row["error"] = err
+        out["dims"].append(row)
         if delta:
             k, d = max(delta.items(), key=lambda kv: abs(kv[1]))
             contributors.append({"dim": dim, "dim_name": _dim_name(cfg, dim),
@@ -645,15 +686,21 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                                  "delta": d,
                                  "desc": f"{_dim_name(cfg, dim)}「{_dim_label(cfg, dim, k)}」变化{d:+.2f}"})
     out["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
+    if dim_errors:
+        out["dim_errors"] = dim_errors
     return out
 
 
-def _exec_map(db: sqlite3.Connection, sql: str) -> Dict:
-    """执行"维度->值"查询；失败返回空（调用方据此标注不可用，而非静默当无波动）。"""
+def _exec_map(db: sqlite3.Connection, sql: str) -> Tuple[Dict, Optional[str]]:
+    """执行"维度->值"查询，返回 (映射, 错误)。
+
+    失败时把错误一并返回，由调用方记入 dim_errors —— 而不是静默返回 {}
+    让"维度查询失败"被误当成"该维度没波动"（这正是历史 bug 的根因之一）。
+    """
     try:
-        return {row[0]: row[1] for row in db.execute(sql).fetchall()}
-    except Exception:  # noqa: BLE001
-        return {}
+        return {row[0]: row[1] for row in db.execute(sql).fetchall()}, None
+    except Exception as e:  # noqa: BLE001
+        return {}, str(e)
 
 
 def next_drill_suggestion(result: Dict) -> Optional[Dict]:
@@ -744,7 +791,8 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
     """
     top = (att.get("top_contributors") or [])
     q = str(question or "")
-    followup_tone = any(k in q for k in ("那", "呢", "为什么", "为何", "继续", "下钻", "再看", "拆", "再"))
+    from .intent import has_followup_tone
+    followup_tone = has_followup_tone(q)
 
     def _rule() -> Dict:
         if not top:
@@ -883,36 +931,44 @@ def factorize(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
             return {"ok": False, "reason": f"因子指标 {k} 无当期或上期结果，无法分解"}
         values.append((k, label, float(c), float(p)))
 
-    A_c, A_p = values[0][2], values[0][3]      # 因子A（订单量）
-    B_c, B_p = values[1][2], values[1][3]      # 因子B（客单价）
-    dA, dB = A_c - A_p, B_c - B_p
+    # ---- 通用 N 因子分摊（不再假定恰好 2 个因子）----
+    # 因子 i 的**主效应** = 该因子变化 × 其余全部因子**基期值**的乘积；
+    # 交互项 = 总变化 − Σ主效应，覆盖二阶及以上交叉项，保证 Σ(主效应)+交互 恒等于总变化。
+    # 该约定在 N=2 时退化为经典写法（B基期×ΔA、A基期×ΔB、ΔA×ΔB），对 N>2 同样严格守恒。
     dGmv = float(cur_gmv) - float(prev_gmv)
-    cA = B_p * dA
-    cB = A_p * dB
-    cInt = dA * dB
+    n = len(values)
+    changes = [float(v[2]) - float(v[3]) for v in values]
+    contribs: List[float] = []
+    for i in range(n):
+        others_prev = 1.0
+        for j in range(n):
+            if j != i:
+                others_prev *= float(values[j][3])
+        contribs.append(changes[i] * others_prev)
+    interaction = dGmv - sum(contribs)
 
     def _share(x: float) -> float:
         return round(x / dGmv, 4) if dGmv else 0.0
 
     factors_out = [
-        {"factor": values[0][0], "label": values[0][1], "current": A_c, "previous": A_p,
-         "change": round(dA, 4), "change_pct": round(dA / A_p, 4) if A_p else 0.0,
-         "contribution": round(cA, 4), "share": _share(cA)},
-        {"factor": values[1][0], "label": values[1][1], "current": B_c, "previous": B_p,
-         "change": round(dB, 4), "change_pct": round(dB / B_p, 4) if B_p else 0.0,
-         "contribution": round(cB, 4), "share": _share(cB)},
+        {"factor": values[i][0], "label": values[i][1],
+         "current": float(values[i][2]), "previous": float(values[i][3]),
+         "change": round(changes[i], 4),
+         "change_pct": round(changes[i] / float(values[i][3]), 4) if float(values[i][3]) else 0.0,
+         "contribution": round(contribs[i], 4), "share": _share(contribs[i])}
+        for i in range(n)
     ]
-    main = max([(values[0][0], cA), (values[1][0], cB)],
-               key=lambda t: abs(t[1]))[0] if (dA or dB) else "无"
+    main = max(((values[i][0], contribs[i]) for i in range(n)),
+               key=lambda t: abs(t[1]))[0] if any(changes) else "无"
     return {
         "ok": True, "metric": metric_key, "metric_name": m.name,
         "current_total": cur_gmv, "previous_total": prev_gmv,
         "change": round(dGmv, 4),
         "change_pct": round(dGmv / float(prev_gmv), 4) if float(prev_gmv) else 0.0,
-        "formula": f"{values[0][1]} × {values[1][1]}",
+        "formula": " × ".join(str(v[1]) for v in values),
         "main_factor": main,
         "factors": factors_out,
-        "interaction": {"contribution": round(cInt, 4), "share": _share(cInt)},
+        "interaction": {"contribution": round(interaction, 4), "share": _share(interaction)},
     }
 
 
@@ -938,6 +994,11 @@ def summarize(result: Dict, llm=None) -> str:
                  for c in contrib[:3]]
     base = (f"{metric_name} 当期 {cur}、上期 {prev}，"
             f"波动 {change:+.2f}（{change_pct * 100:+.1f}%）。")
+    # 维度查询失败必须如实说明：否则用户会把"某维度没结果"误读成"该维度没波动"。
+    errs = result.get("dim_errors") or {}
+    if errs:
+        base += ("【注意】维度查询失败，未参与归因：" +
+                 "；".join(f"{d}（{str(e)[:60]}）" for d, e in errs.items()) + "。")
 
     if llm is not None:
         prompt = ("你是业务归因分析助手。把以下结构化数据写成一句业务人员能看懂的话："

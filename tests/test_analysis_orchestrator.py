@@ -294,16 +294,14 @@ def test_analysis_is_langgraph_orchestrated(tmpdir_clean, business_months):
     """**新增**：分析编排是**真 LangGraph** 构建的（StateGraph 节点+条件边，而非手写 if/return）。
 
     验证「多智能体 langgraph 编排」在代码里落地，而不只是 README 里的说法：
-    - `_build_analysis_graph` 返回真实的可调用 CompiledStateGraph；
+    - `_compile_analysis_graph` 返回真实的可调用 CompiledStateGraph；
     - 图里有 6 个 Agent 节点 + 2 条条件边（Router 分流、Executor 分流）；
     - 一条端到端分析确实由该图 invoke 驱动并产出结论。
     """
-    from sqlpa.analysis.orchestrator import _build_analysis_graph
-    from sqlpa.analysis.orchestrator import _Emitter
+    from sqlpa.analysis.orchestrator import (_compile_analysis_graph,
+                                             _get_analysis_graph, _Emitter)
 
-    _emit = _Emitter(lambda p: None)
-    graph = _build_analysis_graph(CFG, None, "n/a", _MockLLM(), "analyst", None,
-                                  0.0, None, {}, _emit, "本月 GMV 为什么跌？")
+    graph = _compile_analysis_graph()
     graph_name = type(graph).__name__
     assert graph_name in ("CompiledStateGraph", "CompiledGraph"), \
         f"应返回 LangGraph 编译图，实际类型：{graph_name}"
@@ -315,13 +313,17 @@ def test_analysis_is_langgraph_orchestrated(tmpdir_clean, business_months):
             "unmatched", "executor_reject", "confirm"} <= node_names, \
         f"缺少 LangGraph 节点，实际有：{sorted(node_names)}"
 
-    # 端到端：同一图驱动完整分析并产出结论（验证状态流收敛正确）
+    # 端到端：同一张（缓存的）编译图驱动完整分析并产出结论（验证状态流收敛正确）。
+    # per-request 参数经 state["_ctx"] 注入 —— 这正是"图编译一次、上下文按请求注入"的用法。
     db_path = _make_db(tmpdir_clean, business_months)
     from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
     sb = SqlSandbox(db_path, ExecConfig.from_settings(max_rows=2000))
-    g2 = _build_analysis_graph(CFG, sb, db_path, _MockLLM(), "analyst", None,
-                               0.0, None, {}, _Emitter(lambda p: None), "本月 GMV 为什么跌？")
-    state = g2.invoke({"routing": {}})
+    ctx = {"cfg": CFG, "sb": sb, "db_path": db_path, "llm": _MockLLM(),
+           "role": "analyst", "hitl_path": None, "alert_threshold_pct": 0.0,
+           "dims_override": None, "memory": {}, "emit": _Emitter(lambda p: None),
+           "question": "本月 GMV 为什么跌？", "username": "", "confirm_id": None,
+           "confirm_spec": None, "confirm_err": None}
+    state = _get_analysis_graph().invoke({"_ctx": ctx})
     assert "reject" not in state or state.get("reject") is None
     assert state["routing"]["route"] == "analyze"
     assert state["conclusion"]["text"]

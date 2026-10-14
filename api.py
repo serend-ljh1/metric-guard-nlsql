@@ -4,16 +4,22 @@ api.py
 FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Vue3 前端共用同一套
 业务服务层，保证口径一致）。
 
-端点：
-  GET  /health              健康检查
-  POST /api/query           自然语言取数（口径内确定性编译；口径外明确拒绝）
-  GET  /api/metrics         指标中心（指标/维度/过滤模板/别名）
-  GET  /api/audit           审计留痕（最近 N 条）
-  GET  /api/datasources     已注册数据源（密码掩码）
+**职责拆分**（原 700+ 行的单文件已按职责拆到 `apiroutes/`，见下）：
+  api.py                        app 组装：CORS + include_router（+ /health），并**再导出**共享符号
+  apiroutes/deps.py             惰性单例 / 鉴权 / 限速 / 会话记忆 / 请求模型（唯一来源）
+  apiroutes/query.py            POST /api/query、POST /api/report、GET /api/metrics
+  apiroutes/analyze.py          POST /api/analyze、/api/analyze/stream、/api/analyze/report、
+                                GET /api/analyze/chart-template
+  apiroutes/governance.py       GET /api/governance/conflicts、/api/audit、/api/metrics/history、
+                                /api/metrics/lineage、POST /api/metrics/rollback、GET /api/datasources
+  apiroutes/hitl.py             GET/POST /api/hitl*、/api/confirmations*
+  apiroutes/subscriptions.py    GET/POST/DELETE /api/subscriptions*
+
+**对外契约不变**：所有端点路径、请求/响应结构与拆分前完全一致；`import api` 仍可
+访问 `app` 以及 `_resolve_role / _redact_audit / _session_memory / _db_path / _llm` 等
+（大量测试与工具脚本依赖），故在此显式**再导出**。
 
 鉴权（重要）：
-  修复前 /api/query 无鉴权，且 `role` 直接取自请求体 —— 任何调用方只要传
-  `{"role": "admin"}` 就能绕过全部表列权限。现改为：
     - 配置 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 后，请求必须带
       `X-API-Token` 头，**角色取自 token**；请求体里的 role 仅可用于在自身
       权限范围内"降级"（不能提权）。
@@ -25,149 +31,44 @@ FastAPI 薄后端：把多智能体取数能力暴露为 REST API（与 Vue3 前
 """
 from __future__ import annotations
 
-import base64
-import json
 import os
-import sqlite3
-import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Optional
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 
-ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "tools"))
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(ROOT / ".env")
-except Exception:  # noqa: BLE001
-    pass
+# 共享依赖层：**唯一来源**（惰性单例/鉴权/限速/会话记忆/模型）
+from apiroutes.deps import (AnalyzeIn, HitlDecisionIn, QueryIn, ReportIn,
+                            SubscriptionIn, _SESSION_LOCK, _SESSION_MAX,
+                            _SESSION_MEMORY, _SESSION_SEEN, _SESSION_TTL_SECONDS,
+                            _analyze_run, _bind_asof, _caller_key, _cfg, _db_path,
+                            _get_session_lock, _llm, _rate_limit, _resolve_role,
+                            _sandbox, _session_guard, _session_memory, _token_map,
+                            answer_impl)
+from apiroutes.governance import _redact_audit
+from apiroutes import analyze as _r_analyze
+from apiroutes import governance as _r_governance
+from apiroutes import hitl as _r_hitl
+from apiroutes import query as _r_query
+from apiroutes import subscriptions as _r_subscriptions
 
 app = FastAPI(title="多智能体 Text-to-SQL 智能取数 API", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
+# CORS：默认只放行本地演示来源（Vite dev 5173 / 容器 web 8080），生产用
+# SQLPA_CORS_ORIGINS="https://a.com,https://b.com" 覆盖。此前硬编码 allow_origins=["*"]，
+# 等于任何站点都能从浏览器直接打到取数/归因端点（配合 allow_credentials 还有凭据风险）。
+_CORS_ORIGINS = [o.strip() for o in (os.getenv("SQLPA_CORS_ORIGINS") or
+                                     "http://localhost:5173,http://127.0.0.1:5173,"
+                                     "http://localhost:8080,http://127.0.0.1:8080").split(",")
+                 if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_methods=["*"],
                    allow_headers=["*"])
 
+# 各职责 router 挂载（路径与拆分前逐一对应）
+app.include_router(_r_query.router)
+app.include_router(_r_analyze.router)
+app.include_router(_r_governance.router)
+app.include_router(_r_hitl.router)
+app.include_router(_r_subscriptions.router)
 
-def answer_impl(*args, **kwargs):
-    """惰性导入业务服务层（避免 import 期就加载 LLM/数据库依赖）。"""
-    from sqlpa.business.service import answer
-    return answer(*args, **kwargs)
-
-
-# ---------------- 依赖（惰性单例） ----------------
-
-def _cfg():
-    from sqlpa.business.metric_config import load_config
-    return load_config()
-
-
-def _db_path() -> str:
-    """业务库路径：环境变量 SQLPA_DB_PATH > 真实全量库 > 仓库自带样本库。
-
-    这样 `git clone` 之后不下载 66MB 真实数据也能跑通接口与前端演示
-    （样本库见 data/sample/olist_sample.db，由 tools/build_olist_sample.py 生成）。
-    """
-    override = (os.getenv("SQLPA_DB_PATH") or "").strip()
-    if override:
-        return override
-    from sqlpa.config import resolve_db_path
-    path, kind = resolve_db_path()
-    if kind == "sample":
-        # 只提示一次，避免刷屏
-        global _DB_KIND_WARNED
-        if not _DB_KIND_WARNED:
-            _DB_KIND_WARNED = True
-            print("[数据] 未找到 data/olist/olist.db，使用仓库自带样本库 "
-                  "data/sample/olist_sample.db（按月抽样，数值仅供流程演示）。")
-    return path
-
-
-_DB_KIND_WARNED = False
-
-
-def _bind_asof() -> None:
-    """把相对时间词（本月/上月/最近N天）锚定到**数据自身的最新日期**。
-
-    为什么必须在入口做：Olist 数据窗口只到 2018-10，而系统当天是 2026 年。
-    若相对时间按 date.today() 解析，任何"上月 GMV 为什么跌"都会落在数据窗口之外
-    → 当期/上期永远查空 → 用户看到的就只是"流程跑完、没有结果"。
-    这里按业务库探测 max(order_purchase_timestamp) 并绑定（按库路径缓存，只探测一次）；
-    探测失败不阻塞请求，回落系统当天。
-    """
-    try:
-        from sqlpa.config import bind_data_asof_once
-        bind_data_asof_once(_db_path())
-    except Exception:  # noqa: BLE001 —— 探测失败不应让取数/分析请求失败
-        pass
-
-
-def _sandbox():
-    from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
-    # 由 config/settings.yaml 驱动（超时/多语句/额外禁用关键字）
-    return SqlSandbox(_db_path(), ExecConfig.from_settings(max_rows=2000))
-
-
-def _llm():
-    """有 Key 用真实 LLM，否则 None（离线：口径内走确定性组装，口径外不支持）。"""
-    if os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") \
-            or os.environ.get("OPENAI_API_KEY"):
-        from sqlpa.llm.openai_compat import OpenAICompatLLM
-        return OpenAICompatLLM()
-    return None
-
-
-# ---------------- 模型 ----------------
-
-class QueryIn(BaseModel):
-    question: str = Field(..., description="自然语言业务问题")
-    role: str = Field("analyst",
-                      description="期望角色；仅可在 token 授予的权限范围内使用（不能提权）")
-    history: List[dict] = Field(default_factory=list,
-                                description="对话历史 [{'question','metric','sql'}]，用于多轮追问")
-    confirm_id: Optional[str] = Field(
-        None, description="口径确认记录 id（LLM 推断口径时由上一次响应返回）。"
-                          "传入后按该记录的口径**逐字**执行；无效/已用过 → 拒绝")
-
-
-# ---------------- 鉴权 ----------------
-
-def _token_map() -> Dict[str, str]:
-    """解析 SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst" → {token: role}。"""
-    raw = (os.getenv("SQLPA_API_TOKENS") or "").strip()
-    out: Dict[str, str] = {}
-    for part in raw.split(","):
-        part = part.strip()
-        if not part or ":" not in part:
-            continue
-        tok, _, role = part.partition(":")
-        tok, role = tok.strip(), role.strip()
-        if tok and role:
-            out[tok] = role
-    return out
-
-
-def _resolve_role(token: Optional[str], requested: str) -> str:
-    """决定本次请求实际使用的角色。
-
-    原则：**角色只能来自凭据，不能来自请求体**。
-    - 配了 token：必须提供有效 token；角色取自 token。请求体 role 只能用于降级
-      （当它与 token 角色不同时，一律以 token 角色为准，避免提权）。
-    - 未配 token：忽略请求体 role，使用最小权限默认角色。
-    """
-    tokens = _token_map()
-    if tokens:
-        if not token or token not in tokens:
-            raise HTTPException(status_code=401, detail="缺少或无效的 X-API-Token")
-        return tokens[token]
-    return (os.getenv("SQLPA_DEFAULT_ROLE") or "analyst").strip() or "analyst"
-
-
-# ---------------- 端点 ----------------
 
 @app.get("/health")
 def health():
@@ -176,505 +77,6 @@ def health():
     return {"status": "ok", "llm": _llm() is not None,
             "audit_write_failures": len(audit_write_failures()),
             "audit_mirror_failures": len(audit_mirror_failures())}
-
-
-@app.post("/api/query")
-def api_query(q: QueryIn, x_api_token: Optional[str] = Header(default=None)):
-    _bind_asof()
-    # 角色只认凭据，不认请求体（修复越权：原实现直接 role=q.role）
-    role = _resolve_role(x_api_token, q.role)
-    a = answer_impl(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                    role=role, history=q.history, confirm_id=q.confirm_id)
-    a["effective_role"] = role
-    # 控制响应体积
-    if isinstance(a.get("rows"), list):
-        a["rows"] = [list(r) for r in a["rows"][:200]]
-    return a
-
-
-class ReportIn(QueryIn):
-    """报告导出请求：沿用查询入参，外加导出格式。"""
-    fmt: str = Field("markdown", description="markdown / csv / both")
-
-
-@app.post("/api/report")
-def api_report(q: ReportIn, x_api_token: Optional[str] = Header(default=None)):
-    """生成**可交付产物**：带口径说明的 Markdown 报告（可选同时导出 CSV）。
-
-    为什么要有这个端点：取数只把表格显示在屏幕上还是个 demo；真实业务需要
-    能贴进周报、能转发复核的产物，且必须自带口径来源（否则数字不可信）。
-    """
-    from sqlpa.business.deliver import export_report
-    _bind_asof()
-    role = _resolve_role(x_api_token, q.role)
-    a = answer_impl(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                    role=role, history=q.history, confirm_id=q.confirm_id)
-    if not a.get("ok"):
-        return {"ok": False, "reject": a.get("reject", "取数未成功，无法生成报告")}
-    out_dir = Path(os.environ.get("SQLPA_REPORT_DIR") or (ROOT / "data" / "reports"))
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    target = out_dir / f"report-{stamp}.md"
-    paths = export_report(target, q.question, a, username=role,
-                          also_csv=(q.fmt in ("csv", "both")))
-    return {"ok": True, "path": a.get("path"), "metric": a.get("metric"),
-            "report": paths.get("report"), "csv": paths.get("csv"),
-            "markdown": open(paths["report"], encoding="utf-8").read()}
-
-
-@app.get("/api/metrics")
-def api_metrics():
-    cfg = _cfg()
-    return {
-        "metrics": [{"key": m.key, "name": m.name, "desc": m.desc,
-                     "metric_expr": m.metric_expr, "support_dims": m.support_dims,
-                     "support_filters": m.support_filters}
-                    for m in cfg.metrics.values()],
-        "dimensions": [{"key": d.key, "name": d.name, "sql_fragment": d.sql_fragment}
-                       for d in cfg.dimensions.values()],
-        "filter_templates": list(cfg.filter_templates.keys()),
-        "alias": cfg.alias,
-    }
-
-
-@app.get("/api/governance/conflicts")
-def api_governance_conflicts(run_llm: bool = False):
-    """口径冲突检测（治理提示）：四类冲突 + 可选 LLM 解读。
-
-    - **同名不同式 / 同式不同名 / 版本漂移**：纯确定性规则，毫秒级、无需 API Key；
-    - **近义不同式**：别名族启发式（原逻辑）；
-    - `run_llm=true` 时对每条冲突追加 `ai_analysis`（LLM 只做解释，不改判定）。
-    """
-    from sqlpa.business import governance
-    cfg = _cfg()
-    items = governance.detect_conflicts(cfg, llm=_llm() if run_llm else None)
-    by_type: Dict[str, int] = {}
-    for c in items:
-        by_type[c["type"]] = by_type.get(c["type"], 0) + 1
-    return {"total": len(items), "by_type": by_type, "conflicts": items}
-
-
-class AnalyzeIn(QueryIn):
-    """多 Agent 分析请求：沿用查询入参，可用 alert_threshold_pct 覆盖默认告警阈值。"""
-    alert_threshold_pct: float = Field(0.05, description="波动告警阈值（0.05 = 5%")
-    session_id: Optional[str] = Field(
-        None, description="会话 ID：复用则会话级 Agent 记忆（跨轮续下钻）；缺省为一次性无记忆会话")
-    final: Optional[Dict] = Field(
-        None, description="前一次 /api/analyze 返回的 final 载荷。传入则**直接据此生成报告**"
-                          "（不重跑分析、零额外 LLM 成本）；缺省则按 question 重跑一次分析")
-
-
-# 会话级工作记忆：session_id -> {last_drill, metric, ...}
-# 加固点（此前是无上限、无过期、且只以**客户端自报**的 session_id 为键的全局 dict）：
-#   - 键包含调用者（token 哈希/角色），换一个凭据拿同一个 session_id 读不到别人的记忆；
-#   - 有 TTL 与容量上限（LRU 淘汰），不会随会话数无限增长；
-#   - 带锁访问，避免同 session 并发写撕裂。
-import threading as _threading
-import time as _time
-
-_SESSION_MEMORY: Dict[str, Dict] = {}
-_SESSION_SEEN: Dict[str, float] = {}
-_SESSION_LOCK = _threading.Lock()
-_SESSION_TTL_SECONDS = float(os.getenv("SQLPA_SESSION_TTL", "3600") or 3600)
-_SESSION_MAX = int(os.getenv("SQLPA_SESSION_MAX", "500") or 500)
-
-
-def _caller_key(token: Optional[str], role: str) -> str:
-    """调用者标识：优先用凭据指纹（不落原文），无凭据时退化为角色。"""
-    import hashlib
-    if token:
-        return hashlib.sha256(token.encode()).hexdigest()[:12]
-    return f"role:{role}"
-
-
-def _session_memory(session_id: Optional[str], caller: str = "role:analyst") -> Dict:
-    """取/建会话记忆 dict（可变引用，供 run_analysis 跨轮读写）。"""
-    if not session_id:
-        return {}
-    key = f"{caller}::{session_id}"
-    now = _time.time()
-    with _SESSION_LOCK:
-        # 过期清理
-        for k in [k for k, ts in _SESSION_SEEN.items() if now - ts > _SESSION_TTL_SECONDS]:
-            _SESSION_SEEN.pop(k, None)
-            _SESSION_MEMORY.pop(k, None)
-        # 容量淘汰（dict 保序 → 丢最早插入的一批，近似 LRU）
-        if key not in _SESSION_MEMORY and len(_SESSION_MEMORY) >= _SESSION_MAX:
-            for k in list(_SESSION_SEEN)[:max(1, _SESSION_MAX // 10)]:
-                _SESSION_SEEN.pop(k, None)
-                _SESSION_MEMORY.pop(k, None)
-        _SESSION_SEEN[key] = now
-        return _SESSION_MEMORY.setdefault(key, {})
-
-
-@app.post("/api/analyze")
-def api_analyze(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None)):
-    """多 Agent 协作分析（**非流式**聚合返回，供脚本/测试/预览使用）。
-
-    与 /api/analyze/stream 同一套编排，只是把流式事件收集成一个数组返回。
-    """
-    from sqlpa.analysis.orchestrator import run_analysis
-    _bind_asof()
-    role = _resolve_role(x_api_token, q.role)
-    events: List[Dict] = []
-
-    def _emit(p):
-        events.append(p)
-
-    final = run_analysis(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                         role=role,
-                         alert_threshold_pct=q.alert_threshold_pct,
-                         emit=_emit,
-                         confirm_id=q.confirm_id,
-                         memory=_session_memory(q.session_id,
-                                                _caller_key(x_api_token, role)))
-    return {"events": events, "final": final, "effective_role": role}
-
-
-@app.post("/api/analyze/stream")
-def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None)):
-    """多 Agent 协作分析（**SSE 流式**）：逐 Agent 事件推给前端。
-
-    事件格式（SSE data: JSON 一行一条）：
-      session_start / agent_start / agent_step / agent_done / done / error
-    前端消费后渲染 Agent 执行面板 + 炫的可视化 + 决策闭环。
-    """
-    from sqlpa.analysis.orchestrator import run_analysis
-    from fastapi.responses import StreamingResponse
-    import queue, threading
-
-    role = _resolve_role(x_api_token, q.role)
-    caller = _caller_key(x_api_token, role)
-    qq: "queue.Queue[Dict]" = queue.Queue()
-
-    def _emit(p):
-        qq.put(p)
-
-    def _run():
-        """跑编排并把**任何异常**翻译成终帧事件。
-
-        此前线程目标没有 try/except：任一节点抛异常就静默死线程，客户端既不收到
-        done 也收不到 error，只能干等 300 秒后拿到一句假的"分析超时"。
-        """
-        try:
-            _bind_asof()
-            run_analysis(
-                question=q.question, cfg=_cfg(), sb=_sandbox(), db_path=_db_path(),
-                llm=_llm(), role=role,
-                alert_threshold_pct=q.alert_threshold_pct, emit=_emit,
-                confirm_id=q.confirm_id,
-                memory=_session_memory(q.session_id, caller))
-        except Exception as e:  # noqa: BLE001
-            import traceback
-            traceback.print_exc()
-            qq.put({"type": "error", "detail": f"分析执行失败: {type(e).__name__}: {e}"})
-            qq.put({"type": "done", "payload": {"ok": False,
-                                                "error": f"{type(e).__name__}: {e}"}})
-
-    def _stream():
-        yield "data: " + json.dumps({"type": "session_start",
-                                     "question": q.question}) + "\n\n"
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        while True:
-            try:
-                p = qq.get(timeout=300)
-            except queue.Empty:
-                yield "data: " + json.dumps({"type": "error",
-                                             "detail": "分析超时"}) + "\n\n"
-                break
-            yield "data: " + json.dumps(p, ensure_ascii=False) + "\n\n"
-            if p.get("type") == "done":
-                break
-
-    return StreamingResponse(_stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "Connection": "keep-alive",
-                                      "X-Accel-Buffering": "no"})
-
-
-@app.get("/api/analyze/chart-template")
-def api_analyze_chart_template():
-    """ECharts 可视化模板说明：前端据此渲染归因瀑布/主因占比/下钻树/因子占比。"""
-    return {"summary": "归因瀑布(waterfall)/主因占比(share)/下钻树(tree)/因子占比(factors) 见 /api/analyze 返回的 final.chart"}
-
-
-@app.post("/api/analyze/report")
-def api_analyze_report(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None)):
-    """导出「多 Agent 分析」报告：Markdown + Word(.docx)。
-
-    前端把刚拿到的 `final` 一并回传（q.final）即可**零成本**出报告——不重跑分析、
-    不再调用 LLM；不带 final 时按 question 重跑一次分析（兼容脚本/测试用法）。
-    """
-    from sqlpa.business.deliver import (export_analysis_report,
-                                        export_analysis_report_docx)
-    role = _resolve_role(x_api_token, q.role)
-    if isinstance(q.final, dict) and q.final:
-        final = q.final
-    else:
-        _bind_asof()
-        final = _analyze_run(q, role, _caller_key(x_api_token, role))
-    if not final.get("ok"):
-        return {"ok": False, "reject": final.get("reject") or "分析未完成，无法生成报告"}
-    out_dir = Path(os.environ.get("SQLPA_REPORT_DIR") or (ROOT / "data" / "reports"))
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    md_path = out_dir / f"analysis-{stamp}.md"
-    docx_path = out_dir / f"analysis-{stamp}.docx"
-    export_analysis_report(md_path, q.question, final, username=role)
-    export_analysis_report_docx(docx_path, q.question, final, username=role)
-    md = md_path.read_text(encoding="utf-8")
-    return {"ok": True, "report": md, "markdown": md,
-            "filename": docx_path.name,
-            "docx_b64": base64.b64encode(docx_path.read_bytes()).decode("ascii")}
-
-
-def _analyze_run(q: AnalyzeIn, role: str, caller: str = "role:analyst") -> Dict:
-    """非流式多 Agent 分析（/api/analyze/report 内部复用，避免重复实现）。"""
-    from sqlpa.analysis.orchestrator import run_analysis
-    return run_analysis(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                        role=role, alert_threshold_pct=q.alert_threshold_pct,
-                        emit=None, memory=_session_memory(q.session_id, caller))
-
-
-@app.get("/api/audit")
-def api_audit(limit: int = 50, offset: int = 0,
-              x_api_token: Optional[str] = Header(default=None)):
-    """审计留痕（最近 N 条，来自**权威 sink** SQLite，可分页）。
-
-    加固点（此前该端点**完全无鉴权**，匿名即可拉走 user_input / generated_sql）：
-      - 走与取数同一套 `_resolve_role`（配了 token 就 401）；
-      - 非 admin 只返回脱敏后的记录（去 user_input / generated_sql / username）；
-      - 读 SQLite 而非 JSONL 镜像：镜像可能缺失或滞后，审计的"权威版本"只能有一个；
-      - 分页读取，不再把整个 JSONL 载入内存（防 DoS）。
-    """
-    role = _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import storage
-    rows = storage.list_audit(limit=max(1, min(limit, 500)), offset=max(0, offset))
-    if role == "admin":
-        return rows
-    return [_redact_audit(r) for r in rows]
-
-
-def _redact_audit(rec: Dict) -> Dict:
-    """非管理员可见的审计字段（保留"什么时候、问的哪个指标、成没成"，去掉内容本身）。
-
-    审计要能证明"发生过什么"，但提问原文与生成 SQL 里可能带业务敏感信息，
-    不应向任何拿到 analyst 凭据的人无差别开放。
-    """
-    keep = ("query_id", "user_role", "matched_metric", "is_success", "result_rows",
-            "mode", "certified", "created_at", "create_time", "reject_reason")
-    out = {k: rec.get(k) for k in keep if k in rec}
-    out["user_input"] = "（已脱敏）" if rec.get("user_input") else ""
-    return out
-
-
-@app.get("/api/metrics/history")
-def api_metrics_history(metric: Optional[str] = None, limit: int = 20,
-                        x_api_token: Optional[str] = Header(default=None)):
-    """指标口径变更历史（append-only）：谁、什么时候、把哪个指标从什么改成了什么。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import metric_store
-    if metric:
-        return metric_store.metric_history(metric, limit=max(1, min(limit, 200)))
-    from sqlpa.business import storage
-    return storage.list_metric_versions(limit=max(1, min(limit, 200)))
-
-
-@app.get("/api/metrics/lineage")
-def api_metrics_lineage(metric: str, x_api_token: Optional[str] = Header(default=None)):
-    """指标的表/列级血缘（静态解析，非数据库字段级血缘）。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import metric_store
-    return metric_store.metric_lineage(_cfg(), metric)
-
-
-@app.post("/api/metrics/rollback")
-def api_metrics_rollback(metric: str, version_seq: int,
-                         x_api_token: Optional[str] = Header(default=None)):
-    """把指标回滚到历史版本（**仅 admin**，且会记录一次 rollback 版本）。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="回滚指标口径需要 admin 权限")
-    from sqlpa.business import metric_store
-    ok, msg = metric_store.rollback_metric(metric, version_seq, actor=f"api:{role}")
-    if not ok:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"ok": True, "message": msg}
-
-
-class SubscriptionIn(BaseModel):
-    """新增订阅规则（指标 + 阈值 + 负责人 + 投递通道）。"""
-    metric: str = Field(..., description="指标 key，如 gmv")
-    threshold_pct: float = Field(0.05, description="波动阈值（0.05 = 5%）")
-    owner: str = Field("", description="负责人（推送给谁）")
-    question: str = Field("", description="订阅的业务问题（留空则用指标名）")
-    time_spec: str = Field("本月", description="检查的时间窗语义，如 上月/2018-06")
-    dims: List[str] = Field(default_factory=list, description="归因维度")
-    channel: str = Field("console", description="投递通道：console / file / webhook")
-    webhook: str = Field("", description="channel=webhook 时的回调地址")
-
-
-@app.get("/api/subscriptions")
-def api_list_subscriptions(x_api_token: Optional[str] = Header(default=None)):
-    """订阅告警规则列表。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business.deliver import load_subscriptions
-    return load_subscriptions()
-
-
-@app.post("/api/subscriptions")
-def api_add_subscription(s: SubscriptionIn,
-                         x_api_token: Optional[str] = Header(default=None)):
-    """新增订阅（**仅 admin**）：某指标波动超阈值就按通道推送。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="新增订阅需要 admin 权限")
-    from sqlpa.business.deliver import add_subscription
-    return add_subscription(s.metric, s.threshold_pct, owner=s.owner,
-                            question=s.question, time_spec=s.time_spec,
-                            dims=s.dims, channel=s.channel, webhook=s.webhook)
-
-
-@app.delete("/api/subscriptions/{sub_id}")
-def api_remove_subscription(sub_id: str,
-                            x_api_token: Optional[str] = Header(default=None)):
-    """删除订阅（**仅 admin**）。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="删除订阅需要 admin 权限")
-    from sqlpa.business.deliver import remove_subscription
-    if not remove_subscription(sub_id):
-        raise HTTPException(status_code=404, detail=f"未找到订阅 {sub_id}")
-    return {"ok": True, "removed": sub_id}
-
-
-@app.post("/api/subscriptions/check")
-def api_check_subscriptions(dry: bool = True,
-                            x_api_token: Optional[str] = Header(default=None)):
-    """立刻检查一遍订阅（**仅 admin**）。
-
-    dry=true 只返回"哪些需要推送"；dry=false 会真的投递（webhook 会发出请求）。
-    常驻调度请用 `python tools/run_subscriptions.py` 交给 cron。
-    """
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="检查订阅需要 admin 权限")
-    from sqlpa.business.deliver import check_subscriptions, deliver_alerts
-    _bind_asof()
-    alerts = check_subscriptions(_cfg(), sqlite3.connect(_db_path()))
-    need = [a for a in alerts if a.get("status") == "alert"]
-    out = {"alerts": alerts, "need_push": len(need), "dry": dry}
-    if not dry:
-        out["delivery"] = deliver_alerts(need)
-    return out
-
-
-class HitlDecisionIn(BaseModel):
-    """HITL 工单状态流转。"""
-    status: str = Field(..., description="in_progress / fixed / verified / dismissed / reopened")
-    note: str = Field("", description="人工复核意见")
-
-
-@app.get("/api/hitl")
-def api_hitl(status: str = "pending", limit: int = 50,
-             x_api_token: Optional[str] = Header(default=None)):
-    """人工复核队列（SQLite 权威存储）。status=all / closed 可查全量或已关闭。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import storage
-    if status == "closed":
-        rows = storage.list_hitl("all", limit=max(1, min(limit, 500)))
-        return [r for r in rows if r.get("status") in ("verified", "dismissed")]
-    return storage.list_hitl(status=status, limit=max(1, min(limit, 500)))
-
-
-@app.get("/api/hitl/{record_id}/history")
-def api_hitl_history(record_id: str, x_api_token: Optional[str] = Header(default=None)):
-    """工单状态流转历史（谁在什么时候把它从什么状态改成了什么）。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import hitl
-    if not hitl.get(record_id):
-        raise HTTPException(status_code=404, detail=f"工单不存在：{record_id}")
-    return hitl.history(record_id)
-
-
-@app.post("/api/hitl/{record_id}/decide")
-def api_hitl_decide(record_id: str, body: HitlDecisionIn,
-                    x_api_token: Optional[str] = Header(default=None)):
-    """推进工单状态（**仅 admin**）——人工处理的入口，此前系统里根本不存在这个端点。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="推进 HITL 工单需要 admin 权限")
-    from sqlpa.business import hitl
-    if body.status not in hitl.STATUSES:
-        raise HTTPException(status_code=400,
-                            detail=f"非法状态 {body.status}，允许：{list(hitl.STATUSES)}")
-    if not hitl.resolve(record_id, body.status, human_note=body.note, actor=f"api:{role}"):
-        raise HTTPException(status_code=404, detail=f"工单不存在：{record_id}")
-    return {"ok": True, "record_id": record_id, "status": body.status}
-
-
-@app.post("/api/hitl/{record_id}/verify")
-def api_hitl_verify(record_id: str, x_api_token: Optional[str] = Header(default=None)):
-    """**重跑验证**（仅 admin）：把工单指标在其时间窗上重新算一遍，
-    仍异常 → reopened，已恢复 → verified。人工说"修好了"不算数，数据说了才算。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="重跑验证需要 admin 权限")
-    from sqlpa.business import hitl
-    _bind_asof()
-    out = hitl.verify(record_id, _cfg(), sqlite3.connect(_db_path()), _db_path(),
-                      actor=f"api:{role}")
-    if not out.get("ok"):
-        raise HTTPException(status_code=400, detail=out.get("reason", "重跑验证失败"))
-    return out
-
-
-@app.get("/api/confirmations")
-def api_confirmations(status: str = "pending", limit: int = 50,
-                      x_api_token: Optional[str] = Header(default=None)):
-    """待确认口径列表（HITL 前置门）：LLM 猜出来的口径在确认前不允许拉数。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import storage
-    return storage.list_confirmations(status=status or None,
-                                      limit=max(1, min(limit, 500)))
-
-
-@app.post("/api/confirmations/{confirm_id}/override")
-def api_confirmations_override(confirm_id: str, metric: str,
-                               x_api_token: Optional[str] = Header(default=None)):
-    """**改选**口径：把待确认记录换成另一个合法指标，返回新的 confirm_id。
-
-    原记录置 dismissed（留痕），新记录继承维度/时间范围，只换指标 ——
-    改选不等于可以顺手改口径范围。
-    """
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import confirm as _confirm
-    new_id, err = _confirm.override(_cfg(), confirm_id, metric)
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    return {"ok": True, "confirm_id": new_id, "metric": metric,
-            "replaced": confirm_id}
-
-
-@app.post("/api/confirmations/{confirm_id}/dismiss")
-def api_confirmations_dismiss(confirm_id: str,
-                              x_api_token: Optional[str] = Header(default=None)):
-    """驳回一条待确认口径（仅 admin）。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="处理口径确认需要 admin 权限")
-    from sqlpa.business import storage
-    if not storage.decide_confirmation(confirm_id, "dismissed", actor=f"api:{role}"):
-        raise HTTPException(status_code=404, detail=f"确认记录不存在或已处理：{confirm_id}")
-    return {"ok": True, "confirm_id": confirm_id, "status": "dismissed"}
-
-
-@app.get("/api/datasources")
-def api_datasources(x_api_token: Optional[str] = Header(default=None)):
-    """已注册数据源（密码掩码）。与取数同权限：不对外匿名开放主机/库名。"""
-    _resolve_role(x_api_token, "analyst")
-    from sqlpa.business import datasources as dss
-    return [{"id": d["id"], "name": d["name"], "kind": d["kind"],
-             "display": dss.display(d)} for d in dss.list_datasources()]
 
 
 if __name__ == "__main__":

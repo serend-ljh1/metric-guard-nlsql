@@ -14,9 +14,8 @@ from sqlpa.sandbox.sql_executor import ExecConfig, SqlSandbox
 
 def test_exec_config_from_settings_reads_yaml():
     cfg = ExecConfig.from_settings()
-    # settings.yaml 里 timeout_seconds: 5.0 / allow_multi_statement: false
+    # settings.yaml 里 timeout_seconds: 5.0
     assert cfg.timeout_seconds == 5.0
-    assert cfg.allow_multi_statement is False
     assert cfg.max_rows == 500            # eval.max_rows
     assert isinstance(cfg.extra_blocked_keywords, frozenset)
 

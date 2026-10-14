@@ -1,9 +1,14 @@
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref } from 'vue'
 import AgentPanel from './components/AgentPanel.vue'
 import ChartsBoard from './components/ChartsBoard.vue'
 import DecisionCard from './components/DecisionCard.vue'
 import DataLineageCard from './components/DataLineageCard.vue'
+import GovernanceBoard from './components/GovernanceBoard.vue'
+import { reduceAgents, lastError } from './sse'
+
+// ---- 顶部视图切换：分析台 / 治理看板 ----
+const view = ref('analyze')
 
 // ---- 提问输入 ----
 const question = ref('2018年6月 GMV 为什么比上月跌？')
@@ -29,25 +34,6 @@ const SAMPLE = [
 ]
 
 function useSample(q) { question.value = q }
-
-// 解析 SSE 事件：按 agent 聚合出卡片生命周期
-function reduceAgents(evts) {
-  const map = new Map()
-  for (const e of evts) {
-    if (e.type === 'agent_start') {
-      map.set(e.name, { name: e.name, role: e.role, detail: e.detail || '', status: 'running', steps: [] })
-    } else if (e.type === 'agent_step') {
-      const a = map.get(e.name)
-      if (a) a.steps.push({ stage: e.stage, detail: e.detail, at: e.at })
-    } else if (e.type === 'agent_done') {
-      const a = map.get(e.name)
-      if (a) { a.status = 'done'; a.result = e.payload }
-    } else if (e.type === 'error') {
-      error.value = e.detail || '分析出错'
-    }
-  }
-  return Array.from(map.values())
-}
 
 async function runAnalysis(confirmId) {
   if (!question.value.trim()) return
@@ -77,7 +63,8 @@ async function runAnalysis(confirmId) {
     // 记录最后一帧的最终载荷（done 事件里带 conclusion/decision/chart）
     let lastDone = null
 
-    while (true) {
+    // 逐块读取流直到 reader 报 done（for(;;) 避免 lint 的 no-constant-condition）
+    for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       buf += decoder.decode(value, { stream: true })
@@ -96,6 +83,8 @@ async function runAnalysis(confirmId) {
         } catch { /* 忽略无法解析的事件帧 */ }
       }
       agents.value = reduceAgents(events.value)
+      const le = lastError(events.value)
+      if (le) error.value = le
     }
     final.value = lastDone
     // 口径待确认：回显 proposed 口径 + 候选，供用户确认/改选后重跑
@@ -134,7 +123,8 @@ const reportOpen = ref(false)
 const reportMd = ref('')
 
 // 把**当前持有的 final 原样回传**给后端出报告：不重跑分析、不再调 LLM（零额外成本）。
-// 后端同时返回 Markdown（前端预览）与 Word 的 base64（直接触发下载）。
+// 后端默认返回 Markdown（前端预览）；Word 走**文件流端点**（download=docx，直接下 blob），
+// 不再把二进制 base64 塞进 JSON。
 async function exportReport() {
   if (!final.value || running.value || reportBusy.value) return
   reportBusy.value = true
@@ -148,8 +138,8 @@ async function exportReport() {
     const body = await resp.json().catch(() => ({}))
     if (!resp.ok || !body.ok) throw new Error(body.detail || body.reject || ('导出报告失败 HTTP ' + resp.status))
     reportMd.value = body.markdown || body.report || ''
-    if (body.docx_b64) downloadDocx(body.docx_b64, body.filename || 'analysis-report.docx')
     reportOpen.value = true
+    await downloadWord()
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
@@ -157,13 +147,19 @@ async function exportReport() {
   }
 }
 
-function downloadDocx(b64, filename) {
-  const bin = atob(b64)
-  const bytes = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  const blob = new Blob([bytes], {
-    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+// 下载 Word：命中 /api/analyze/report?download=docx，响应是文件流，直接落盘。
+async function downloadWord() {
+  if (!final.value) return
+  const resp = await fetch('/api/analyze/report?download=docx', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question: question.value, role: 'analyst', final: final.value }),
   })
+  if (!resp.ok) { error.value = '下载 Word 失败 HTTP ' + resp.status; return }
+  const blob = await resp.blob()
+  const cd = resp.headers.get('Content-Disposition') || ''
+  const m = /filename="?([^"]+)"?/.exec(cd)
+  const filename = m ? m[1] : 'analysis-report.docx'
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -185,6 +181,14 @@ function downloadDocx(b64, filename) {
       <p class="sub">问一句「为什么」，系统自动归因下钻到底 → 诊断结论 + 依据 + 建议动作 → 决策闭环</p>
     </header>
 
+    <div class="tabs">
+      <button :class="['tab', { active: view === 'analyze' }]" @click="view = 'analyze'">分析台</button>
+      <button :class="['tab', { active: view === 'governance' }]" @click="view = 'governance'">
+        治理 / 复核看板
+      </button>
+    </div>
+
+    <div v-show="view === 'analyze'">
     <section class="ask">
       <div class="input-row">
         <input v-model="question" class="q" maxlength="120"
@@ -258,6 +262,10 @@ function downloadDocx(b64, filename) {
 
       <DecisionCard :decision="final.decision" />
     </div>
+    </div>
+
+    <!-- 治理 / 人工复核看板：口径冲突、HITL 队列、待确认口径、订阅规则 -->
+    <GovernanceBoard v-if="view === 'governance'" />
 
     <footer class="foot">
       数据底座：业务语义层确定性取数（口径已认证）· 分析主角：六 Agent 协作编排 · 决策闭环写入 HITL
@@ -274,6 +282,13 @@ function downloadDocx(b64, filename) {
        box-shadow: 0 0 18px var(--brand); }
 .brand h1 { font-size: 26px; margin: 0; letter-spacing: .5px; }
 .sub { color: var(--text-muted); margin: 8px 0 0; font-size: 14px; }
+
+.tabs { display: flex; gap: 8px; margin: 4px 0 14px; }
+.tab { border: 1px solid var(--border); background: var(--surface-muted); color: var(--text-muted);
+       border-radius: 10px; padding: 8px 16px; font-size: 14px; font-weight: 600; transition: .15s; }
+.tab:hover { color: var(--text); border-color: var(--brand); }
+.tab.active { color: #0b1020; background: linear-gradient(135deg, var(--brand-2), var(--accent));
+       border-color: transparent; }
 
 .ask { margin: 18px 0 22px; }
 .input-row { display: flex; gap: 10px; }

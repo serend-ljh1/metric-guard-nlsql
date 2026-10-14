@@ -22,6 +22,7 @@ python-docx
 
 # ---- 测试 / CI ----
 pytest
+pytest-cov
 
 # ---- 产品化：外部数据源方言适配（按需安装，惰性导入）----
 # 业务库接 MySQL / PostgreSQL 时需要；仅用 SQLite 可不装

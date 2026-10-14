@@ -59,7 +59,8 @@ def _infer_drill_path(question: str, history: List[Dict], extra: Dict) -> List[D
         return []
     q = str(question or "")
     value = str(prev.get("value", ""))
-    followup_tone = any(k in q for k in ("那", "呢", "为什么", "为何", "继续", "下钻", "再看", "拆"))
+    from .intent import has_followup_tone
+    followup_tone = has_followup_tone(q)
     if value and (value.lower() in q.lower() or followup_tone):
         return [{"dim": prev["dim"], "value": prev["value"]}]
     return []

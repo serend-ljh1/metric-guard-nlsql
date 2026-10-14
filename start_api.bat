@@ -2,9 +2,10 @@
 chcp 65001 >nul
 setlocal
 REM ============================================================
-REM  start_api.bat - start Multi-Agent Analytics backend
+REM  start_api.bat - 生产/演示模式后端（不热重载）
 REM  Swagger / OpenAPI:  http://localhost:8000/docs
 REM  Frontend (separate): http://localhost:5173 (start_web.bat)
+REM  开发时改代码想自动重启，请改用 start_api_dev.bat（带 --reload）。
 REM ============================================================
 cd /d "%~dp0"
 

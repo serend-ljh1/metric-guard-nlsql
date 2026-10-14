@@ -658,7 +658,12 @@ def match(question: str, cfg: BusinessConfig | None = None, llm=None) -> MatchRe
 
     # ---- 尝试 LLM 识别 ----
     if llm is not None:
-        obj = _llm_match(cfg, question, llm)
+        # LLM 失败（超时/限流/网络/解析）必须**降级到关键词兜底**，不能让一次
+        # LLM 抖动把整条分析链打断。此前这里无保护，_llm_match 抛错会直接冒泡出 match。
+        try:
+            obj = _llm_match(cfg, question, llm)
+        except Exception:  # noqa: BLE001
+            obj = {}
         got = (obj or {}).get("metric", "")
         # 允许基础指标与派生指标（ratio@a/b、share@a）
         if got and (got in cfg.metrics or got.startswith(("ratio@", "share@"))):

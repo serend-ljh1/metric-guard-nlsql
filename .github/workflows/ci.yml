@@ -1,4 +1,4 @@
-# CI：每次 push / PR 自动跑离线测试套件（无需 API Key、无需外部数据）
+# CI：每次 push / PR 自动跑离线测试套件与全部离线评测线（无需 API Key、无需外部数据）
 name: CI
 
 on:
@@ -14,61 +14,38 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # 与本地开发环境对齐（本地 .venv 为 Python 3.12），避免 3.11/3.12 行为漂移。
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run pytest (offline suite)
-        run: pytest tests -q
-
-      - name: Business semantic-layer eval (offline, deterministic)
-        # 口径命中 / 口径外拒绝 / 权限拦截 / PII 掩码 / 公式防篡改 / 审计留痕
-        # 无需 API Key，用同结构样本库；这一步能拦住语义层与治理护栏的回归。
-        run: python evaluation/eval_business.py --report-dir /tmp/eval_reports
-
-      - name: Product metrics eval (offline, deterministic)
-        # 北极星：语义层命中率 / 口径外占比 / 认证率。语义层是主路径，
-        # 这一步保证"覆盖率"不会因为改配置或改匹配规则而悄悄退化。
-        run: python evaluation/eval_product.py --report-dir /tmp/eval_reports
-
-      - name: Sandbox external corpus eval (offline, in-repo corpus)
-        # 外部对抗语料（61 条）：危险拦截率 / **只读误杀率** / 库不变性 / 过滤值注入。
-        # 语料在仓库内（evaluation/sandbox_corpus/），因此可进 CI：
-        # 危险拦截必须 100%、库文件 sha256 与行数必须一字不变。
-        run: python evaluation/eval_sandbox_external.py --report-dir /tmp/eval_reports
-
-      - name: Attribution eval (injection-based ground truth, offline, no LLM)
-        # 注入式真因：在真实 Olist 上注入可控原因，由评测侧独立复算真值，
-        # 度量 analyze / drill / factorize 三维定位命中率。**无 LLM、纯算术**，
-        # 因此可离线进 CI —— 这是本项目的核心能力，必须防回归。
+      - name: Run pytest with coverage gate
+        # 全量离线单测；覆盖率门槛锁住整体健康度（本地基线约 83%，门槛取 80% 留少量余量）。
+        # 覆盖范围：确定性核心 src/sqlpa + 路由层 apiroutes。
         run: |
-          python evaluation/eval_attribution.py --report-dir /tmp/eval_reports \
-            --periods 2018-05 2018-06 2018-07 \
-            --dims state category --inject-pct 0.60 --topk 1 2 3 5
+          pytest tests -q \
+            --cov=src/sqlpa --cov=apiroutes \
+            --cov-report=term-missing \
+            --cov-fail-under=80
 
-      - name: Alert quality eval (threshold vs threshold+significance)
-        # 告警质量：5% 阈值报了多少警、其中多少被统计门控抑制、多少是月长假象。
-        # 离线确定性（相邻月对遍历），用于防止"改阈值/改门控"悄悄改变告警行为。
-        run: python evaluation/eval_alert_quality.py --report-dir /tmp/eval_reports
-
-      - name: External public benchmark eval (Spider dev world_1, in-repo corpus)
-        # 第三方语料（问题与 gold SQL 来自 Spider dev world_1，非本项目自编）。
-        # 完整 Spider 数据集属仓库外资源，故此处退回**仓库内样本语料**
-        # evaluation/spider_probe/（题面+gold SQL+库文件随仓库发布）→ 任意机器可离线重跑。
-        run: python evaluation/eval_external_bank.py --report-dir /tmp/eval_reports
+      - name: Run all offline evaluation suites
+        # 单一入口 `run_all.py` 一次跑完全部 7 条离线确定性评测线，并产出总报告 overall.json：
+        #   1 business / 2 product / 3 decisions / 4 attribution / 5 alert_quality /
+        #   6 sandbox_external / 7 external_bank（Spider dev world_1，用仓库内样本语料）
+        # 全部无需 API Key、可离线复现；此前的逐条 eval 步骤已收敛到这一步，防止各线脚本被改动后漏跑。
+        # 未加 --llm：确定性引擎 vs 纯 LLM 的对照线需 Key，CI 中不跑（其状态会显式写入总报告）。
+        run: python evaluation/run_all.py --report-dir /tmp/eval_reports
 
       - name: Compile-check entrypoints
-        # 入口脚本语法自检（此前的 Streamlit app.py 冒烟步骤在 app.py 下线后一直让 CI 失败，
-        # 已替换为对**现存**入口的检查）。
+        # 入口脚本语法自检。
         run: |
           python -m compileall -q api.py run_business.py demo_governance.py evaluation tools
           python -c "import ast; ast.parse(open('api.py', encoding='utf-8').read()); print('api.py OK')"
 
   web:
-    # 前端此前**完全不在版本控制与 CI 里**（web/ 未入库、无构建校验）。
-    # 注意：需要先把 web/ 源码提交进仓库（node_modules / dist 已被 .gitignore 排除）。
+    # 前端源代码入库（node_modules / dist 已被 .gitignore 排除），CI 校验 lint / 单测 / 构建。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,6 +59,16 @@ jobs:
       - name: Install frontend deps
         working-directory: web
         run: npm ci
+
+      - name: Lint frontend
+        # eslint + eslint-plugin-vue：拦截未用变量、可疑控制流等问题。
+        working-directory: web
+        run: npm run lint
+
+      - name: Unit-test frontend
+        # node:test 零依赖单测（含 SSE 事件归并 reduceAgents 的纯函数用例）。
+        working-directory: web
+        run: npm run test
 
       - name: Build frontend
         working-directory: web

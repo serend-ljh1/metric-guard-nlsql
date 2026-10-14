@@ -37,10 +37,6 @@ _BLOCKED_KEYWORDS = {
     # 在 SQLite 上只是语法错误，但同一套策略作用于 MySQL 连接时它就是**写文件**。
     "OUTFILE", "DUMPFILE",
 }
-# 可能被用于绕过只读的语句
-_BLOCKED_PATTERNS = [
-    re.compile(r"\b(count|sum|avg|max|min)\s*\(\s*['\"]?", re.I),  # 不是高危,排除
-]
 # 危险 Load 扩展 / shell（方言无关的负面清单）
 _BLOCKED_FUNCTIONS = {
     "load_extension", "print",
@@ -65,10 +61,6 @@ class ExecConfig:
     """沙箱资源护栏参数。"""
     timeout_seconds: float = 5.0
     max_rows: int = 500           # 结果集行数上限（防无 LIMIT 爆表）
-    # 历史遗留字段：`_sanitize` **始终**只接受单条查询（见下），因此该开关不生效。
-    # 原因：SQLite 的 `conn.execute` 与 pymysql 默认都不支持多语句，放开也执行不了，
-    # 只会让拦截规则看起来"可配置"。已从 config/settings.yaml 移除该键（避免死配置）。
-    allow_multi_statement: bool = False
     extra_blocked_keywords: frozenset = frozenset()
 
     @classmethod
@@ -123,7 +115,7 @@ def _sanitize(sql: str, cfg: ExecConfig) -> str:
         raise SqlSecurityError("空语句", "empty")
 
     # 只允许单条查询：SQLite 的 `conn.execute` 与 pymysql 默认都不支持一次执行多条语句，
-    # 因此这里始终拦截（ExecConfig.allow_multi_statement 不改变该行为，字段仅作兼容保留）。
+    # 因此这里始终拦截。
     if len(_split_statements(cleaned)) > 1:
         raise SqlSecurityError("仅允许单条语句", "multi_statement")
 

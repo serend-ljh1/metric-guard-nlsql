@@ -217,7 +217,10 @@ def test_session_memory_is_scoped_per_caller():
 
 def test_session_memory_is_bounded(monkeypatch):
     import api
-    monkeypatch.setattr(api, "_SESSION_MAX", 5)
+    # 会话记忆的容量上限实现位于 apiroutes.deps（api.py 只做再导出）——
+    # 补丁打在**实现处**才生效。
+    import apiroutes.deps as deps
+    monkeypatch.setattr(deps, "_SESSION_MAX", 5)
     api._SESSION_MEMORY.clear()
     api._SESSION_SEEN.clear()
     for i in range(20):
