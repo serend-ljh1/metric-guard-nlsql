@@ -9,11 +9,12 @@ sqlpa.business.storage
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "app.db"
 
@@ -159,13 +160,72 @@ CREATE TABLE IF NOT EXISTS metric_confirmations (
     decided_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_confirm_status ON metric_confirmations(status);
+
+-- 会话记忆持久化（跨重启存活 / 多 worker 共享同一 DB 文件时一致）。
+-- 此前会话记忆是**纯进程内 dict**：重启即丢、多 worker 各自一份（下钻记忆分裂）。
+CREATE TABLE IF NOT EXISTS session_memory (
+    key        TEXT PRIMARY KEY,
+    data_json  TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_memory_time ON session_memory(updated_at);
+
+-- 限速计数持久化（同上：多 worker 共享同一 DB 文件时，限速才真正是"全局"的）
+CREATE TABLE IF NOT EXISTS rate_limit (
+    key        TEXT PRIMARY KEY,
+    hits_json  TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_time ON rate_limit(updated_at);
+
+-- 登录会话（动态 token）：把"真实登录"做成可运营能力，
+-- 取代仅靠静态 SQLPA_API_TOKENS（token 与角色绑死在环境变量里、无法登出）。
+CREATE TABLE IF NOT EXISTS sessions (
+    token      TEXT PRIMARY KEY,
+    username   TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(username);
 """
+
+
+def _journal_mode() -> str:
+    """SQLite journal 模式：`SQLPA_SQLITE_JOURNAL_MODE`（默认 WAL）。
+
+    WAL（Write-Ahead Logging）让**读不阻塞写、写不阻塞读**：此前默认的 rollback
+    journal 下，一个进程在写就会把整库锁住，多 worker 共享同一 `data/app.db` 时
+    并发请求会直接 `database is locked`。WAL 是"多 worker 部署"的前提。
+    个别文件系统（网络盘/某些容器卷）不支持 WAL，可用该环境变量改回 `DELETE`。
+    """
+    v = (os.environ.get("SQLPA_SQLITE_JOURNAL_MODE") or "WAL").strip().upper()
+    return v or "WAL"
+
+
+def _busy_timeout_ms() -> int:
+    """写锁等待毫秒数：`SQLPA_SQLITE_BUSY_TIMEOUT_MS`（默认 5000）。"""
+    try:
+        v = int(os.environ.get("SQLPA_SQLITE_BUSY_TIMEOUT_MS") or 5000)
+    except ValueError:
+        v = 5000
+    return v if v >= 0 else 5000
 
 
 def _conn() -> sqlite3.Connection:
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
+    conn = sqlite3.connect(str(_DB_PATH), timeout=_busy_timeout_ms() / 1000.0)
     conn.row_factory = sqlite3.Row
+    # 多 worker / 并发读写就绪：WAL + busy_timeout。
+    # busy_timeout 让并发写**等待**而不是立刻抛 "database is locked"；
+    # journal_mode 是**持久属性**（写进库文件头），每条连接设一次是幂等的。
+    # pragmatic：独立 try，个别文件系统不支持 WAL 时不能因此让整库不可用。
+    try:
+        conn.execute(f"PRAGMA journal_mode={_journal_mode()}")
+        conn.execute(f"PRAGMA busy_timeout={_busy_timeout_ms()}")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.Error:
+        pass
     conn.executescript(_SCHEMA)
     _migrate(conn)
     return conn
@@ -180,6 +240,11 @@ _MIGRATIONS = [
     ("hitl_queue", "owner", "TEXT"),
     ("hitl_queue", "time_spec", "TEXT"),
     ("hitl_queue", "dims_json", "TEXT"),
+    # HITL SLA：截止时间 / 超时升级 / 临期催办
+    ("hitl_queue", "due_at", "REAL"),
+    ("hitl_queue", "escalated", "INTEGER DEFAULT 0"),
+    ("hitl_queue", "escalated_at", "TEXT"),
+    ("hitl_queue", "reminded_at", "TEXT"),
 ]
 
 
@@ -299,6 +364,111 @@ def ensure_default_users() -> None:
     user = (os.environ.get("SQLPA_BOOTSTRAP_ADMIN_USER") or "admin").strip() or "admin"
     if create_user(user, pwd, role="admin"):
         print(f"[安全提示] 已创建管理员账号 {user}（口令来自环境变量）。")
+
+
+# ================= 登录会话（动态 token） =================
+# 静态 SQLPA_API_TOKENS 的问题：token 与角色写死在环境变量里 —— 改密码要改环境变量、
+# 无法登出、无法知道"这个 token 是谁"。这里把登录做成**一条会话记录**：
+# username → 由 users 表校验；token 是随机串（可撤销、可过期、可追溯归属人）。
+_LOGIN_TTL_DEFAULT = 12 * 3600.0      # 会话默认有效期（12 小时）
+
+
+def _login_ttl() -> float:
+    try:
+        v = float(os.environ.get("SQLPA_LOGIN_TTL") or _LOGIN_TTL_DEFAULT)
+    except ValueError:
+        v = _LOGIN_TTL_DEFAULT
+    return v if v > 0 else _LOGIN_TTL_DEFAULT
+
+
+def create_session(username: str, role: str, ttl_seconds: Optional[float] = None) -> dict:
+    """为已通过口令校验的用户签发一条会话记录（含随机 token 与到期时间）。"""
+    import secrets
+    tok = secrets.token_urlsafe(32)
+    now = time.time()
+    ttl = float(_login_ttl() if ttl_seconds is None else ttl_seconds)
+    with _conn() as c:
+        c.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))   # 顺手清过期
+        c.execute("INSERT INTO sessions(token,username,role,created_at,expires_at) "
+                  "VALUES(?,?,?,?,?)", (tok, username, role, _now(), now + ttl))
+    return {"token": tok, "username": username, "role": role, "expires_at": now + ttl}
+
+
+def get_session(token: Optional[str]) -> Optional[dict]:
+    """按 token 取有效会话（过期/不存在 → None）。纯读，不在请求热路径上写库。"""
+    if not token:
+        return None
+    with _conn() as c:
+        row = c.execute("SELECT token,username,role,expires_at FROM sessions WHERE token=?",
+                        (token,)).fetchone()
+    if not row or float(row["expires_at"]) < time.time():
+        return None
+    return dict(row)
+
+
+def delete_session(token: Optional[str]) -> bool:
+    """登出：撤销该 token（此后它既不是会话、也不在任何静态映射里）。"""
+    if not token:
+        return False
+    with _conn() as c:
+        return c.execute("DELETE FROM sessions WHERE token=?", (token,)).rowcount > 0
+
+
+def purge_sessions() -> int:
+    """清理过期会话，返回删除条数。"""
+    with _conn() as c:
+        return c.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),)).rowcount
+
+
+# ================= 会话记忆 / 限速（持久化） =================
+# 这两者此前都是**纯进程内**状态：重启即丢，多 worker 各持一份（下钻记忆分裂、限速形同虚设）。
+# 落到 SQLite 后：单 worker 重启可续、多 worker 共享同一 DB 文件时限速与记忆都一致。
+def session_load(key: str) -> Optional[dict]:
+    with _conn() as c:
+        row = c.execute("SELECT data_json FROM session_memory WHERE key=?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        v = json.loads(row["data_json"])
+    except Exception:  # noqa: BLE001
+        return None
+    return v if isinstance(v, dict) else None
+
+
+def session_save(key: str, data: dict, ttl_seconds: float = 3600.0) -> None:
+    """写回会话记忆（并按 TTL 顺带清理老记录，避免这张表无限增长）。"""
+    now = time.time()
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO session_memory(key,data_json,updated_at) VALUES(?,?,?)",
+                  (key, json.dumps(data or {}, ensure_ascii=False), now))
+        c.execute("DELETE FROM session_memory WHERE updated_at < ?",
+                  (now - max(0.0, float(ttl_seconds)),))
+
+
+def session_delete(key: str) -> bool:
+    with _conn() as c:
+        return c.execute("DELETE FROM session_memory WHERE key=?", (key,)).rowcount > 0
+
+
+def rate_load(key: str) -> List[float]:
+    with _conn() as c:
+        row = c.execute("SELECT hits_json FROM rate_limit WHERE key=?", (key,)).fetchone()
+    if not row:
+        return []
+    try:
+        v = json.loads(row["hits_json"])
+    except Exception:  # noqa: BLE001
+        return []
+    return [float(x) for x in v] if isinstance(v, list) else []
+
+
+def rate_save(key: str, hits: List[float], window_seconds: float = 60.0) -> None:
+    now = time.time()
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO rate_limit(key,hits_json,updated_at) VALUES(?,?,?)",
+                  (key, json.dumps([float(h) for h in hits]), now))
+        c.execute("DELETE FROM rate_limit WHERE updated_at < ?",
+                  (now - max(0.0, float(window_seconds)),))
 
 
 # ================= 审计 =================
@@ -447,18 +617,35 @@ def decide_confirmation(cid: str, status: str, actor: str = "") -> bool:
 
 
 # ================= HITL =================
+# 工单 SLA：登记即带截止时间（due_at），超期由 sweep 置 escalated 并升级。
+_OPEN_HITL_STATUSES = ("pending", "in_progress", "fixed", "reopened")
+
+
+def sla_hours() -> float:
+    """工单 SLA 时长（小时），`SQLPA_HITL_SLA_HOURS`（默认 24）。"""
+    try:
+        v = float(os.environ.get("SQLPA_HITL_SLA_HOURS") or 24)
+    except ValueError:
+        v = 24.0
+    return v if v > 0 else 24.0
+
+
 def insert_hitl(rec: dict) -> None:
     rec.setdefault("created_at", _now())
+    # 登记即确定截止时间：没有 due_at，"超时升级"就无从判定
+    due_at = rec.get("due_at")
+    if due_at is None:
+        due_at = time.time() + sla_hours() * 3600
     with _conn() as c:
         c.execute("""INSERT OR IGNORE INTO hitl_queue
             (record_id,username,user_input,matched_metric,owner,generated_sql,
-             reject_reason,time_spec,dims_json,status,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+             reject_reason,time_spec,dims_json,status,due_at,created_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (rec.get("record_id"), rec.get("username", ""), rec.get("user_input", ""),
              rec.get("matched_metric", ""), rec.get("owner", ""),
              rec.get("generated_sql", ""), rec.get("reject_reason", ""),
              rec.get("time_spec", ""), json.dumps(rec.get("dims") or [], ensure_ascii=False),
-             rec.get("status", "pending"), rec["created_at"]))
+             rec.get("status", "pending"), float(due_at), rec["created_at"]))
 
 
 def hitl_get(record_id: str) -> Optional[dict]:
@@ -529,6 +716,87 @@ def list_hitl(status: str = "pending", limit: int = 50) -> list:
 
 def decide_hitl(record_id: str, status: str, decided_by: str = "") -> bool:
     return hitl_set_status(record_id, status, actor=decided_by)
+
+
+def _hitl_rows_with_dims(rows) -> list:
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["dims"] = json.loads(d.get("dims_json") or "[]")
+        except Exception:  # noqa: BLE001
+            d["dims"] = []
+        out.append(d)
+    return out
+
+
+def hitl_due(now_ts: Optional[float] = None,
+             statuses: tuple = _OPEN_HITL_STATUSES) -> list:
+    """已超 SLA 但**尚未升级**的未闭环工单（sweep 的升级候选）。"""
+    ts = time.time() if now_ts is None else float(now_ts)
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT * FROM hitl_queue WHERE status IN {tuple(statuses)} "
+            "AND due_at IS NOT NULL AND due_at < ? AND COALESCE(escalated,0)=0 "
+            "ORDER BY due_at", (ts,)).fetchall()
+    return _hitl_rows_with_dims(rows)
+
+
+def hitl_soon_due(within_seconds: float, now_ts: Optional[float] = None,
+                  statuses: tuple = _OPEN_HITL_STATUSES) -> list:
+    """临期工单（due_at 落在 [now, now+window) 内且未催办过）——催办候选。"""
+    ts = time.time() if now_ts is None else float(now_ts)
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT * FROM hitl_queue WHERE status IN {tuple(statuses)} "
+            "AND due_at IS NOT NULL AND due_at >= ? AND due_at < ? "
+            "AND COALESCE(escalated,0)=0 AND reminded_at IS NULL ORDER BY due_at",
+            (ts, ts + float(within_seconds))).fetchall()
+    return _hitl_rows_with_dims(rows)
+
+
+def hitl_mark_escalated(record_id: str, actor: str = "system:sla", note: str = "") -> bool:
+    """置为"已升级"并写一条流转历史（from=to=当前状态，表示"状态未变但已升级"）。"""
+    with _conn() as c:
+        row = c.execute("SELECT status FROM hitl_queue WHERE record_id=?",
+                        (record_id,)).fetchone()
+        if not row:
+            return False
+        now = _now()
+        c.execute("UPDATE hitl_queue SET escalated=1, escalated_at=? WHERE record_id=?",
+                  (now, record_id))
+        c.execute("""INSERT INTO hitl_history(record_id,from_status,to_status,actor,note,created_at)
+                     VALUES(?,?,?,?,?,?)""",
+                  (record_id, row["status"], row["status"], actor,
+                   note or "超时升级：已超过 SLA 截止时间仍未闭环", now))
+        return True
+
+
+def hitl_mark_reminded(record_id: str, actor: str = "system:sla", note: str = "") -> bool:
+    """置为"已催办"并写历史（幂等：同一工单只催办一次）。"""
+    with _conn() as c:
+        row = c.execute("SELECT status FROM hitl_queue WHERE record_id=?",
+                        (record_id,)).fetchone()
+        if not row:
+            return False
+        now = _now()
+        c.execute("UPDATE hitl_queue SET reminded_at=? WHERE record_id=?", (now, record_id))
+        c.execute("""INSERT INTO hitl_history(record_id,from_status,to_status,actor,note,created_at)
+                     VALUES(?,?,?,?,?,?)""",
+                  (record_id, row["status"], row["status"], actor,
+                   note or "临期催办：接近 SLA 截止时间，请尽快处理", now))
+        return True
+
+
+def list_hitl_escalated(limit: int = 50) -> list:
+    """已升级且仍未闭环的工单（`/api/hitl/escalations` 的数据来源）。"""
+    with _conn() as c:
+        rows = c.execute(
+            f"SELECT * FROM hitl_queue WHERE COALESCE(escalated,0)=1 "
+            f"AND status IN {_OPEN_HITL_STATUSES} "
+            "ORDER BY escalated_at DESC, id DESC LIMIT ?",
+            (max(1, int(limit)),)).fetchall()
+    return _hitl_rows_with_dims(rows)
 
 
 # ================= 反馈 =================

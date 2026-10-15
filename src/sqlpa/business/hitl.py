@@ -16,6 +16,7 @@ HITL(人工介入)工作流：把"指标异常 / 权限拦截 / 公式被改 / �
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -200,3 +201,123 @@ def verify(record_id: str, cfg, db, db_path: Optional[str] = None,
     return {"ok": True, "record_id": record_id, "status": new_status, "note": note,
             "change_pct": r.get("change_pct"), "is_abnormal": bool(r.get("is_abnormal")),
             "reverify_sql": r.get("sql") or ""}
+
+
+# ---------------- SLA：超时升级 / 临期催办 ----------------
+# 为什么需要：工单进队列只说明"边界被记录了"，没人推动它就永远停在 pending ——
+# "闭环"于是只剩文档里的一个词。这里按 SLA 把**超期工单升级**、**临期工单催办**，
+# 每次动作都写 hitl_history（可追溯）与审计留痕。
+def soon_due(now_ts: Optional[float] = None) -> List[dict]:
+    """临期且未催办过的未闭环工单（SLA 剩余不足 1 小时，或不足总时长的 1/4）。"""
+    from sqlpa.business import storage
+    sla_seconds = storage.sla_hours() * 3600.0
+    window = min(sla_seconds * 0.25, 3600.0)
+    return storage.hitl_soon_due(window, now_ts=now_ts)
+
+
+def _sla_outbox(summary: Dict, path: str | Path | None = None) -> None:
+    """把巡检结果写成一份可投递清单（cron 场景供人工/机器人读取，非权威存储）。"""
+    p = Path(path or (_DEFAULT.parent / "hitl_sla_outbox.jsonl"))
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(summary, ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        pass
+
+
+def webhook_url() -> str:
+    """SLA 升级/催办的**投递地址**：`SQLPA_HITL_WEBHOOK`。
+
+    未配置 → 只落 outbox 文件（本机/演示可读），不做网络投递。
+    """
+    return (os.environ.get("SQLPA_HITL_WEBHOOK") or "").strip()
+
+
+def _post_json(url: str, payload: Dict, timeout: float = 5.0) -> int:
+    """把 payload 以 JSON POST 到 url，返回 HTTP 状态码（失败抛异常）。
+
+    抽成独立函数是为了**可测**：用例可 monkeypatch 它，避免真打网络。
+    """
+    import urllib.request
+    data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — 地址来自运维配置
+        return int(getattr(resp, "status", 200) or 200)
+
+
+def deliver_webhook(payload: Dict, url: Optional[str] = None,
+                    timeout: float = 5.0, post=None) -> Dict:
+    """把巡检结果投递到 webhook（未配置地址 → 显式返回未投递，不静默成功）。
+
+    为什么要有：此前 SLA 升级只写**本地 outbox 文件** —— 没有任何"消息真的发出去了"
+    的动作，"催办"就只是落盘。接了 webhook 后，升级/催办能推给 IM/工单系统。
+    """
+    target = (url if url is not None else webhook_url()).strip()
+    if not target:
+        return {"delivered": False, "channel": "none",
+                "reason": "未配置 SQLPA_HITL_WEBHOOK，仅写入本地 outbox"}
+    sender = post or _post_json
+    try:
+        status = sender(target, payload, timeout)
+        return {"delivered": True, "channel": "webhook", "status": status}
+    except Exception as e:  # noqa: BLE001 — 投递失败不能影响巡检结果本身
+        return {"delivered": False, "channel": "webhook",
+                "reason": f"{type(e).__name__}: {e}"}
+
+
+
+def sweep(now_ts: Optional[float] = None, actor: str = "system:sla") -> Dict:
+    """执行一次 SLA 巡检：超期 → 升级；临期 → 催办。返回处理明细。
+
+    **幂等**：已升级的不再升级、已催办的不再催办（由 storage 层查询条件保证），
+    所以随便被 cron 高频调用也不会重复刷屏。
+    """
+    from sqlpa.business import storage
+    ts = time.time() if now_ts is None else float(now_ts)
+    hours = storage.sla_hours()
+    escalated: List[dict] = []
+    reminded: List[dict] = []
+    for rec in storage.hitl_due(ts):
+        rid = rec.get("record_id") or ""
+        overdue_h = max(0.0, (ts - float(rec.get("due_at") or ts)) / 3600.0)
+        note = (f"超时升级：已超 SLA {overdue_h:.1f}h（SLA={hours:g}h），"
+                f"升级至 {rec.get('owner') or '未指派负责人'}")
+        if storage.hitl_mark_escalated(rid, actor=actor, note=note):
+            escalated.append({**rec, "overdue_hours": round(overdue_h, 2), "note": note})
+            _append_event({**rec, "overdue_hours": round(overdue_h, 2)}, "escalate")
+    for rec in soon_due(ts):
+        rid = rec.get("record_id") or ""
+        left_h = max(0.0, (float(rec.get("due_at") or ts) - ts) / 3600.0)
+        note = f"临期催办：距 SLA 截止仅剩 {left_h:.1f}h，请尽快处理"
+        if storage.hitl_mark_reminded(rid, actor=actor, note=note):
+            reminded.append({**rec, "left_hours": round(left_h, 2), "note": note})
+            _append_event({**rec, "left_hours": round(left_h, 2)}, "remind")
+    summary = {"ok": True, "checked_at": ts, "sla_hours": hours,
+               "escalated_count": len(escalated), "reminded_count": len(reminded),
+               "escalated": escalated, "reminded": reminded}
+    if escalated or reminded:
+        _sla_outbox(summary)
+        # 真实投递：outbox 只是本地清单，webhook 才是"消息真的发出去了"。
+        # 投递结果一并放进 summary，调用方（cron / API）可据 delivered 判断是否告警失败。
+        summary["delivery"] = deliver_webhook({
+            "event": "hitl_sla_sweep",
+            "checked_at": ts,
+            "sla_hours": hours,
+            "escalated": [{"record_id": r.get("record_id"),
+                           "matched_metric": r.get("matched_metric"),
+                           "owner": r.get("owner"),
+                           "overdue_hours": r.get("overdue_hours"),
+                           "note": r.get("note")} for r in escalated],
+            "reminded": [{"record_id": r.get("record_id"),
+                          "matched_metric": r.get("matched_metric"),
+                          "owner": r.get("owner"),
+                          "left_hours": r.get("left_hours"),
+                          "note": r.get("note")} for r in reminded],
+        })
+    else:
+        summary["delivery"] = {"delivered": False, "channel": "none",
+                               "reason": "本轮无升级/催办，无需投递"}
+    return summary
+

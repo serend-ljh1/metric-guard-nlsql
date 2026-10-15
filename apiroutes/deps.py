@@ -148,6 +148,53 @@ class HitlDecisionIn(BaseModel):
     note: str = Field("", description="人工复核意见")
 
 
+class FavoriteIn(BaseModel):
+    """新增收藏：把一次查询存进"我的收藏"，供以后一键复跑。"""
+    title: str = Field(..., description="收藏标题（用户自填）")
+    user_input: str = Field("", description="原始自然语言问题")
+    generated_sql: str = Field("", description="可复现的 SQL（可选）")
+
+
+class FeedbackIn(BaseModel):
+    """提交反馈：对一次查询点赞/点踩并附评论（坏例可导出补充评测集）。"""
+    query_id: str = Field("", description="被评价的查询 id（审计表里的 query_id）")
+    user_input: str = Field("", description="原始问题")
+    generated_sql: str = Field("", description="当时的 SQL")
+    rating: int = Field(..., description="1=点赞 / -1=点踩")
+    comment: str = Field("", description="评论文本")
+
+
+class MetricIn(BaseModel):
+    """指标中心：新增/更新一条指标（写操作仅 admin，公式落回 business_config.yaml）。"""
+    key: str = Field(..., description="指标 key（小写字母开头）")
+    name: str = Field(..., description="指标名称")
+    metric_expr: str = Field(..., description="计算表达式（分子/分母公式，口径核心）")
+    from_clause: str = Field(..., description="数据来源（必须以 FROM 开头）")
+    desc: str = Field("", description="指标说明")
+    owner: str = Field("未指定", description="负责人")
+    version: str = Field("v1", description="口径版本")
+    join_clause: str = Field("", description="可选 JOIN 子句")
+    where_core: str = Field("1=1", description="核心过滤条件")
+    support_dims: List[str] = Field(default_factory=list, description="支持维度")
+    support_filters: List[str] = Field(default_factory=list, description="支持过滤")
+    editing_key: str = Field("", description="编辑既有指标时填原 key（重命名场景）")
+
+
+class DimensionIn(BaseModel):
+    """指标中心：新增/更新一个维度（写操作仅 admin）。"""
+    key: str = Field(..., description="维度 key")
+    name: str = Field(..., description="维度名称")
+    sql_fragment: str = Field(..., description="维度 SQL 片段")
+    editing_key: str = Field("", description="编辑既有维度时填原 key")
+
+
+class AliasIn(BaseModel):
+    """指标中心：新增/更新一条业务别名（写操作仅 admin）。"""
+    name: str = Field(..., description="业务别名（自然语言词）")
+    table: str = Field(..., description="映射到的表名")
+    col: str = Field("", description="可选列名")
+
+
 # ---------------- 鉴权 ----------------
 
 def _token_map() -> Dict[str, str]:
@@ -165,20 +212,45 @@ def _token_map() -> Dict[str, str]:
     return out
 
 
-def _resolve_role(token: Optional[str], requested: str) -> str:
-    """决定本次请求实际使用的角色。
+def _token_owner(token: Optional[str]) -> str:
+    """无登录态时的调用者展示名：取凭据指纹（不落 token 原文）。"""
+    if token:
+        return "token:" + hashlib.sha256(token.encode()).hexdigest()[:8]
+    return "anonymous"
 
-    原则：**角色只能来自凭据，不能来自请求体**。
-    - 配了 token：必须提供有效 token；角色取自 token。请求体 role 只能用于降级
-      （当它与 token 角色不同时，一律以 token 角色为准，避免提权）。
-    - 未配 token：忽略请求体 role，使用最小权限默认角色。
+
+def _resolve_identity(token: Optional[str], requested: str = "") -> Dict[str, str]:
+    """解析本次请求的 (username, role) —— **角色只能来自凭据，不能来自请求体**。
+
+    三种凭据来源，优先级从高到低：
+      1. **登录会话**（`storage.sessions`）：token 是登录签发的随机串 → 归属人与角色
+         都从会话记录取，审计因此能记到具体的人；
+      2. **静态 token**（`SQLPA_API_TOKENS`）：未登录时的兼容模式，角色取自 token，
+         用户名为 token 指纹（无法知道是谁，但至少不匿名）；
+      3. 都没配（本地/演示/测试）：忽略请求体 role，用最小权限默认角色。
     """
+    if token:
+        try:
+            from sqlpa.business import storage
+            sess = storage.get_session(token)
+        except Exception:  # noqa: BLE001 —— 会话存储不可用不应让鉴权整体失败
+            sess = None
+        if sess:
+            return {"username": sess.get("username") or _token_owner(token),
+                    "role": sess.get("role") or "analyst", "source": "session"}
     tokens = _token_map()
     if tokens:
         if not token or token not in tokens:
             raise HTTPException(status_code=401, detail="缺少或无效的 X-API-Token")
-        return tokens[token]
-    return (os.getenv("SQLPA_DEFAULT_ROLE") or "analyst").strip() or "analyst"
+        return {"username": _token_owner(token), "role": tokens[token], "source": "static"}
+    return {"username": _token_owner(token),
+            "role": (os.getenv("SQLPA_DEFAULT_ROLE") or "analyst").strip() or "analyst",
+            "source": "default"}
+
+
+def _resolve_role(token: Optional[str], requested: str) -> str:
+    """决定本次请求实际使用的角色（`_resolve_identity` 的角色投影）。"""
+    return _resolve_identity(token, requested)["role"]
 
 
 def _caller_key(token: Optional[str], role: str) -> str:
@@ -188,11 +260,52 @@ def _caller_key(token: Optional[str], role: str) -> str:
     return f"role:{role}"
 
 
-# ---- 最简内存滑动窗口限速（保护烧钱/重活端点）----
+def _identify(token: Optional[str], requested: str = "") -> Dict[str, str]:
+    """端点统一入口：**一次**解析出 (username, role, caller)。
+
+    为什么要合并：`_resolve_role` + `_caller_key` 各自解析会导致对 sessions 表查两次；
+    且登录用户应以**用户维度**共享会话记忆（重新登录不该丢掉下钻上下文），
+    所以 caller 在会话模式下取 `user:<用户名>`。
+    """
+    ident = _resolve_identity(token, requested)
+    username, source = ident["username"], ident["source"]
+    if source == "session" and username:
+        caller = f"user:{username}"
+    else:
+        caller = _caller_key(token, ident["role"])
+    return {"username": username, "role": ident["role"], "caller": caller, "source": source}
+
+
+# ---- 滑动窗口限速（内存缓存 + SQLite 持久化；保护烧钱/重活端点）----
+# 落库的意义：单进程重启不重置、多 worker 共享同一 DB 文件时限速才真的是……
+# 全局限速。（此前纯内存：重启即清零、多 worker 各算各的。）
 _RATE_LOCK = threading.Lock()
 _RATE_HITS: Dict[str, List[float]] = {}
 _RATE_MAX = int(os.getenv("SQLPA_RATE_LIMIT_PER_MIN", "30") or 30)
 _RATE_WINDOW = 60.0
+
+
+def _rate_read(key: str) -> List[float]:
+    """读该 bucket 的时间戳窗口：内存缓存优先，未命中回落到持久层。"""
+    hits = _RATE_HITS.get(key)
+    if hits is not None:
+        return hits
+    try:
+        from sqlpa.business import storage
+        hits = [float(t) for t in storage.rate_load(key)]
+    except Exception:  # noqa: BLE001
+        hits = []
+    _RATE_HITS[key] = hits
+    return hits
+
+
+def _rate_write(key: str, hits: List[float]) -> None:
+    _RATE_HITS[key] = hits
+    try:
+        from sqlpa.business import storage
+        storage.rate_save(key, hits, window_seconds=_RATE_WINDOW)
+    except Exception:  # noqa: BLE001 —— 持久化失败不影响本次限速判定
+        pass
 
 
 def _rate_limit(caller: str, bucket: str = "analyze") -> None:
@@ -206,13 +319,13 @@ def _rate_limit(caller: str, bucket: str = "analyze") -> None:
     now = time.time()
     key = f"{bucket}::{caller}"
     with _RATE_LOCK:
-        hits = [t for t in _RATE_HITS.get(key, []) if now - t < _RATE_WINDOW]
+        hits = [t for t in _rate_read(key) if now - t < _RATE_WINDOW]
         if len(hits) >= _RATE_MAX:
-            _RATE_HITS[key] = hits
+            _rate_write(key, hits)
             raise HTTPException(status_code=429,
                                 detail=f"请求过于频繁（{bucket} 每分钟上限 {_RATE_MAX}），请稍后再试")
         hits.append(now)
-        _RATE_HITS[key] = hits
+        _rate_write(key, hits)
 
 
 # ---------------- 会话记忆（并发安全） ----------------
@@ -233,7 +346,11 @@ _SESSION_MAX = int(os.getenv("SQLPA_SESSION_MAX", "500") or 500)
 
 
 def _session_memory(session_id: Optional[str], caller: str = "role:analyst") -> Dict:
-    """取/建会话记忆 dict（**可变共享引用**，供 run_analysis 跨轮读写）。"""
+    """取/建会话记忆 dict（**可变共享引用**，供 run_analysis 跨轮读写）。
+
+    缓存未命中时从**持久层恢复**：这样后端重启、或换到同一 DB 文件的另一个 worker，
+    仍能续上「那 SP 呢」式多轮下钻，而不是把上下文清空。
+    """
     if not session_id:
         return {}
     key = f"{caller}::{session_id}"
@@ -251,7 +368,28 @@ def _session_memory(session_id: Optional[str], caller: str = "role:analyst") -> 
                 _SESSION_MEMORY.pop(k, None)
                 _SESSION_LOCKS.pop(k, None)
         _SESSION_SEEN[key] = now
-        return _SESSION_MEMORY.setdefault(key, {})
+        if key not in _SESSION_MEMORY:
+            _SESSION_MEMORY[key] = _session_restore(key)
+        return _SESSION_MEMORY[key]
+
+
+def _session_restore(key: str) -> Dict:
+    """从持久层恢复会话记忆（失败回落空 dict —— 记忆丢了不该让分析失败）。"""
+    try:
+        from sqlpa.business import storage
+        restored = storage.session_load(key)
+        return restored if isinstance(restored, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _session_persist(key: str, data: Dict) -> None:
+    """把本轮会话记忆写回持久层（失败只记日志，不影响已完成的分析）。"""
+    try:
+        from sqlpa.business import storage
+        storage.session_save(key, data, ttl_seconds=_SESSION_TTL_SECONDS)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _get_session_lock(key: str) -> "threading.RLock":
@@ -265,24 +403,31 @@ def _session_guard(session_id: Optional[str], caller: str = "role:analyst"):
     """会话记忆 + 独占锁：同一 (caller, session_id) 的并发分析被串行化。
 
     session_id 为空 → 一次性无记忆会话（返回临时空 dict，无锁）。
+    非空时在**持有独占锁期间**跑完本轮，结束时把记忆写回持久层。
     """
     mem = _session_memory(session_id, caller)
     if not session_id:
         yield mem
         return
-    lock = _get_session_lock(f"{caller}::{session_id}")
+    key = f"{caller}::{session_id}"
+    lock = _get_session_lock(key)
     with lock:
         # 握锁期间该会话记忆对本请求独占，避免并发写撕裂
-        _SESSION_SEEN[f"{caller}::{session_id}"] = time.time()
-        yield mem
+        _SESSION_SEEN[key] = time.time()
+        try:
+            yield mem
+        finally:
+            _session_persist(key, mem)
 
 
 # ---------------- 分析内部复用 ----------------
 
-def _analyze_run(q: "AnalyzeIn", role: str, caller: str = "role:analyst") -> Dict:
+def _analyze_run(q: "AnalyzeIn", role: str, caller: str = "role:analyst",
+                 username: str = "") -> Dict:
     """非流式多 Agent 分析（/api/analyze/report 内部复用，避免重复实现）。"""
     from sqlpa.analysis.orchestrator import run_analysis
     with _session_guard(q.session_id, caller) as mem:
         return run_analysis(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                            role=role, alert_threshold_pct=q.alert_threshold_pct,
+                            role=role, username=username,
+                            alert_threshold_pct=q.alert_threshold_pct,
                             emit=None, memory=mem)

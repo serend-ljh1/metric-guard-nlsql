@@ -146,21 +146,26 @@
 | 页面/能力 | 说明 |
 |---|---|
 | 🧪 分析演示（Vue3 + ECharts） | **主前端页面**：六 Agent 分析链可视化 + 归因/下钻/决策，SSE 流式（`web/`） |
-| 🛠️ 治理 / 复核看板（Vue3） | **新增前端页签**：并发拉取口径冲突 / HITL 待办 / 口径确认记录 / 订阅规则四格展示 |
+| 🛠️ 治理 / 复核看板（Vue3） | **前端页签**：并发拉取口径冲突 / HITL 待办 / **SLA 超期升级** / 口径确认记录 / 订阅规则五格展示（含 admin「SLA 巡检」按钮） |
+| 💼 我的工作台（Vue3 + API） | **新增前端页签**：查询历史（按调用者隔离）+ 收藏（**可一键复跑**回填分析台）+ 反馈（👍/👎 + 备注，点踩坏例可补评测集） |
+| 🔐 登录与身份（API） | `POST /api/auth/login`（口令校验→签发随机会话 token）、`POST /api/auth/logout`（即时撤销）、`GET /api/auth/me`；前端登录条支持账号口令与静态凭据两种方式，所有请求（含 SSE 与 Word 文件流）带 `X-API-Token`；**审计与治理动作记到具体的人** |
 | 💼 业务取数（API） | `POST /api/query`：口径内→配置公式硬约束（🛡️认证）；口径外→明确拒绝并给出可操作原因 |
 | 🧭 多 Agent 分析（API） | `POST /api/analyze`、`/api/analyze/stream`、`/api/analyze/report`：六 Agent 编排 + SSE + 报告导出（Word 走文件流） |
 | 📈 指标口径治理（API） | `GET /api/governance/conflicts`（冲突检测）、`GET /api/metrics/history`（变更历史）、`GET /api/metrics/lineage`（表/列血缘）、`POST /api/metrics/rollback`（回滚，仅 admin） |
+| 🚨 HITL 工单闭环（API + CLI） | `GET /api/hitl`、`/api/hitl/{id}/history`、`POST /api/hitl/{id}/decide`、`/api/hitl/{id}/verify`（重跑验证）；**SLA**：`GET /api/hitl/escalations`（超期/临期）、`POST /api/hitl/sweep`（admin 巡检）；定时走 `tools/run_hitl_sla.py`（cron） |
 | 🔔 订阅告警（API + CLI） | `GET/POST /api/subscriptions`、`DELETE /api/subscriptions/{id}`、`POST /api/subscriptions/check`；调度走 `tools/run_subscriptions.py`（cron）+ console/file/webhook 投递 |
-| ⚙️ 指标中心（库层） | `metric_store` 提供指标/维度/别名的增删改与校验；**尚无对应 API/页面** |
+| ⚙️ 指标中心（API，写操作限 admin） | `metric_store` 提供指标/维度/别名的增删改与校验，已通过 `POST /api/metrics/upsert`、`DELETE /api/metrics/{key}`、`POST /api/metrics/dimensions/upsert`、`DELETE /api/metrics/dimensions/{key}`、`POST /api/metrics/aliases`、`DELETE /api/metrics/aliases/{name}` 暴露；**可视化编辑页面尚未提供** |
 | 🗄️ 数据源管理（API 只读） | `GET /api/datasources` 列出已注册数据源（密码掩码）；**注册/编辑为脚本或配置操作** |
-| 📜 查询历史 / ⭐ 收藏 / 👍 反馈 | 数据表已在 `storage.py`（users/audit/feedback/favorites），**尚未暴露端点与页面** |
-| 🔌 REST API | FastAPI：`/api/query` `/api/metrics` `/api/audit` `/api/datasources` `/health`，Swagger 在 `/docs` |
+| 📜 查询历史 / ⭐ 收藏 / 👍 反馈 | 已暴露端点（`GET /api/history`、`GET/POST /api/favorites`、`DELETE /api/favorites/{id}`、`GET/POST /api/feedback`）+ 前端**我的工作台**页签（历史按调用者隔离，收藏可复跑） |
+| 🔌 REST API | FastAPI：`/api/query` `/api/metrics` `/api/audit` `/api/datasources` `/api/auth/*` `/health`，Swagger 在 `/docs` |
 | 🎯 外部公开基准 | `evaluation/eval_external_bank.py`：第三方问题+gold SQL（Spider dev）判对错；覆盖率/覆盖内正确率/拒答归因三张表 |
 | 🛡️ 外部对抗语料 | `evaluation/eval_sandbox_external.py`：48 条破坏性 + 13 条只读语料，报拦截率/**误杀率**/库不变性 |
 
 > ⚠️ **与历史版本的差异**：早期 README 曾列出「登录认证 / 查询历史 / 收藏夹 / 指标中心 / 数据源管理」等
-> Streamlit 页面。随 `app.py`（Streamlit 前端）下线、前端改为 Vue3 **只保留分析演示页 + 治理看板**，
-> 上表已按仓库现状重写——文档不再描述不存在的界面。
+> Streamlit 页面。随 `app.py`（Streamlit 前端）下线，前端改为 Vue3，现有**分析演示 / 治理复核看板 / 我的工作台**三个页签：
+> 其中**登录认证**（`/api/auth/*`）、**查询历史 / 收藏 / 反馈**（`/api/history`、`/api/favorites`、`/api/feedback`）、
+> **指标中心写接口**（`/api/metrics/*`，仅 admin）均已实现。**仅"指标中心可视化编辑页面"与"数据源注册/编辑界面"仍未提供**
+> （前者可走 API，后者为脚本/配置操作）。文档不再描述不存在的界面。
 
 > 📂 **目录结构**（含 `apiroutes/` 路由层、`src/sqlpa/` 模块、`tests/`、`evaluation/` 详解）
 > 见 [`docs/architecture.md`](docs/architecture.md)。
@@ -238,6 +243,15 @@ start_web.bat        # 前端 http://localhost:5173
 前端在 **5173** 打开后，输入「2018年6月 GMV 为什么比上月跌？」即可看到六 Agent 流式执行 + 归因可视化 + 决策闭环。
 
 > 也可用容器一键部署完整前后端：`docker compose up`，随后访问 `http://localhost:8080`。
+>
+> 🔐 **登录 / 凭据**：默认（未配置任何凭据）按最小权限 analyst 放行，开箱即用。
+> 需要角色与"审计记到人"时，要么设 `SQLPA_BOOTSTRAP_ADMIN_USER/PASSWORD` 建管理员账号后在页面登录，
+> 要么沿用静态 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 并把 token 粘进前端登录条。
+>
+> ⚠️ **部署边界**：以上脚本与 `docker-compose.yml` 默认**单 worker** 启动。SQLite 已开 **WAL + busy_timeout**
+> （`storage._conn()`，可用 `SQLPA_SQLITE_JOURNAL_MODE` / `SQLPA_SQLITE_BUSY_TIMEOUT_MS` 覆盖），会话记忆与限速计数均已落库：
+> 因此**各 worker 指向同一 `data/app.db`** 时，并发读写可用且状态一致（单进程重启亦可续）。
+> 仍不建议依赖"多机共享同一文件"横向扩容，跨机应改用 Redis 等共享存储。
 
 ### 方式二：本地（完整）
 

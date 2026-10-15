@@ -1,39 +1,63 @@
 <script setup>
 // 治理 / HITL 看板：把此前"只有后端端点、前端没入口"的治理能力暴露出来。
 // 覆盖：口径冲突（/api/governance/conflicts）、人工复核队列（/api/hitl）、
-//       待确认口径（/api/confirmations）、订阅规则（/api/subscriptions）。
+//       SLA 超期升级（/api/hitl/escalations）、待确认口径（/api/confirmations）、
+//       订阅规则（/api/subscriptions）。
+// 所有请求都带 X-API-Token：否则在启用了鉴权的部署下，admin 动作（巡检/推进工单）
+// 会被 403 挡掉，看板看起来"有入口但点不动"。
 import { ref, onMounted } from 'vue'
+import { authHeaders } from '../auth'
 
 const loading = ref(false)
 const error = ref('')
 const conflicts = ref({ total: 0, by_type: {}, conflicts: [] })
 const hitl = ref([])
+const escalations = ref({ sla_hours: 0, escalated: [], soon_due: [] })
 const confirmations = ref([])
 const subscriptions = ref([])
 
 async function getJson(url) {
-  const r = await fetch(url)
+  const r = await fetch(url, { headers: authHeaders() })
   const j = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(j.detail || ('请求失败 HTTP ' + r.status))
   return j
+}
+
+/** 手动触发一次 SLA 巡检（仅 admin）：超期升级 / 临期催办，便于演示与运维。 */
+async function sweep() {
+  loading.value = true
+  error.value = ''
+  try {
+    const r = await fetch('/api/hitl/sweep', { method: 'POST', headers: authHeaders() })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.detail || ('SLA 巡检失败 HTTP ' + r.status))
+    alert(`SLA 巡检完成：超时升级 ${j.escalated_count}、临期催办 ${j.reminded_count}`)
+  } catch (e) {
+    error.value = e.message || String(e)
+  } finally {
+    loading.value = false
+    await load()
+  }
 }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    // 并行拉取四个治理面；任一端点失败不阻塞其余（各自 try）
-    const [c, h, cf, s] = await Promise.allSettled([
+    // 并行拉取五个治理面；任一端点失败不阻塞其余（各自 try）
+    const [c, h, es, cf, s] = await Promise.allSettled([
       getJson('/api/governance/conflicts'),
       getJson('/api/hitl?status=pending'),
+      getJson('/api/hitl/escalations'),
       getJson('/api/confirmations'),
       getJson('/api/subscriptions'),
     ])
     if (c.status === 'fulfilled') conflicts.value = c.value
     if (h.status === 'fulfilled') hitl.value = h.value || []
+    if (es.status === 'fulfilled') escalations.value = es.value || escalations.value
     if (cf.status === 'fulfilled') confirmations.value = cf.value || []
     if (s.status === 'fulfilled') subscriptions.value = s.value || []
-    const firstReject = [c, h, cf, s].find((x) => x.status === 'rejected')
+    const firstReject = [c, h, es, cf, s].find((x) => x.status === 'rejected')
     if (firstReject) error.value = '部分治理数据获取失败：' + firstReject.reason.message
   } finally {
     loading.value = false
@@ -47,9 +71,12 @@ onMounted(load)
   <section class="gov card">
     <div class="gov-head">
       <h2>治理 / 人工复核看板</h2>
-      <button class="ghost" :disabled="loading" @click="load()">
-        {{ loading ? '刷新中…' : '↻ 刷新' }}
-      </button>
+      <div class="gov-actions">
+        <button class="ghost" :disabled="loading" @click="sweep()">SLA 巡检（admin）</button>
+        <button class="ghost" :disabled="loading" @click="load()">
+          {{ loading ? '刷新中…' : '↻ 刷新' }}
+        </button>
+      </div>
     </div>
     <p v-if="error" class="err">⚠ {{ error }}</p>
 
@@ -75,9 +102,23 @@ onMounted(load)
         <div v-if="!hitl.length" class="empty">暂无待处理工单</div>
         <ul class="list">
           <li v-for="h in hitl" :key="h.record_id || h.id">
-            <b>{{ h.metric || h.metric_key }}</b>
+            <b>{{ h.matched_metric || h.metric || h.metric_key }}</b>
             <span class="ty">{{ h.status }}</span>
             <div class="muted">{{ h.time_spec || h.window || '' }} · {{ h.owner || '未指派' }}</div>
+          </li>
+        </ul>
+      </div>
+
+      <!-- SLA 超时升级：超期未闭环的工单（/api/hitl/escalations） -->
+      <div class="box">
+        <h3>SLA 超期升级（{{ escalations.escalated.length }}）</h3>
+        <div class="muted">SLA = {{ escalations.sla_hours }}h · 临期待催办 {{ escalations.soon_due.length }}</div>
+        <div v-if="!escalations.escalated.length" class="empty">暂无超期工单</div>
+        <ul class="list">
+          <li v-for="e in escalations.escalated" :key="e.record_id">
+            <b>{{ e.matched_metric }}</b>
+            <span class="ty warn">已升级</span>
+            <div class="muted">{{ e.escalated_at || '' }} · {{ e.owner || '未指派' }}</div>
           </li>
         </ul>
       </div>
@@ -114,6 +155,7 @@ onMounted(load)
 <style scoped>
 .gov { margin-top: 16px; }
 .gov-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gov-actions { display: flex; gap: 8px; }
 .gov h2 { margin: 0; font-size: 18px; color: var(--brand-2); }
 .grid { margin-top: 16px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
@@ -128,6 +170,7 @@ onMounted(load)
 .list li { font-size: 13px; }
 .ty { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: #22d3ee22;
       color: var(--brand-2); margin-left: 6px; }
+.ty.warn { background: #fbbf2422; color: #fbbf24; }
 .muted { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
 .empty { color: var(--text-muted); font-size: 13px; }
 .err { color: var(--danger); font-size: 13px; margin: 8px 0 0; }

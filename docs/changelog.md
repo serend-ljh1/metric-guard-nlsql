@@ -88,3 +88,49 @@
 > 33. **前端治理看板 + 工程化**：新增治理/HITL 复核看板；前端接入 eslint 与 node:test 单测；
 >     报告导出改文件流（`FileResponse`）；CI 统一 Python 3.12、改跑 `run_all.py` 并加覆盖率门槛；
 >     `start_api.bat` 拆分开发（`--reload`）/生产两脚本。评测方法学与局限说明拆入 `docs/`。
+
+## 第六轮（可运营轮）——把"演示能跑"推到"运营不塌"
+
+> 34. **真实登录 + 身份贯通审计**：新增 `POST /api/auth/login`（口令校验→签发随机会话 token，`sessions` 表含归属人与到期时间）、
+>     `POST /api/auth/logout`（即时撤销）、`GET /api/auth/me`。鉴权优先级改为
+>     **登录会话 > 静态 `SQLPA_API_TOKENS` > 最小权限默认角色**，取数/分析/治理动作的审计与流转 `actor`
+>     从此记到**具体的人**（此前只记到"某个 token"或空串）；登录按用户名限速挡撞库。
+>     前端新增登录条（账号口令 + 静态凭据两种方式），**所有请求都带 `X-API-Token`**——
+>     包括 SSE 流式与 Word 文件流下载这两条最容易漏加的链路。
+>     同时把 `storage.ensure_default_users()` 接进启动流程：此前它**只有测试会调**，
+>     "设了引导口令就自动建管理员账号"这件事实际上从没发生过，登录端点也就没有账号可用。
+> 35. **会话记忆与限速持久化**：两类状态从**纯进程内 dict** 迁到 SQLite（`session_memory` / `rate_limit` 表）——
+>     单进程重启不再丢多轮下钻上下文、不再把限速计数清零；多 worker 共享同一 DB 文件时行为一致。
+>     并在 README / [`docs/limitations.md`](limitations.md) 明确**部署边界**（默认单 worker；调大 `--workers` 需同库，跨机需 Redis）。
+> 36. **HITL SLA / 超时升级 / 催办**：工单登记即带 `due_at`（`SQLPA_HITL_SLA_HOURS`，默认 24h）；
+>     `hitl.sweep()` **幂等**地执行「超期 → 置 escalated 并写流转历史 + 审计」「临期（不足 1h 或 SLA 的 1/4）→ 催办一次」；
+>     新增 `GET /api/hitl/escalations`（超期/临期，看板数据源）、`POST /api/hitl/sweep`（仅 admin）与
+>     `tools/run_hitl_sla.py`（cron / Task Scheduler 调度入口，与 `run_subscriptions.py` 同款）；
+>     治理看板新增「SLA 超期升级」格与 admin「SLA 巡检」按钮。回归见 `tests/test_auth_session_sla.py`（13 项）。
+
+## 第七轮（补齐"有表无入口 / 有数无展示 / 有标记无投递"）
+
+> 37. **个人工作台（查询历史 / 收藏 / 反馈）**：`storage` 早就有 `audit_logs / favorites / feedback` 三张表与读写函数，
+>     却**没有任何端点**——"看历史 / 存收藏 / 提反馈"在系统里做不到。现新增 `GET /api/history`（按调用者隔离、分页）、
+>     `GET/POST /api/favorites`、`DELETE /api/favorites/{id}`（按 username 过滤，删不到别人的）、
+>     `GET/POST /api/feedback`（非 admin 只看自己的），并新增前端**「我的工作台」页签**（收藏支持**一键复跑**回填分析台）。
+>     回归见 `tests/test_workspace_api.py`。此前 README/`limitations.md` 均如实写"尚未暴露端点与页面"，本轮兑现。
+> 38. **统计门控从"只在后端"变为"前端可见"**：显著性检验（Welch z 的 z / p / α 与结论）此前只存在于
+>     `decision` 载荷里、界面看不见，用户无法复核"为什么没告警"。现于 `DecisionCard` 增加「统计门控」块，
+>     并为 `watch`（观察项·证据不足）/`inconclusive`（数据不足）补上各自的视觉语义——
+>     "没敢报"不再被显示成"没问题"。
+> 39. **指标中心写接口（CRUD，仅 admin）**：`metric_store` 的指标/维度/别名增删改与校验**无端点调用**，语义层只能手改 YAML。
+>     现新增 `POST /api/metrics/upsert`、`DELETE /api/metrics/{key}`、`POST/DELETE /api/metrics/dimensions*`、
+>     `POST/DELETE /api/metrics/aliases*`（写操作一律 admin；经校验后落回权威 `business_config.yaml`，
+>     并可经 `SQLPA_METRIC_CONFIG_PATH` 隔离写入）。回归见 `tests/test_metrics_admin_api.py`（含"编辑指标不得丢 join_clause"的历史事故回归）。
+> 40. **HITL 升级/催办的真实投递**：此前只写本地 outbox 文件，"催办"仅停留落盘。
+>     现 `hitl.deliver_webhook()` 把升级摘要 POST 到 **`SQLPA_HITL_WEBHOOK`**，投递结果挂回巡检 summary；
+>     未配置地址则**显式返回"未投递"**（不静默成功），投递失败被捕获且不影响巡检。回归见 `tests/test_hitl_webhook.py`。
+> 41. **SQLite 多 worker 就绪**：`storage._conn()` 开启 **WAL 日志模式 + busy_timeout**（可用 `SQLPA_SQLITE_JOURNAL_MODE`
+>     / `SQLPA_SQLITE_BUSY_TIMEOUT_MS` 覆盖），并发写不再直接抛 `database is locked`；同步更新 README / `limitations.md` 部署边界。
+>     回归见 `tests/test_sqlite_concurrency.py`（含 8 线程并发写）。
+> 42. **README 评测表格 ↔ 报告产物一致性校验**：新增 `evaluation/check_readme_consistency.py`，逐项比对 README 表格数字
+>     与 `evaluation/reports/*.json`（含 row1「100% × 5」压缩写法、row3「判定题 N」等结构性断言），
+>     并由 `tests/test_readme_consistency.py` 纳入 CI，防止"重跑后数字漂移、文档停在旧值"。
+>     **告警假阳性率仍无独立标注集，如实标注为未做**（不虚构 FP/FN 数字）。
+

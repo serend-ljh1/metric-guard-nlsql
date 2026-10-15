@@ -9,8 +9,8 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Header
 
-from .deps import (AnalyzeIn, ROOT, _bind_asof, _caller_key, _cfg, _db_path, _llm,
-                   _rate_limit, _resolve_role, _sandbox, _session_guard)
+from .deps import (AnalyzeIn, ROOT, _bind_asof, _cfg, _db_path, _identify, _llm,
+                   _rate_limit, _sandbox, _session_guard)
 
 router = APIRouter()
 
@@ -23,8 +23,8 @@ def api_analyze(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None))
     """
     from sqlpa.analysis.orchestrator import run_analysis
     _bind_asof()
-    role = _resolve_role(x_api_token, q.role)
-    caller = _caller_key(x_api_token, role)
+    ident = _identify(x_api_token, q.role)
+    role, caller, username = ident["role"], ident["caller"], ident["username"]
     _rate_limit(caller, "analyze")
     events: List[Dict] = []
 
@@ -33,7 +33,7 @@ def api_analyze(q: AnalyzeIn, x_api_token: Optional[str] = Header(default=None))
 
     with _session_guard(q.session_id, caller) as mem:
         final = run_analysis(q.question, _cfg(), _sandbox(), _db_path(), _llm(),
-                             role=role,
+                             role=role, username=username,
                              alert_threshold_pct=q.alert_threshold_pct,
                              emit=_emit,
                              confirm_id=q.confirm_id,
@@ -53,8 +53,8 @@ def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default
     from fastapi.responses import StreamingResponse
     import queue, threading
 
-    role = _resolve_role(x_api_token, q.role)
-    caller = _caller_key(x_api_token, role)
+    ident = _identify(x_api_token, q.role)
+    role, caller, username = ident["role"], ident["caller"], ident["username"]
     _rate_limit(caller, "analyze")
     qq: "queue.Queue[Dict]" = queue.Queue()
 
@@ -73,7 +73,7 @@ def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default
             with _session_guard(q.session_id, caller) as mem:
                 run_analysis(
                     question=q.question, cfg=_cfg(), sb=_sandbox(), db_path=_db_path(),
-                    llm=_llm(), role=role,
+                    llm=_llm(), role=role, username=username,
                     alert_threshold_pct=q.alert_threshold_pct, emit=_emit,
                     confirm_id=q.confirm_id,
                     memory=mem)
@@ -127,22 +127,22 @@ def api_analyze_report(q: AnalyzeIn, download: Optional[str] = None,
     from sqlpa.business.deliver import (export_analysis_report,
                                         export_analysis_report_docx)
     from .deps import _analyze_run
-    role = _resolve_role(x_api_token, q.role)
-    caller = _caller_key(x_api_token, role)
+    ident = _identify(x_api_token, q.role)
+    role, caller, username = ident["role"], ident["caller"], ident["username"]
     _rate_limit(caller, "report")
     if isinstance(q.final, dict) and q.final:
         final = q.final
     else:
         _bind_asof()
-        final = _analyze_run(q, role, caller)
+        final = _analyze_run(q, role, caller, username)
     if not final.get("ok"):
         return {"ok": False, "reject": final.get("reject") or "分析未完成，无法生成报告"}
     out_dir = Path(os.environ.get("SQLPA_REPORT_DIR") or (ROOT / "data" / "reports"))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     md_path = out_dir / f"analysis-{stamp}.md"
     docx_path = out_dir / f"analysis-{stamp}.docx"
-    export_analysis_report(md_path, q.question, final, username=role)
-    export_analysis_report_docx(docx_path, q.question, final, username=role)
+    export_analysis_report(md_path, q.question, final, username=username)
+    export_analysis_report_docx(docx_path, q.question, final, username=username)
     md = md_path.read_text(encoding="utf-8")
     if (download or "").lower() in ("docx", "word"):
         return FileResponse(

@@ -1,14 +1,81 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import AgentPanel from './components/AgentPanel.vue'
 import ChartsBoard from './components/ChartsBoard.vue'
 import DecisionCard from './components/DecisionCard.vue'
 import DataLineageCard from './components/DataLineageCard.vue'
 import GovernanceBoard from './components/GovernanceBoard.vue'
+import MyWorkspace from './components/MyWorkspace.vue'
 import { reduceAgents, lastError } from './sse'
+import { authUser, authHeaders, fetchMe, login, logout, useStaticToken } from './auth'
 
-// ---- 顶部视图切换：分析台 / 治理看板 ----
+// ---- 顶部视图切换：分析台 / 治理看板 / 我的工作台 ----
 const view = ref('analyze')
+
+// 收藏"复跑"：把收藏的问题回填到分析台并切过去（收藏若不指回分析，就只是文本摆设）
+function onReuse(q) { question.value = q; view.value = 'analyze' }
+
+// ---- 登录态（可运营的治理产品：角色来自凭据，审计记到人）----
+// 后端未配置任何凭据时，这里显示「未登录（默认最小权限）」，功能与以前完全一致。
+const loginUser = ref('')
+const loginPwd = ref('')
+const staticTok = ref('')
+const authBusy = ref(false)
+const authMsg = ref('')
+const showAuth = ref(false)     // 默认收起，避免干扰演示动线
+
+onMounted(async () => {
+  await fetchMe()
+  // 已配置凭据但本地没有有效身份 → 直接展开登录条，避免用户点了按钮才拿到 401
+  if (!authUser.value) showAuth.value = true
+})
+
+function identityText() {
+  const u = authUser.value
+  if (!u) return '未登录'
+  if (u.source === 'session') return `${u.username}（${u.role}）`
+  if (u.username && u.username.startsWith('token:')) return `凭据 ${u.username.slice(6)}（${u.role}）`
+  return `未登录（默认 ${u.role}）`
+}
+
+async function doLogin() {
+  if (!loginUser.value || !loginPwd.value) { authMsg.value = '请填写用户名与口令'; return }
+  authBusy.value = true
+  authMsg.value = ''
+  try {
+    const j = await login(loginUser.value, loginPwd.value)
+    authMsg.value = '已登录：' + j.username + '（' + j.role + '）'
+    loginPwd.value = ''
+    showAuth.value = false
+  } catch (e) {
+    authMsg.value = e.message || String(e)
+  } finally {
+    authBusy.value = false
+  }
+}
+
+async function doStaticToken() {
+  if (!staticTok.value.trim()) { authMsg.value = '请粘贴 API 凭据'; return }
+  authBusy.value = true
+  authMsg.value = ''
+  try {
+    const u = await useStaticToken(staticTok.value)
+    authMsg.value = u ? '凭据已生效（' + (u.role || '') + '）' : '凭据无效'
+    staticTok.value = ''
+    if (u) showAuth.value = false
+  } finally {
+    authBusy.value = false
+  }
+}
+
+async function doLogout() {
+  authBusy.value = true
+  await logout()
+  authBusy.value = false
+  authMsg.value = '已退出登录'
+  // 退出后重新问一次身份：后端若未开鉴权会返回匿名默认角色
+  await fetchMe()
+}
 
 // ---- 提问输入 ----
 const question = ref('2018年6月 GMV 为什么比上月跌？')
@@ -52,7 +119,7 @@ async function runAnalysis(confirmId) {
     if (confirmId) body.confirm_id = confirmId
     const resp = await fetch('/api/analyze/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     })
     if (!resp.ok || !resp.body) throw new Error('流式请求失败 HTTP ' + resp.status)
@@ -108,7 +175,7 @@ async function confirmAndRun() {
   if (cur && selectedMetric.value !== cur.proposed?.metric) {
     const url = '/api/confirmations/' + cur.confirm_id +
                 '/override?metric=' + encodeURIComponent(selectedMetric.value)
-    const r = await fetch(url, { method: 'POST' })
+    const r = await fetch(url, { method: 'POST', headers: authHeaders() })
     const j = await r.json().catch(() => ({}))
     if (!r.ok) { error.value = j.detail || '改选口径失败'; return }
     runAnalysis(j.confirm_id)
@@ -132,7 +199,7 @@ async function exportReport() {
   try {
     const resp = await fetch('/api/analyze/report', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ question: question.value, role: 'analyst', final: final.value }),
     })
     const body = await resp.json().catch(() => ({}))
@@ -152,7 +219,7 @@ async function downloadWord() {
   if (!final.value) return
   const resp = await fetch('/api/analyze/report?download=docx', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ question: question.value, role: 'analyst', final: final.value }),
   })
   if (!resp.ok) { error.value = '下载 Word 失败 HTTP ' + resp.status; return }
@@ -181,10 +248,38 @@ async function downloadWord() {
       <p class="sub">问一句「为什么」，系统自动归因下钻到底 → 诊断结论 + 依据 + 建议动作 → 决策闭环</p>
     </header>
 
+    <!-- 登录条：角色只来自凭据（登录会话 / 静态 token），审计因此能记到具体的人。
+         后端未配置任何凭据时显示「未登录（默认 analyst）」，功能与以前完全一致。 -->
+    <section class="auth card">
+      <div class="auth-main">
+        <span class="who">身份：<b>{{ identityText() }}</b></span>
+        <button class="ghost" @click="showAuth = !showAuth">{{ showAuth ? '收起' : '登录 / 凭据' }}</button>
+        <button v-if="authUser && authUser.source === 'session'" class="ghost"
+                :disabled="authBusy" @click="doLogout()">退出登录</button>
+      </div>
+      <div v-if="showAuth" class="auth-rows">
+        <div class="auth-row">
+          <input v-model="loginUser" class="q narrow" placeholder="用户名" />
+          <input v-model="loginPwd" class="q narrow" type="password" placeholder="口令"
+                 @keyup.enter="doLogin()" />
+          <button class="run small" :disabled="authBusy" @click="doLogin()">登录</button>
+        </div>
+        <div class="auth-row">
+          <input v-model="staticTok" class="q" placeholder="或粘贴 API 凭据（SQLPA_API_TOKENS 静态部署）"
+                 @keyup.enter="doStaticToken()" />
+          <button class="ghost" :disabled="authBusy" @click="doStaticToken()">使用凭据</button>
+        </div>
+        <p v-if="authMsg" class="auth-msg">{{ authMsg }}</p>
+      </div>
+    </section>
+
     <div class="tabs">
       <button :class="['tab', { active: view === 'analyze' }]" @click="view = 'analyze'">分析台</button>
       <button :class="['tab', { active: view === 'governance' }]" @click="view = 'governance'">
         治理 / 复核看板
+      </button>
+      <button :class="['tab', { active: view === 'workspace' }]" @click="view = 'workspace'">
+        我的工作台
       </button>
     </div>
 
@@ -267,6 +362,9 @@ async function downloadWord() {
     <!-- 治理 / 人工复核看板：口径冲突、HITL 队列、待确认口径、订阅规则 -->
     <GovernanceBoard v-if="view === 'governance'" />
 
+    <!-- 我的工作台：查询历史 / 收藏（可复跑）/ 反馈 -->
+    <MyWorkspace v-if="view === 'workspace'" @reuse="onReuse" />
+
     <footer class="foot">
       数据底座：业务语义层确定性取数（口径已认证）· 分析主角：六 Agent 协作编排 · 决策闭环写入 HITL
     </footer>
@@ -282,6 +380,18 @@ async function downloadWord() {
        box-shadow: 0 0 18px var(--brand); }
 .brand h1 { font-size: 26px; margin: 0; letter-spacing: .5px; }
 .sub { color: var(--text-muted); margin: 8px 0 0; font-size: 14px; }
+
+/* ---- 登录条 ---- */
+.auth { padding: 12px 16px; margin-bottom: 12px; }
+.auth-main { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.auth .who { color: var(--text-muted); font-size: 13.5px; }
+.auth .who b { color: var(--brand-2); }
+.auth-rows { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.auth-row { display: flex; gap: 8px; align-items: center; }
+.auth-row .q { padding: 10px 12px; font-size: 13.5px; }
+.auth-row .q.narrow { flex: none; width: 168px; }
+.auth-row .run.small { padding: 0 18px; height: 38px; border-radius: 10px; font-size: 13.5px; }
+.auth-msg { margin: 0; color: var(--text-muted); font-size: 12.5px; }
 
 .tabs { display: flex; gap: 8px; margin: 4px 0 14px; }
 .tab { border: 1px solid var(--border); background: var(--surface-muted); color: var(--text-muted);

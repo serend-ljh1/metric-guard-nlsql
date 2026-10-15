@@ -6,9 +6,41 @@ from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException
 
-from .deps import HitlDecisionIn, _bind_asof, _cfg, _db_path, _resolve_role
+from .deps import HitlDecisionIn, _bind_asof, _cfg, _db_path, _identify, _resolve_role
 
 router = APIRouter()
+
+
+@router.get("/api/hitl/escalations")
+def api_hitl_escalations(limit: int = 50,
+                         x_api_token: Optional[str] = Header(default=None)):
+    """**已超 SLA 且升级**的未闭环工单（另附临期未催办的工单数）。
+
+    为什么要有：只把工单写进表里、没人推动，"闭环"就只是文档里的词。
+    这里把"谁的任务已经超期"变成可查询的事实。
+    """
+    _resolve_role(x_api_token, "analyst")
+    from sqlpa.business import hitl, storage
+    return {"sla_hours": storage.sla_hours(),
+            "escalated": storage.list_hitl_escalated(limit=max(1, min(limit, 500))),
+            "soon_due": [{"record_id": r.get("record_id"),
+                          "matched_metric": r.get("matched_metric"),
+                          "owner": r.get("owner"), "due_at": r.get("due_at")}
+                         for r in hitl.soon_due()]}
+
+
+@router.post("/api/hitl/sweep")
+def api_hitl_sweep(x_api_token: Optional[str] = Header(default=None)):
+    """立即执行一次 SLA 巡检（**仅 admin**）：超期 → 升级并留痕；临期 → 催办。
+
+    生产上应由 cron 调用（见 tools/run_hitl_sla.py）；这个端点让演示与运维
+    可以不依赖调度器手动触发一次。
+    """
+    ident = _identify(x_api_token, "analyst")
+    if ident["role"] != "admin":
+        raise HTTPException(status_code=403, detail="执行 HITL SLA 巡检需要 admin 权限")
+    from sqlpa.business import hitl
+    return hitl.sweep(actor=f"api:{ident['username']}")
 
 
 @router.get("/api/hitl")
@@ -37,14 +69,15 @@ def api_hitl_history(record_id: str, x_api_token: Optional[str] = Header(default
 def api_hitl_decide(record_id: str, body: HitlDecisionIn,
                     x_api_token: Optional[str] = Header(default=None)):
     """推进工单状态（**仅 admin**）——人工处理的入口，此前系统里根本不存在这个端点。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
+    ident = _identify(x_api_token, "analyst")
+    if ident["role"] != "admin":
         raise HTTPException(status_code=403, detail="推进 HITL 工单需要 admin 权限")
     from sqlpa.business import hitl
     if body.status not in hitl.STATUSES:
         raise HTTPException(status_code=400,
                             detail=f"非法状态 {body.status}，允许：{list(hitl.STATUSES)}")
-    if not hitl.resolve(record_id, body.status, human_note=body.note, actor=f"api:{role}"):
+    if not hitl.resolve(record_id, body.status, human_note=body.note,
+                        actor=f"api:{ident['username']}"):
         raise HTTPException(status_code=404, detail=f"工单不存在：{record_id}")
     return {"ok": True, "record_id": record_id, "status": body.status}
 
@@ -53,13 +86,13 @@ def api_hitl_decide(record_id: str, body: HitlDecisionIn,
 def api_hitl_verify(record_id: str, x_api_token: Optional[str] = Header(default=None)):
     """**重跑验证**（仅 admin）：把工单指标在其时间窗上重新算一遍，
     仍异常 → reopened，已恢复 → verified。人工说"修好了"不算数，数据说了才算。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
+    ident = _identify(x_api_token, "analyst")
+    if ident["role"] != "admin":
         raise HTTPException(status_code=403, detail="重跑验证需要 admin 权限")
     from sqlpa.business import hitl
     _bind_asof()
     out = hitl.verify(record_id, _cfg(), sqlite3.connect(_db_path()), _db_path(),
-                      actor=f"api:{role}")
+                      actor=f"api:{ident['username']}")
     if not out.get("ok"):
         raise HTTPException(status_code=400, detail=out.get("reason", "重跑验证失败"))
     return out
@@ -96,10 +129,11 @@ def api_confirmations_override(confirm_id: str, metric: str,
 def api_confirmations_dismiss(confirm_id: str,
                               x_api_token: Optional[str] = Header(default=None)):
     """驳回一条待确认口径（仅 admin）。"""
-    role = _resolve_role(x_api_token, "analyst")
-    if role != "admin":
+    ident = _identify(x_api_token, "analyst")
+    if ident["role"] != "admin":
         raise HTTPException(status_code=403, detail="处理口径确认需要 admin 权限")
     from sqlpa.business import storage
-    if not storage.decide_confirmation(confirm_id, "dismissed", actor=f"api:{role}"):
+    if not storage.decide_confirmation(confirm_id, "dismissed",
+                                       actor=f"api:{ident['username']}"):
         raise HTTPException(status_code=404, detail=f"确认记录不存在或已处理：{confirm_id}")
     return {"ok": True, "confirm_id": confirm_id, "status": "dismissed"}

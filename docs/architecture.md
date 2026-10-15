@@ -9,13 +9,15 @@
 sqlpa/
 ├── api.py                          # ★ FastAPI REST 后端装配层（/health + include 各 router） + SSE 流式分析端点
 ├── apiroutes/                      # ★ 路由层（由 api.py 装配，对外路径/签名不变）
-│   ├── deps.py                     #   公共依赖：鉴权/角色/限速/会话记忆（并发保护）/配置/沙箱
+│   ├── deps.py                     #   公共依赖：鉴权(登录会话+静态token)/角色/限速/会话记忆（持久化+并发保护）/配置/沙箱
+│   ├── auth.py                     #   /api/auth/login /api/auth/logout /api/auth/me（登录会话）
 │   ├── query.py                    #   /api/query /api/report /api/metrics
 │   ├── analyze.py                  #   /api/analyze /api/analyze/stream /chart-template /report(文件流)
-│   ├── governance.py               #   /api/governance/conflicts /api/audit /api/metrics/(history|lineage|rollback) /api/datasources
-│   ├── hitl.py                     #   /api/hitl* /api/confirmations*
-│   └── subscriptions.py            #   /api/subscriptions*
-├── web/                            # ★ Vue3 + ECharts 前端（SSE 流式 Agent 面板 + 归因可视化 + 决策卡 + 治理看板 + DataLineage）
+│   ├── governance.py               #   /api/governance/conflicts /api/audit /api/metrics/(history|lineage|rollback|upsert|dimensions|aliases 写) /api/datasources
+│   ├── hitl.py                     #   /api/hitl*（含 /escalations 与 /sweep） /api/confirmations*
+│   ├── subscriptions.py            #   /api/subscriptions*
+│   └── workspace.py                #   /api/history /api/favorites /api/feedback（个人工作台）
+├── web/                            # ★ Vue3 + ECharts 前端（SSE 流式 Agent 面板 + 归因可视化 + 决策卡 + 治理看板 + 我的工作台 + DataLineage）
 ├── start_api.bat                   # ★ 一键启动后端（生产/演示，不热重载）
 ├── start_api_dev.bat               # ★ 开发模式后端（--reload 代码热重载）
 ├── start_web.bat                   # ★ 一键启动前端

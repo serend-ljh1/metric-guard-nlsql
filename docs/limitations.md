@@ -25,16 +25,35 @@
   `/api/audit` 只读 SQLite 并支持分页。权威写入失败会记日志与计数（`audit_write_failures()`，`/health` 可见）；
   镜像失败只影响镜像（`audit_mirror_failures()`），不再出现"两个 sink 各说各话"。
 - **前端已在 CI 做 lint / 单测 / 构建校验**：`web/`（Vue3 + ECharts，源码已入库）由 CI 的 `web` job 执行
-  `npm ci` + `npm run lint` + `npm run test` + `npm run build`；登录、查询历史、收藏、反馈等能力只有数据表与库函数，尚未暴露端点。
+  `npm ci` + `npm run lint` + `npm run test` + `npm run build`；**登录已可从前端使用**（登录条 + 所有请求带 `X-API-Token`，
+  含 SSE 流式与 Word 文件流下载）。**查询历史 / 收藏 / 反馈已接入前端「我的工作台」页签**
+  （`/api/history`、`/api/favorites`、`/api/feedback`）；反馈尚**不能**由管理员一键导出为评测集（库层有
+  `storage.export_badcases`，未加端点）。
 - **数据源密码**使用 XOR+Base64 **可逆编码**（密钥取自环境变量或本机生成文件，**仅旧数据解密时回退**到源码内兜底值）存储于 `data/datasources.yaml`（已 gitignore）；仍是编码而非加密，生产部署应改用密钥管理服务（KMS）。
 - **用户密码**使用 **PBKDF2-HMAC-SHA256（200k 迭代）+ 每用户随机盐 + 常量时间比较**存储于本地 SQLite（`data/app.db`，已 gitignore）；
   旧格式（全局固定盐 SHA-256）在登录时透明升级。**不再预置 `admin/admin123`**——
   需要账号请显式设置 `SQLPA_BOOTSTRAP_ADMIN_USER/PASSWORD`，否则不创建任何默认账号（`create_user()` 可建）。
+- **登录会话**：`POST /api/auth/login` 校验口令后签发 **随机 token**（`sessions` 表，含归属人与到期时间，默认 12h，
+  `SQLPA_LOGIN_TTL` 可调），`POST /api/auth/logout` 立即撤销，`GET /api/auth/me` 返回当前身份。
+  作用是让**审计与治理动作记到具体的人**（此前静态 token 只能记到"某个 token"），并用 per-username 的登录限速挡撞库。
+  仍未实现：口令复杂度策略、失败锁定、找回口令、多设备会话管理、MFA —— 生产应接入企业 SSO/IdP。
 - **API 鉴权**：`/api/query`、`/api/analyze*`、`/api/audit`、`/api/datasources` 的角色**只认凭据、不认请求体**。
-  配置 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"` 后必须带 `X-API-Token`；
-  未配置时（本地/演示）按最小权限角色 `SQLPA_DEFAULT_ROLE`（默认 analyst）执行，`/api/audit` 对非 admin 脱敏。
-  **生产部署务必配置 token 或接入企业鉴权**。
-- **CORS 与限速可环境变量化**：`SQLPA_CORS_ORIGINS` 配置允许来源（默认本地前端），`SQLPA_RATE_LIMIT` 控制端点限速；
+  凭据有两个来源，优先级从高到低：**登录会话**（`sessions` 表）→ 静态 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"`；
+  配了静态 token 后必须带 `X-API-Token`；两者都没配时（本地/演示）按最小权限角色 `SQLPA_DEFAULT_ROLE`（默认 analyst）执行，
+  `/api/audit` 对非 admin 脱敏。**生产部署务必配置 token 或接入企业鉴权**。
+- **部署边界（重要）**：`start_api*.bat` 与 `docker-compose.yml` 均以**单 worker** 启动。
+  SQLite 连接已开 **WAL 日志模式 + busy_timeout**（`storage._conn()`，可用 `SQLPA_SQLITE_JOURNAL_MODE` /
+  `SQLPA_SQLITE_BUSY_TIMEOUT_MS` 覆盖），会话记忆（`session_memory`）与限速计数（`rate_limit`）也已落 SQLite。
+  因此把 `--workers` 调大、各 worker 指向**同一个 `data/app.db`** 时，并发读写可用、状态一致、单进程重启可续。
+  但仍**不建议**靠"多机共享同一 DB 文件"横向扩容（文件锁语义在跨机场景不可靠），跨机应改用 Redis 等共享存储。
+- **HITL SLA / 超时升级**：工单登记即带 `due_at`（`SQLPA_HITL_SLA_HOURS`，默认 24h）；`hitl.sweep()` 巡检
+  「超期未闭环 → 置 escalated 并写流转历史」「临期（不足 1h 或 SLA 的 1/4）→ 催办一次」，
+  幂等（同一动作不重复触发）。入口：`tools/run_hitl_sla.py`（cron/Task Scheduler）+ `POST /api/hitl/sweep`（admin）
+  + `GET /api/hitl/escalations`（看板）。投递：升级/催办结果除写本地 outbox 外，会 **POST 到 `SQLPA_HITL_WEBHOOK`**
+  （未配置则显式返回"未投递"，不静默成功；投递失败被捕获并记入巡检 summary，不影响巡检本身）。
+  **仍无邮件/SMS 通道**（需部署侧 SMTP/短信凭据与配额），也没有优先级重排与自动改派。
+- **CORS 与限速可环境变量化**：`SQLPA_CORS_ORIGINS` 配置允许来源（默认本地前端），
+  `SQLPA_RATE_LIMIT_PER_MIN` 控制端点限速（<=0 关闭）；限速计数已落 SQLite（`rate_limit` 表），重启不清零。
   默认值是本地/演示友好配置，生产请显式覆盖。
 - **行级权限是应用层实现（RLS-lite）**：谓词注入编译后的 WHERE，可见、可测、与口径一起进审计；
   但它**不是数据库原生 RLS** —— 绕过应用直连数据库即失效。生产应叠加数据库视图/RLS 策略或独立只读账号。
@@ -43,6 +62,10 @@
 - **统计门控是近似检验**：Welch z 检验假设日间独立、近似正态，对强趋势/强周期数据偏保守；
   它只用来**抑制**告警（减少假阳性），不用来"证明"波动存在。假阳性率本身仍未被精确度量
   （`evaluation/eval_alert_quality.py` 报的是告警量下降与成因结构，真 FP/FN 需独立标注集）。
+- **README 评测表格与产物的一致性已机器校验**：`evaluation/check_readme_consistency.py`
+  （由 `tests/test_readme_consistency.py` 纳入 CI）逐项比对 README 表格数字与 `evaluation/reports/*.json`，
+  防止"重跑后数字漂移、文档停在旧值"。**告警假阳性率的独立标注集仍未提供**——精确 FP/FN 需人工标注真值，
+  当前如实标注为**未做**，不虚构数字。
 - **订阅告警无邮件/SMS 通道**：需要 SMTP/短信服务凭据与配额，属部署侧配置；仓库内提供的是
   `console / file / webhook` 三种通道 + cron 调度入口（`tools/run_subscriptions.py`），**内置调度器刻意不做**。
 - **归因决策层有 32 条专家自标用例**（`evaluation/eval_decisions.py`）：26 条正例 + 6 条 BORDERLINE 判断题。
