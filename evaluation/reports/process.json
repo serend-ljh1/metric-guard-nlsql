@@ -1,0 +1,176 @@
+{
+  "suite": "process_metrics",
+  "desc": "过程级 Agent 指标（编排效率）：在完整 run_analysis 编排上量工具选择/步数/无效步骤/假设命中/门控节省",
+  "offline": true,
+  "n_scenarios": 9,
+  "tool_selection_accuracy": 1.0,
+  "tool_selection_hits": 9,
+  "avg_steps": 6.667,
+  "invalid_step_rate": 0.0164,
+  "invalid_steps": {
+    "errored": 1,
+    "failed_product": 0,
+    "total_steps": 60,
+    "note": "无效步骤=未产出可用产物的步骤（硬异常/路由拒绝/失败产物）"
+  },
+  "hypothesis_hit_rate": {
+    "1": 1.0,
+    "3": 1.0,
+    "5": 1.0
+  },
+  "hypothesis_truth_cases": 4,
+  "gate_saving_rate": 0.5,
+  "gate_savings": {
+    "decision_total": 6,
+    "rule_shortcircuit": 3,
+    "llm_consulted": 3,
+    "other_memory": 0,
+    "note": "节省率=由确定性规则/门控直接给出、未消耗 LLM token 的决策占比"
+  },
+  "steps_by_agent": {
+    "RouterAgent": 9,
+    "AttributionAgent": 21,
+    "ConclusionAgent": 17,
+    "DecisionAgent": 13
+  },
+  "cases": [
+    {
+      "name": "分析-为什么跌",
+      "route_expected": "analyze",
+      "route_actual": "analyze",
+      "metric_expected": "gmv",
+      "metric_actual": "gmv",
+      "tool_selection_hit": true,
+      "steps": 9,
+      "invalid_steps": 0,
+      "truth_key": "SP",
+      "truth_rank": 1,
+      "decision_source": "llm",
+      "top_candidates": [
+        "state·SP",
+        "category·health"
+      ]
+    },
+    {
+      "name": "分析-定向州",
+      "route_expected": "analyze",
+      "route_actual": "analyze",
+      "metric_expected": "gmv",
+      "metric_actual": "gmv",
+      "tool_selection_hit": true,
+      "steps": 8,
+      "invalid_steps": 0,
+      "truth_key": "SP",
+      "truth_rank": 1,
+      "decision_source": "rule",
+      "top_candidates": [
+        "state·SP"
+      ]
+    },
+    {
+      "name": "分析-订单量为什么跌",
+      "route_expected": "analyze",
+      "route_actual": "analyze",
+      "metric_expected": "order_count",
+      "metric_actual": "order_count",
+      "tool_selection_hit": true,
+      "steps": 6,
+      "invalid_steps": 0,
+      "truth_key": null,
+      "truth_rank": null,
+      "decision_source": "llm",
+      "top_candidates": []
+    },
+    {
+      "name": "分析-客单价为什么跌",
+      "route_expected": "analyze",
+      "route_actual": "analyze",
+      "metric_expected": "aov",
+      "metric_actual": "aov",
+      "tool_selection_hit": true,
+      "steps": 9,
+      "invalid_steps": 0,
+      "truth_key": "SP",
+      "truth_rank": 1,
+      "decision_source": "llm",
+      "top_candidates": [
+        "state·SP"
+      ]
+    },
+    {
+      "name": "分析-量价拆解",
+      "route_expected": "analyze",
+      "route_actual": "analyze",
+      "metric_expected": "gmv",
+      "metric_actual": "gmv",
+      "tool_selection_hit": true,
+      "steps": 13,
+      "invalid_steps": 0,
+      "truth_key": "SP",
+      "truth_rank": 1,
+      "decision_source": "rule",
+      "top_candidates": [
+        "state·SP",
+        "category·health"
+      ]
+    },
+    {
+      "name": "分析-定向品类",
+      "route_expected": "analyze",
+      "route_actual": "analyze",
+      "metric_expected": "gmv",
+      "metric_actual": "gmv",
+      "tool_selection_hit": true,
+      "steps": 8,
+      "invalid_steps": 0,
+      "truth_key": null,
+      "truth_rank": null,
+      "decision_source": "rule",
+      "top_candidates": [
+        "category·health"
+      ]
+    },
+    {
+      "name": "取数-无时间",
+      "route_expected": "query_only",
+      "route_actual": "query_only",
+      "metric_expected": "gmv",
+      "metric_actual": "gmv",
+      "tool_selection_hit": true,
+      "steps": 3,
+      "invalid_steps": 0,
+      "truth_key": null,
+      "truth_rank": null,
+      "decision_source": null,
+      "top_candidates": []
+    },
+    {
+      "name": "取数-各州订单量",
+      "route_expected": "query_only",
+      "route_actual": "query_only",
+      "metric_expected": "order_count",
+      "metric_actual": "order_count",
+      "tool_selection_hit": true,
+      "steps": 3,
+      "invalid_steps": 0,
+      "truth_key": null,
+      "truth_rank": null,
+      "decision_source": null,
+      "top_candidates": []
+    },
+    {
+      "name": "拒绝-无关问题",
+      "route_expected": "unmatched",
+      "route_actual": "unmatched",
+      "metric_expected": null,
+      "metric_actual": null,
+      "tool_selection_hit": true,
+      "steps": 1,
+      "invalid_steps": 1,
+      "truth_key": null,
+      "truth_rank": null,
+      "decision_source": null,
+      "top_candidates": []
+    }
+  ]
+}

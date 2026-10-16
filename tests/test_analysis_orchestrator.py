@@ -421,3 +421,57 @@ def test_confirm_gate_keyword_method_auto_runs(tmpdir_clean, business_months):
     assert result["ok"] is True
     assert result.get("need_confirm", False) is not True
     assert result["route"] == "analyze"
+
+
+# ---------------- L4 决策轨迹：把"候选 / 选中 / 被拒+原因 / 门控"记进事件流水 ----------------
+
+
+def test_decision_trace_events(tmpdir_clean, business_months):
+    """L4：每个决策 Agent 都发射 agent_decision，且带齐 candidates/chosen/rejected/gate。
+
+    这是**纯记录**字段（不改变任何行为）：用于事后回答"当时有哪些选项、为什么这么选"。
+    """
+    db_path = _make_db(tmpdir_clean, business_months)
+    events = []
+
+    def emit(p):
+        events.append(p)
+
+    run_analysis("本月 GMV 为什么跌？", CFG, _sb(db_path), db_path, _MockLLM(),
+                 role="analyst", alert_threshold_pct=0.0, emit=emit)
+
+    decs = [e for e in events if e["type"] == "agent_decision"]
+    assert decs, "应发射决策轨迹事件"
+    by_name = {d["name"] for d in decs}
+    for n in ("RouterAgent", "AttributionAgent", "DecisionAgent"):
+        assert n in by_name, f"{n} 缺少决策轨迹"
+    # 每个决策事件的四个字段都在（空也必须是 []/None，保证结构稳定）
+    for d in decs:
+        p = d["payload"]
+        for k in ("candidates", "chosen", "rejected", "gate"):
+            assert k in p, f"{d['name']} 决策事件缺字段 {k}"
+
+    # 归因的下钻决策要记下选中动作与被拒动作（+原因）
+    add = next(d for d in decs if d["name"] == "AttributionAgent"
+               and d["stage"] == "decide_drill")
+    assert add["payload"]["chosen"]["action"]
+    assert add["payload"]["rejected"], "应记录被拒的下钻动作及其原因"
+
+    # 决策 Agent 的门控必须带 z/p/α 判据与最终结论
+    dgate = next(d for d in decs if d["name"] == "DecisionAgent")
+    g = dgate["payload"]["gate"]
+    assert g and "threshold_pct" in g and "conclusion" in g
+    assert dgate["payload"]["chosen"]["level"] == "alert"
+
+    # 决策轨迹同时落进 trace 流水（与推给 SSE 的事件是同一串）
+    from sqlpa.business import storage
+    tr = storage.get_trace(_last_analysis_id(events))
+    assert tr and any(e["type"] == "agent_decision" for e in tr["events"])
+
+
+def _last_analysis_id(events) -> str:
+    """从事件流里取本次分析的 analysis_id（session_start / done 都带）。"""
+    for e in events:
+        if e.get("type") == "session_start" and e.get("analysis_id"):
+            return e["analysis_id"]
+    return ""

@@ -178,6 +178,39 @@ def test_llm_bad_json_falls_back_to_rule():
     assert d["decision_source"] == "rule"          # LLM 返回非法 → 程序不炸，回退规则
 
 
+# ---------------- 非可加指标（比率/均值）：占比不适用 → 不得 abs(None) 打断链路 ----------------
+
+def test_ratio_metric_none_share_does_not_break_decision():
+    """**回归（实测故障）**：比率/均值类指标（如 AOV）的维度占比在数学上不适用，
+    analyze 会把 pct_of_change 显式置 None。旧代码在若干处以 `abs(c.get('pct_of_change', 0))`
+    取值——键**存在但值为 None** 时 `.get` 的默认值不生效，于是 abs(None) 抛错，
+    decide_drill 整段崩掉、AttributionAgent 直接降级成 `{"error": ...}`（归因丢失）。
+
+    这里把三个入口一次钉死：分散判定 / LLM 提示构造 / HITL 说明拼接。
+    """
+    from sqlpa.business.attribution import _contribution_scattered, notify_anomaly
+
+    att = _att(contribs=[{"dim": "state", "key": "SP", "desc": "州「SP」变化-90.00",
+                          "delta": -90.0, "pct_of_change": None}])
+    # 占比不适用 ≠ 占比小 → 不得判为"分散"（否则会误触发换维）
+    assert _contribution_scattered(att) is False
+
+    # 追问 + LLM：必须走到"给 LLM 构造 contrib_lines"那段（原崩溃点）而不抛错
+    oracle = _Oracle('{"action":"drill","dim":"state","value":"SP","reason":"沿主因"}')
+    d = decide_drill(att, "本月客单价为什么跌？", llm=oracle)
+    assert d["action"] in ("drill", "switch_dim", "factorize", "none")
+    assert oracle.calls == 1
+
+    # HITL 异常说明拼接同样不得因 None 占比而崩
+    with patch("sqlpa.business.hitl.enqueue", return_value="rec-x") as m:
+        rid = notify_anomaly(CFG, {"ok": True, "is_abnormal": True, "metric": "gmv",
+                                   "metric_name": "GMV", "change": -90.0, "change_pct": -0.9,
+                                   "current_spec": "本月", "dims": [],
+                                   "top_contributors": [{"desc": "州「SP」变化-90.00",
+                                                         "pct_of_change": None}]})
+    assert rid == "rec-x" and m.called
+
+
 # ---------------- factorize：单量×客单价分解 ----------------
 
 def test_factorize_decomposes_gmv(db):

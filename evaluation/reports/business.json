@@ -39,7 +39,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1316.3,
+      "latency_ms": 2664.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -58,7 +58,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1685.2,
+      "latency_ms": 1829.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -77,7 +77,7 @@
       "reject": "",
       "rows": 6,
       "reject_reasons": [],
-      "latency_ms": 573.1,
+      "latency_ms": 433.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -96,7 +96,7 @@
       "reject": "",
       "rows": 24,
       "reject_reasons": [],
-      "latency_ms": 678.7,
+      "latency_ms": 490.4,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -113,7 +113,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 334.0,
+      "latency_ms": 473.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -132,7 +132,7 @@
       "reject": "",
       "rows": 24,
       "reject_reasons": [],
-      "latency_ms": 128.6,
+      "latency_ms": 94.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -151,7 +151,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1658.9,
+      "latency_ms": 940.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -170,7 +170,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1666.8,
+      "latency_ms": 1243.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -187,7 +187,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 563.7,
+      "latency_ms": 427.8,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -206,7 +206,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1629.3,
+      "latency_ms": 1139.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -225,7 +225,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1322.8,
+      "latency_ms": 932.0,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -242,7 +242,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 571.6,
+      "latency_ms": 414.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -259,7 +259,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 550.4,
+      "latency_ms": 420.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -278,7 +278,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1666.5,
+      "latency_ms": 1209.2,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -295,7 +295,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 696.6,
+      "latency_ms": 428.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -314,7 +314,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1741.9,
+      "latency_ms": 1217.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -331,7 +331,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 713.7,
+      "latency_ms": 484.8,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -350,7 +350,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1903.3,
+      "latency_ms": 1404.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -369,7 +369,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1600.5,
+      "latency_ms": 1150.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -388,7 +388,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 739.0,
+      "latency_ms": 504.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -405,7 +405,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 243.2,
+      "latency_ms": 165.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -424,7 +424,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1637.7,
+      "latency_ms": 1158.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -441,7 +441,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 41.0,
+      "latency_ms": 30.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -460,7 +460,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1278.7,
+      "latency_ms": 920.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -477,7 +477,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 722.6,
+      "latency_ms": 490.2,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -496,7 +496,7 @@
       "reject": "",
       "rows": 7,
       "reject_reasons": [],
-      "latency_ms": 652.4,
+      "latency_ms": 452.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -515,7 +515,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1050.7,
+      "latency_ms": 729.0,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -534,7 +534,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1360.3,
+      "latency_ms": 976.8,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -551,7 +551,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 686.0,
+      "latency_ms": 489.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -570,7 +570,7 @@
       "reject": "",
       "rows": 6,
       "reject_reasons": [],
-      "latency_ms": 625.5,
+      "latency_ms": 468.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -589,7 +589,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1073.5,
+      "latency_ms": 787.4,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -608,7 +608,7 @@
       "reject": "",
       "rows": 8,
       "reject_reasons": [],
-      "latency_ms": 326.1,
+      "latency_ms": 235.8,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -627,7 +627,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1032.1,
+      "latency_ms": 734.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -644,7 +644,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 36.7,
+      "latency_ms": 30.0,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -661,7 +661,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 44.0,
+      "latency_ms": 33.8,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -678,7 +678,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 143.4,
+      "latency_ms": 114.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -697,7 +697,7 @@
       "reject": "",
       "rows": 75,
       "reject_reasons": [],
-      "latency_ms": 735.0,
+      "latency_ms": 529.6,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -714,7 +714,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 1057.9,
+      "latency_ms": 671.4,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -733,7 +733,7 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 2286.9,
+      "latency_ms": 1696.2,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -752,7 +752,7 @@
       "reject": "",
       "rows": 75,
       "reject_reasons": [],
-      "latency_ms": 2569.1,
+      "latency_ms": 1845.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -769,7 +769,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 545.7,
+      "latency_ms": 427.1,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -786,7 +786,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 536.9,
+      "latency_ms": 423.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -805,7 +805,7 @@
       "reject": "",
       "rows": 50,
       "reject_reasons": [],
-      "latency_ms": 161.0,
+      "latency_ms": 129.4,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -822,7 +822,7 @@
       "reject": "客单价 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 9.9,
+      "latency_ms": 9.0,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -839,7 +839,7 @@
       "reject": "超时送达率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 12.1,
+      "latency_ms": 10.1,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -856,7 +856,7 @@
       "reject": "取消率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.2,
+      "latency_ms": 8.6,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -873,7 +873,7 @@
       "reject": "平均评分 不支持按「订单状态」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 11.3,
+      "latency_ms": 8.6,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -890,7 +890,7 @@
       "reject": "独立买家数 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 9.7,
+      "latency_ms": 9.1,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -907,7 +907,7 @@
       "reject": "每单件数 不支持按「订单状态」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 11.2,
+      "latency_ms": 9.1,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -924,7 +924,7 @@
       "reject": "本次问题并列了多个指标（gmv、order_count）：语义层一次只编译一个度量口径，以避免返回「只答一半」的结果。请拆成单指标问题分别提问。（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.5,
+      "latency_ms": 11.2,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -941,7 +941,7 @@
       "reject": "该问题包含数值比较条件，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.2,
+      "latency_ms": 9.1,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -958,7 +958,7 @@
       "reject": "该问题包含否定/排除语义，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.4,
+      "latency_ms": 9.6,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -975,7 +975,7 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 11.1,
+      "latency_ms": 11.5,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -992,7 +992,7 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.9,
+      "latency_ms": 10.0,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -1009,7 +1009,7 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.2,
+      "latency_ms": 10.3,
       "rejected": true,
       "readable": true,
       "audited": true

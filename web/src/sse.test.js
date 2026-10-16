@@ -39,6 +39,35 @@ test('reduceAgents：多个 Agent 保持插入顺序', () => {
   assert.deepEqual(names, ['A', 'B'])
 })
 
+test('reduceAgents：agent_decision 归并入卡片的 decisions（候选/选中/被拒/门控）', () => {
+  const evts = [
+    { type: 'agent_start', name: 'DecisionAgent', role: '决策收口' },
+    {
+      type: 'agent_decision', name: 'DecisionAgent', stage: 'gate', detail: '决策门控 → alert',
+      payload: {
+        candidates: [{ level: 'alert' }, { level: 'watch' }],
+        chosen: { level: 'alert' },
+        rejected: [{ option: 'watch', reason: '已通过检验' }],
+        gate: { z: 2.1, p_value: 0.03, conclusion: 'alert' },
+      },
+    },
+    { type: 'agent_done', name: 'DecisionAgent', payload: { alert: true } },
+  ]
+  const agents = reduceAgents(evts)
+  assert.equal(agents.length, 1)
+  assert.equal(agents[0].decisions.length, 1)
+  const d = agents[0].decisions[0]
+  assert.equal(d.stage, 'gate')
+  assert.equal(d.candidates.length, 2)
+  assert.equal(d.chosen.level, 'alert')
+  assert.equal(d.rejected[0].reason, '已通过检验')
+  assert.equal(d.gate.conclusion, 'alert')
+})
+
+test('reduceAgents：agent_decision 先于 start 到达时不抛错', () => {
+  assert.deepEqual(reduceAgents([{ type: 'agent_decision', name: 'X', payload: {} }]), [])
+})
+
 test('lastError：取最后一条 error 的 detail；无 error 返回空串', () => {
   assert.equal(lastError([]), '')
   assert.equal(lastError([{ type: 'agent_start', name: 'A' }]), '')

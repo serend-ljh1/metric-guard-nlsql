@@ -227,7 +227,7 @@ flowchart TD
 git clone <repo> && cd <repo>
 pip install -r requirements.txt
 pytest tests -q                          # 全量离线测试（无需 Key、无需外部数据）
-python evaluation/run_all.py             # 一次跑完全部 7 条离线评测线，汇总落 evaluation/reports/overall.json
+python evaluation/run_all.py             # 一次跑完全部 9 条离线评测线，汇总落 evaluation/reports/overall.json
 ```
 
 ### 方式一：一键启动（推荐）
@@ -286,11 +286,11 @@ curl -X POST http://localhost:8000/api/query \
 
 ---
 
-## 评测指标一览（7 条评测线，一次跑完）
+## 评测指标一览（9 条离线评测线，一次跑完）
 
-> 跑法：`python evaluation/run_all.py`（**7 条线全部离线确定性、无需 API Key、可复现**），
-> 汇总落 `evaluation/reports/overall.json`；加 `--llm` 再跑第 8 条 LLM 对照（无 Key 时显式标注"未运行"，不静默跳过）。
-> CI 里这 7 条线由 `run_all.py` 一步跑完（`.github/workflows/ci.yml`）。
+> 跑法：`python evaluation/run_all.py`（**9 条线全部离线确定性、无需 API Key、可复现**），
+> 汇总落 `evaluation/reports/overall.json`；加 `--llm` 再跑第 10 条 LLM 对照（无 Key 时显式标注"未运行"，不静默跳过）。
+> CI 里这 9 条线由 `run_all.py` 一步跑完（`.github/workflows/ci.yml`）。
 > 下表数字来自**真实 Olist 全量库**上的一次实跑，可逐条复算核对。**逐线方法学与口径说明见 [`docs/evaluation.md`](docs/evaluation.md)。**
 
 | # | 评测线 | 关键指标 | 结果 | 产物 |
@@ -302,7 +302,9 @@ curl -X POST http://localhost:8000/api/query \
 | 5 | 告警质量（阈值 vs 阈值+统计门控） | 阈值告警率 · 门控抑制率 · 月长假象占比 · **构造真值假阳性率（阈值-only→门控）** | **77.8%** · 57.1% · 16.1% · **66.7% → 0.0%**（召回 100%） | `alert_quality.json` |
 | 6 | 沙箱外部对抗语料（99 条） | 危险语料拦截率 · 只读误杀率 · 库不变性 · 过滤值转义合规率 | **100%** · 4.3% · 文件 sha256 与行数**一字未变** · 100% | `sandbox_external.json` |
 | 7 | 第三方公开基准（Spider dev `world_1`, N=120） | 覆盖率（开发集口径） · 覆盖内执行正确率 · **敢答且答错** · 拒答率 | **25.0%** · 100% · **0** · 75.0% | `external_bank_world_1.json` |
-| 8 | （可选，需 Key）确定性引擎 vs 纯 LLM | 引擎 top@1 − 纯 LLM top@1 = **llm_value** | **0.0%**（N=28：引擎 53.6% = 纯 LLM 53.6%，逐题一致 100%） | `attribution_llm_baseline.json` |
+| 8 | **过程级 Agent 指标（编排效率）** | 工具选择准确率 · 平均步数 · 无效步骤率 · 假设命中率@k · 门控节省率 | **100% (9/9)** · 6.67 步 · **1.6%** · **100% @1/3/5** · **50% (3/6)** | `process.json` |
+| 9 | **控制面质量（L1 受限规划循环 + L2 假设验证环）** | 越界次数 · 非法脚本拦下率 · schema 校验准确率 · 真因假设命中率 · 假设误否率 · 判官 LLM 调用 | **0** 越界（硬上限 4）· **100% (4/4)** · **100% (11/11)** · **100%** · **0%** · **0 次** | `planning.json` |
+| 10 | （可选，需 Key）确定性引擎 vs 纯 LLM | 引擎 top@1 − 纯 LLM top@1 = **llm_value** | **0.0%**（N=28：引擎 53.6% = 纯 LLM 53.6%，逐题一致 100%） | `attribution_llm_baseline.json` |
 
 **怎么读这张表（避免把数字读成"好看的假数据"）**：
 
@@ -316,7 +318,16 @@ curl -X POST http://localhost:8000/api/query \
   真 FP/FN —— **阈值-only 假阳性率 66.7% → 统计门控后 0%、召回仍 100%**（是**构造分布**下的值，不等于真实流量分布）。
 - 第 7 条 25.0% 是**开发集覆盖率**（`world_1` 属 dev 集，建层时看过题面），**不冒充泛化指标**；
   真正与"是否看过题面"无关的是"覆盖内执行正确率 100%"与"敢答且答错 = 0"。
-- 第 8 条是**可选的 LLM 对照**（`run_all.py --llm`，需 Key）：给它与引擎**信息对等**的分段表后，
+- 第 8 条是**过程级指标**（与"结果对不对"正交）：工具选择 **100% (9/9)**、平均 **6.67 步**、
+  无效步骤率 **1.6%**（仅 1 次合法路由拒绝，无硬异常/失败产物）、真因均落在候选**第 1 名**（@1/3/5 = 100%）、
+  下钻决策 **50% 由确定性规则/门控直接给出、不消耗 LLM token**。它是 L4 决策轨迹（候选/选中/被拒+原因/门控）的下游产物 ——
+  **量的是"编排效率与决策可解释性"，不是业务正确率**；该注入式真因库为自建小库，非 Olist 真实流量分布。
+- 第 9 条是**控制面质量**（L1 受限规划循环 + L2 假设验证环），全离线、注入式真因小库 + 脚本化 mock LLM：
+  **硬上限 4 步越界 0 次**、长脚本被**截到上限**、非法脚本（越权算子/越界维度/坏参数）**100% 拦下 (4/4)**、
+  schema 校验 **11/11 正确**、无 LLM 时规划器**整块剪枝**（逐字回落旧线性链）；
+  假设环里真因假设 **100% 被 verified、误否 0%**、真因**证据排序第一 100%**、结构不成立的假设（不存在取值/越界维度/未知因子）**100% 被否**，
+  且**判官 0 次 LLM 调用**——证明"控制面智能"是**可量化的工程能力**，不是叙事。
+- 第 10 条是**可选的 LLM 对照**（`run_all.py --llm`，需 Key）：给它与引擎**信息对等**的分段表后，
   纯 LLM 与确定性引擎**逐题同答案**（单档 60% 口径 N=28，各 53.6%；三档全量口径 74/74）——
   说明"主因定位 LLM 也能做"，引擎的价值在**可复现 / 零 token / 永不弃权 / 每个数字可追溯**。
 
@@ -335,7 +346,7 @@ pytest tests -q --cov=src/sqlpa --cov=apiroutes   # 全量离线测试 + 覆盖�
 - **数据**：依赖真实 Olist `data/olist/olist.db`；依赖真实库的用例在缺数据时**跳过**（`real_olist_db` / `sample_db` fixture），
   公开 CI 上不会把"环境缺数据"误报成"代码回归"。纯逻辑用例用自建小库。
 - **GitHub Actions**（`.github/workflows/ci.yml`）：统一 Python **3.12**；`pytest` 带**覆盖率门槛（80%）**；
-  一步 `python evaluation/run_all.py` 跑完全部 7 条离线评测线；入口脚本语法自检；
+  一步 `python evaluation/run_all.py` 跑完全部 9 条离线评测线；入口脚本语法自检；
   前端 job 执行 `npm ci` + `npm run lint` + `npm run test` + `npm run build`。
 
 ---
@@ -345,7 +356,7 @@ pytest tests -q --cov=src/sqlpa --cov=apiroutes   # 全量离线测试 + 覆盖�
 > 完整的局限声明（LLM 触点、统计门控近似性、安全边界、外部基准 dev 集口径、未实现项等）
 > 见 [`docs/limitations.md`](docs/limitations.md)。核心要点：
 
-- **所谓"六 Agent"是编排上的六个阶段**，不是六个独立智能体；主路径唯一 LLM 触点是意图识别与结论讲解。
+- **所谓"六 Agent"是编排上的六个阶段**，不是六个独立智能体；LLM 触点严格限定在**控制面**（意图识别、结论讲解、受限规划循环挑算子、假设验证环提假设），**永不生成 SQL、永不直连库、永不见原始行**。
 - **归因做了守恒自检与统计门控，但假阳性率仍未被精确度量**（门槛 5% 为经验值）。
 - **外部基准只有一个库、且用 dev 集**：25.0% 是开发集覆盖率、**不是泛化能力**；held-out 需 Spider 未公开 test gold。
 - **未实现**：长时记忆/Checkpoint、字段级血缘、数据库原生 RLS、邮件/SMS 告警通道、指标中心可视化增删改页面。
@@ -354,6 +365,6 @@ pytest tests -q --cov=src/sqlpa --cov=apiroutes   # 全量离线测试 + 覆盖�
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/evaluation.md`](docs/evaluation.md) | 评测方法学、7 条评测线口径说明与复现、产品指标、决策质量、EX/EM 口径 |
+| [`docs/evaluation.md`](docs/evaluation.md) | 评测方法学、9 条评测线口径说明与复现、产品指标、决策质量、过程指标、控制面质量、EX/EM 口径 |
 | [`docs/architecture.md`](docs/architecture.md) | 目录结构、业务产品模式、安全底座状态机、数据源接入、演示场景、不做清单 |
 | [`docs/limitations.md`](docs/limitations.md) | 诚实说明：局限、边界与未实现项 |

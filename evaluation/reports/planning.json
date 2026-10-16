@@ -1,0 +1,196 @@
+{
+  "suite": "planning_hypothesis",
+  "desc": "L1 受限规划循环 + L2 假设验证环 的过程质量：有界性/校验强度/假设真值命中/误否率（注入式真因 + 脚本化 mock LLM）",
+  "offline": true,
+  "n_plan_tasks": 8,
+  "n_hypothesis_cases": 3,
+  "planning": {
+    "n_tasks": 8,
+    "bounded_violations": 0,
+    "max_steps": 4,
+    "cap_enforced": true,
+    "plan_step_accuracy": 1.0,
+    "plan_steps_matched": 8,
+    "plan_steps_expected": 8,
+    "adversarial_block_rate": 1.0,
+    "adversarial_blocked": 4,
+    "adversarial_total": 4,
+    "no_llm_prune_ok": true,
+    "validator_accuracy": 1.0,
+    "validator_hits": 11,
+    "validator_total": 11,
+    "cases": [
+      {
+        "name": "续步下钻真因州",
+        "kind": "valid",
+        "script_ops": [
+          "drill"
+        ],
+        "executed_ops": [
+          "drill"
+        ],
+        "expected_ops": [
+          "drill"
+        ],
+        "blocked": null
+      },
+      {
+        "name": "续步下钻 + 因子分解",
+        "kind": "valid",
+        "script_ops": [
+          "drill",
+          "factorize"
+        ],
+        "executed_ops": [
+          "drill",
+          "factorize"
+        ],
+        "expected_ops": [
+          "drill",
+          "factorize"
+        ],
+        "blocked": null
+      },
+      {
+        "name": "续步统计门控复核",
+        "kind": "valid",
+        "script_ops": [
+          "check_significance"
+        ],
+        "executed_ops": [
+          "check_significance"
+        ],
+        "expected_ops": [
+          "check_significance"
+        ],
+        "blocked": null
+      },
+      {
+        "name": "长脚本应被截到硬上限",
+        "kind": "valid",
+        "script_ops": [
+          "drill",
+          "drill",
+          "drill",
+          "factorize",
+          "check_significance",
+          "list_dims"
+        ],
+        "executed_ops": [
+          "drill",
+          "drill",
+          "drill",
+          "factorize"
+        ],
+        "expected_ops": [
+          "drill",
+          "drill",
+          "drill",
+          "factorize"
+        ],
+        "blocked": null
+      },
+      {
+        "name": "非法算子 drop_table",
+        "kind": "adversarial",
+        "script_ops": [
+          "drop_table"
+        ],
+        "executed_ops": [],
+        "expected_ops": [],
+        "blocked": true
+      },
+      {
+        "name": "越界维度",
+        "kind": "adversarial",
+        "script_ops": [
+          "drill"
+        ],
+        "executed_ops": [],
+        "expected_ops": [],
+        "blocked": true
+      },
+      {
+        "name": "坏参数（空 path）",
+        "kind": "adversarial",
+        "script_ops": [
+          "drill"
+        ],
+        "executed_ops": [],
+        "expected_ops": [],
+        "blocked": true
+      },
+      {
+        "name": "越界维度 analyze",
+        "kind": "adversarial",
+        "script_ops": [
+          "analyze"
+        ],
+        "executed_ops": [],
+        "expected_ops": [],
+        "blocked": true
+      }
+    ]
+  },
+  "hypothesis": {
+    "n_cases": 3,
+    "truth_verified_rate": 1.0,
+    "false_reject_rate": 0.0,
+    "truth_ranked_first_rate": 1.0,
+    "invalid_rejected_rate": 1.0,
+    "invalid_rejected": 3,
+    "invalid_total": 3,
+    "judge_llm_calls": 0,
+    "cases": [
+      {
+        "name": "真因SP + 不存在值 + 越界维度",
+        "n": 4,
+        "verified": [
+          "真因 SP",
+          "品类「health」变化-450.00"
+        ],
+        "rejected": [
+          {
+            "claim": "不存在的州",
+            "reason": "取值「ZZ」在维度「state」下不存在或无变化"
+          },
+          {
+            "claim": "越界维度",
+            "reason": "维度「not_a_dim」不在该指标的候选拆解范围内"
+          }
+        ],
+        "truth_verified": true,
+        "truth_first": true
+      },
+      {
+        "name": "真因SP + 未知因子",
+        "n": 3,
+        "verified": [
+          "真因 SP",
+          "品类「health」变化-450.00"
+        ],
+        "rejected": [
+          {
+            "claim": "运费变了",
+            "reason": "因子「运费」不在 订单量 × 客单价 的分解里"
+          }
+        ],
+        "truth_verified": true,
+        "truth_first": true
+      },
+      {
+        "name": "真因SP + 结构成立的干扰RJ/MG",
+        "n": 4,
+        "verified": [
+          "真因 SP",
+          "品类「health」变化-450.00",
+          "干扰 RJ",
+          "干扰 MG"
+        ],
+        "rejected": [],
+        "truth_verified": true,
+        "truth_first": true
+      }
+    ]
+  }
+}

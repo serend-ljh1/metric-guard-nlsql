@@ -5,7 +5,7 @@
     python evaluation/run_all.py --report-dir evaluation/reports
     python evaluation/run_all.py --llm          # 额外跑"确定性引擎 vs 纯LLM"对照（需 API Key）
 
-评测线（7 条，默认全部离线、无需 API Key、可复现）：
+评测线（9 条，默认全部离线、无需 API Key、可复现）：
     1. business          业务语义层：口径命中 / 口径外拒绝 / 权限拦截 / PII 掩码 / 公式防篡改 / 审计
     2. product           产品模式（北极星）：语义层命中率 / 指标与维度识别 / 认证率
     3. decisions         归因决策质量（离线规则基线；接真实 LLM 请单独跑 `eval_decisions.py --llm`）
@@ -14,8 +14,12 @@
     6. sandbox_external  外部对抗语料：危险拦截率 / 只读误杀率 / 库不变性 / 过滤值注入
     7. external_bank     第三方公开基准（Spider dev world_1）：覆盖率 / 覆盖内正确率 / 拒答率
                          —— 优先用仓库内除样本语料跑；只有它跑不起来才跳过，并在总报告里标"未运行"
+    8. process           过程级 Agent 指标（编排效率）：工具选择准确率 / 平均步数 / 无效步骤率 /
+                         假设命中率@k / 门控节省率 —— 摊开 L4 决策轨迹，量"这个多 Agent 系统跑得怎么样"
+    9. planning          L1 受限规划循环 + L2 假设验证环（控制面质量）：有界性 / schema 校验强度 /
+                         真因假设命中 / 误否率 / 判官零 LLM —— 证明"控制面智能"不只是叙事
 
-可选第 8 条（`--llm` 才跑，需 LLM_API_KEY）：
+可选第 10 条（`--llm` 才跑，需 LLM_API_KEY）：
     attribution_llm_baseline   同一批注入真因判题上，确定性算术引擎 vs 纯 LLM 的 top@1 对照，
                                并由此得出 llm_value（引擎相对纯 LLM 的增量）。无 Key 时**显式标注未运行**，
                                绝不静默跳过。
@@ -102,7 +106,7 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
     report_dir.mkdir(parents=True, exist_ok=True)
     rc = 0
 
-    # ---- 7 条离线评测线（顺序执行，后面的线依赖前面的产物）----
+    # ---- 9 条离线评测线（顺序执行，后面的线依赖前面的产物）----
     rc |= _run_eval("business", report_dir)
     rc |= _run_eval("product", report_dir)
     rc |= _run_eval("decisions", report_dir)
@@ -118,7 +122,13 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
     # 只有它也不可得时才跳过；跳过与否都写进总报告，不静默。
     external_ok = _run_eval("external_bank", report_dir) == 0
 
-    # ---- 可选第 8 条：确定性引擎 vs 纯 LLM 对照（需 API Key）----
+    # 过程级 Agent 指标（编排效率）：在完整 run_analysis 编排上量过程质量，纯离线。
+    rc |= _run_eval("process", report_dir)
+
+    # L1 受限规划循环 + L2 假设验证环（控制面质量）：注入式真因小库 + 脚本化 mock LLM，纯离线。
+    rc |= _run_eval("planning", report_dir)
+
+    # ---- 可选第 10 条：确定性引擎 vs 纯 LLM 对照（需 API Key）----
     llm_baseline_ran = False
     llm_baseline_note = "未运行（未加 --llm）"
     if with_llm:
@@ -135,11 +145,11 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
 
     overall = {
         "suite": "overall",
-        "desc": ("批量评测总报告（7 条离线确定性评测线 + 可选 LLM 对照；"
+        "desc": ("批量评测总报告（9 条离线确定性评测线 + 可选 LLM 对照；"
                  "离线线无需 API Key、可复现）"),
         "report_dir": repo_relative(report_dir),
         "exit_code_ok": rc == 0,
-        "suite_count_offline": 7,
+        "suite_count_offline": 9,
         "suites": {},
     }
 
@@ -234,7 +244,42 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
     else:
         overall["suites"]["external_bank_world_1"] = {"状态": "未运行（语料不可得）"}
 
-    # ---- 8. 可选：确定性引擎 vs 纯 LLM ----
+    # ---- 8. 过程级 Agent 指标（编排效率） ----
+    pr = _load(report_dir, "process")
+    if pr:
+        g = pr.get("gate_savings") or {}
+        overall["suites"]["process"] = {
+            "工具选择准确率": pr.get("tool_selection_accuracy"),
+            # 步数是"步"不是百分比：_fmt 会把 float 当百分数，故这里先格式化好再传。
+            "平均步数": (f"{pr['avg_steps']:.2f} 步" if pr.get("avg_steps") is not None else None),
+            "无效步骤率": pr.get("invalid_step_rate"),
+            "假设命中率@k": pr.get("hypothesis_hit_rate"),
+            "门控节省率": pr.get("gate_saving_rate"),
+            "门控节省(规则短路/决策)": (f"{g.get('rule_shortcircuit')}/{g.get('decision_total')}"
+                                       if g else None),
+        }
+
+    # ---- 9. L1 受限规划循环 + L2 假设验证环（控制面质量） ----
+    pl = _load(report_dir, "planning")
+    if pl:
+        p1 = pl.get("planning") or {}
+        p2 = pl.get("hypothesis") or {}
+        overall["suites"]["planning"] = {
+            "硬上限步数": p1.get("max_steps"),
+            "越界次数": p1.get("bounded_violations"),
+            "长脚本被截断": p1.get("cap_enforced"),
+            "合法脚本忠实执行率": p1.get("plan_step_accuracy"),
+            "非法脚本拦下率": p1.get("adversarial_block_rate"),
+            "无 LLM 全剪枝": p1.get("no_llm_prune_ok"),
+            "schema 校验准确率": p1.get("validator_accuracy"),
+            "真因假设命中率": p2.get("truth_verified_rate"),
+            "假设误否率": p2.get("false_reject_rate"),
+            "真因排第一": p2.get("truth_ranked_first_rate"),
+            "结构不成立假设被否率": p2.get("invalid_rejected_rate"),
+            "判官 LLM 调用次数": p2.get("judge_llm_calls"),
+        }
+
+    # ---- 10. 可选：确定性引擎 vs 纯 LLM ----
     if llm_baseline_ran:
         lb = _load(report_dir, "attribution_llm_baseline")
         st = lb or {}
@@ -254,7 +299,7 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
 
     # ---- 打印汇总 ----
     print("\n\n" + "#" * 68)
-    print("# 批量评测总报告（7 条离线线 + 可选 LLM 对照）")
+    print("# 批量评测总报告（9 条离线线 + 可选 LLM 对照）")
     print("#" * 68)
     titles = {
         "business": "1. 业务语义层（口径/治理护栏）",
@@ -264,7 +309,9 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
         "alert_quality": "5. 告警质量（阈值 vs 阈值+统计门控）",
         "sandbox_external": "6. 沙箱外部对抗语料",
         "external_bank_world_1": "7. 第三方公开基准（Spider dev world_1）",
-        "attribution_llm_baseline": "8. 可选对照：确定性引擎 vs 纯 LLM",
+        "process": "8. 过程级 Agent 指标（编排效率）",
+        "planning": "9. 控制面质量（L1 受限规划循环 + L2 假设验证环）",
+        "attribution_llm_baseline": "10. 可选对照：确定性引擎 vs 纯 LLM",
     }
     for key, title in titles.items():
         if key in overall["suites"]:

@@ -28,6 +28,7 @@ import time
 import uuid
 from typing import Callable, Dict, List, Optional, TypedDict
 
+from sqlpa.analysis import hypotheses, operators
 from sqlpa.business import attribution, confirm as _confirm
 from sqlpa.business.metric_config import BusinessConfig
 from sqlpa.business.metric_matcher import match
@@ -129,6 +130,19 @@ class _Emitter:
 
     def agent_done(self, name: str, result: Dict, stage: str = "完成"):
         self({"type": "agent_done", "name": name, "stage": stage, "payload": result})
+
+    def agent_decision(self, name: str, stage: str, detail: str,
+                       candidates: Optional[list] = None, chosen: Optional[Dict] = None,
+                       rejected: Optional[list] = None, gate: Optional[Dict] = None):
+        """决策轨迹事件（L4）：把一次 Agent 决策结构化记下来 ——
+        `candidates`(候选) / `chosen`(选中) / `rejected`(被拒+原因) / `gate`(门控判据)。
+
+        这是**纯记录**：字段只进 trace 流水与重放 UI，不参与任何计算、不改变行为。
+        "过程可看"因此升级为"决策可解释"——事后能回答"当时有哪些选项、为什么这么选"。
+        """
+        self({"type": "agent_decision", "name": name, "stage": stage, "detail": detail,
+              "payload": {"candidates": list(candidates or []), "chosen": chosen,
+                          "rejected": list(rejected or []), "gate": gate}})
 
 
 def _extract_schema(sb, db_path) -> Dict:
@@ -261,6 +275,19 @@ def _node_router(state):
         routing = _route(question, ctx["cfg"], ctx["llm"], ctx["memory"])
     _emit.agent_step("RouterAgent", "match", routing["reason"],
                      metric=routing["metric"], method=routing["method"])
+    # ---- L4 决策轨迹：记下"分流选了哪条路、候选有哪些、被拒的原因"（纯记录）----
+    _res = routing.get("res")
+    _rejected = [{"option": "分析链", "reason": r}
+                 for r in (getattr(_res, "reject_reasons", None) or [])]
+    if routing["route"] != "analyze" and not _rejected:
+        _rejected = [{"option": "分析链", "reason": routing["reason"]}]
+    _emit.agent_decision(
+        "RouterAgent", "route", f"意图分流 → {routing['route']}",
+        candidates=([{"route": "analyze"}] if routing["route"] == "analyze"
+                    else [{"route": routing["route"]}]),
+        chosen={"route": routing["route"], "metric": routing["metric"],
+                "method": routing["method"]},
+        rejected=_rejected, gate=None)
     _emit.agent_done("RouterAgent", {"route": routing["route"],
                                      "reason": routing["reason"]})
     # MetricMatcher 复用同一份语义层 match 结果，仅作意图识别上报
@@ -652,11 +679,20 @@ def _attribution_chain(cfg: BusinessConfig, db_path: str, res, routing: Dict, ll
         # 此时默认按该指标支持、且具有归因价值的业务维度拆解
         # （排除时间 dt，及已被口径过滤框死的 status），保证 ANY Question 都有真实归因。
         dims = requested
+        m_cfg = cfg.metrics.get(routing["metric"])
+        candidate_pool = list(requested)
         if not requested:
-            m_cfg = cfg.metrics.get(routing["metric"])
             if m_cfg is not None:
-                dims = [d for d in m_cfg.support_dims
-                        if d in cfg.dimensions and d not in ("dt", "status")][:3]
+                candidate_pool = [d for d in m_cfg.support_dims if d in cfg.dimensions]
+                dims = [d for d in candidate_pool
+                        if d not in ("dt", "status")][:3]
+        # ---- L4 决策轨迹：记下"选了哪些维度拆解、候选池与被弃维度"（纯记录）----
+        _emit.agent_decision(
+            "AttributionAgent", "dims", f"归因维度 → {dims or '（无可用维度）'}",
+            candidates=[{"dim": d} for d in candidate_pool],
+            chosen={"dims": list(dims)},
+            rejected=[{"option": d, "reason": "未入选本轮拆解维度"}
+                      for d in candidate_pool if d not in dims], gate=None)
         att = attribution.analyze(cfg, _db, routing["metric"], current_spec=time_spec,
                                   dims=dims, threshold_pct=alert_threshold_pct)
         out["attribution"] = att
@@ -696,30 +732,111 @@ def _attribution_chain(cfg: BusinessConfig, db_path: str, res, routing: Dict, ll
                          f"下一步动作={action}{'（会话记忆续钻）' if resumed else ''}"
                          f"（来源={decision.get('decision_source')}）：{decision.get('reason','')}",
                          action=action, decision_source=decision.get("decision_source"))
+        # ---- L4 决策轨迹：记下"下钻动作的候选 / 选中 / 被拒动作及原因"（纯记录）----
+        _action_order = ("drill", "switch_dim", "factorize", "none")
+        _factor_allowed = attribution.is_factor_question(question)
+        _rejected_actions: List[Dict] = []
+        for _a in _action_order:
+            if _a == action:
+                continue
+            if _a == "factorize" and not _factor_allowed:
+                _rejected_actions.append(
+                    {"option": _a, "reason": "策略门控：本问未涉及乘法因子（量价）"})
+            elif _a == "none" and not followup_tone:
+                _rejected_actions.append(
+                    {"option": _a, "reason": "规则底线：无追问语气，不做下钻"})
+            else:
+                _rejected_actions.append(
+                    {"option": _a, "reason": f"未被选中（本轮决策={action}）"})
+        _emit.agent_decision(
+            "AttributionAgent", "decide_drill",
+            f"下钻决策 → {action}（来源={decision.get('decision_source')}）",
+            candidates=[{"action": _a} for _a in _action_order],
+            chosen={"action": action, "dim": decision.get("dim"),
+                    "path": decision.get("path"),
+                    "decision_source": decision.get("decision_source")},
+            rejected=_rejected_actions, gate=None)
+
+        # ---- L1 受限规划循环：动作的执行改由**算子登记表**驱动（有界）----
+        # 首步沿用上面已算好的 `decision`（含策略门控 / 规则地板 / 记忆续钻）；
+        # 后续步骤**仅在接 LLM 时**由 LLM 规划器在登记表里追加，且硬上限 PLAN_MAX_STEPS。
+        # 无 LLM 时 `run_plan` 立即剪枝 → 算子序列与旧线性链**逐字一致**（回退保证）。
+        _plan_ctx = operators.OpContext(
+            cfg=cfg, db=_db, metric=routing["metric"], time_spec=time_spec,
+            threshold_pct=alert_threshold_pct, question=question, dims=dims)
+        _plan_history: List[Dict] = [{"op": "analyze", "result": att}]
+
+        def _exec_step(_step, _res):
+            """执行回调：把算子结果映射到既有产物键与流式事件（保持旧链产物/事件不变）。"""
+            if _res is None:  # 规划校验拒绝或规划停
+                _emit.agent_step("AttributionAgent", "plan_reject",
+                                 f"规划步骤被拒绝：{_step.reason}", op=_step.op)
+                return
+            if _step.op == "factorize" and _res.get("ok"):
+                out["factor_split"] = _res
+                for f in (_res.get("factors") or [])[:2]:
+                    _emit.agent_step("AttributionAgent", "factorize",
+                                     f"{f.get('label')} 变化 {f.get('change'):+.2f}，"
+                                     f"对总变动贡献 {f.get('share', 0) * 100:+.1f}%",
+                                     factor=f.get("label"), share=f.get("share"))
+            elif _step.op == "drill" and _res.get("ok"):
+                out["drill"] = _res
+                for c in (_res.get("top_contributors") or [])[:3]:
+                    _emit.agent_step("AttributionAgent", "drill", c.get("desc", ""),
+                                     path=_res.get("path_desc", ""))
+            elif _step.op == "check_significance" and _res.get("ok"):
+                _emit.agent_step("AttributionAgent", "significance",
+                                 f"统计门控：z={_res.get('z')} p={_res.get('p_value')} "
+                                 f"显著={_res.get('is_significant')}")
+            # L4 决策轨迹：把"规划链上的这一步"记进流水（含来源 rule/llm/memory）。
+            _emit.agent_decision(
+                "AttributionAgent", f"plan:{_step.op}",
+                f"规划步 → {_step.op}（来源={_step.source}）：{_step.reason}",
+                candidates=({"op": _step.op},),
+                chosen={"op": _step.op, "source": _step.source, "args": _step.args},
+                rejected=[], gate=None)
 
         if att.get("is_abnormal") or resumed:
-            if action == "factorize":
-                fz = attribution.factorize(cfg, _db, routing["metric"], current_spec=time_spec)
-                if fz.get("ok"):
-                    out["factor_split"] = fz
-                    for f in (fz.get("factors") or [])[:2]:
-                        _emit.agent_step("AttributionAgent", "factorize",
-                                         f"{f.get('label')} 变化 {f.get('change'):+.2f}，"
-                                         f"对总变动贡献 {f.get('share', 0) * 100:+.1f}%",
-                                         factor=f.get("label"), share=f.get("share"))
-            elif action in ("drill", "switch_dim") and decision.get("path") or (decision.get("dim")):
-                path = decision.get("path")
-                if not path and decision.get("dim"):
-                    # switch_dim 需重新按新维度 analyze 后走 path
-                    path = [{"dim": decision["dim"],
-                             "value": (att.get("top_contributors") or [{}])[0].get("key", "")}]
-                d = attribution.drill(cfg, _db, routing["metric"], current_spec=time_spec,
-                                      path=path)
-                if d.get("ok"):
-                    out["drill"] = d
-                    for i, c in enumerate((d.get("top_contributors") or [])[:3]):
-                        _emit.agent_step("AttributionAgent", "drill", c.get("desc", ""),
-                                         path=d.get("path_desc", ""))
+            _first = operators._step_from_decision(decision, att)
+            if _first is not None:
+                _ok, _args, _err = operators.validate_args(_first.op, _first.args, _plan_ctx)
+                if _ok:
+                    _res = operators.run_op(_first.op, _plan_ctx, _args)
+                    _plan_history.append({"op": _first.op, "result": _res})
+                    _exec_step(_first, _res)
+                else:
+                    _exec_step(operators.PlanStep(_first.op, _first.args,
+                                                  f"规划校验拒绝：{_err}", "reject"), None)
+                # 后续步骤：只由 LLM 规划器追加（无 LLM 时 run_plan 立即返回，行为不变）
+                operators.run_plan(_plan_ctx, _plan_history, question=question, llm=llm,
+                                   on_step=_exec_step)
+
+        # ---- L2 假设验证环：LLM 提假设 → 确定性判官裁决（**仅接 LLM 时启用**）----
+        # 无 LLM → 整块跳过，行为与旧链逐字一致。判官复用既有 _additivity_check / 规则校验器，
+        # 把"成立/被否 + 原因"记进结论证据（也可被 L4 重放 UI 读到）。
+        if llm is not None and att.get("is_abnormal"):
+            try:
+                _hyp = hypotheses.run_hypothesis_loop(
+                    _plan_ctx, att, llm, factor_split=out.get("factor_split"))
+                out["hypotheses"] = _hyp
+                # 只记"决策轨迹"（agent_decision），不发 agent_step —— 假设核验是**同一步内的
+                # 内部审计**，避免与主编排步数（L5 过程指标口径）重复计数。
+                _emit.agent_decision(
+                    "AttributionAgent", "hypotheses",
+                    f"假设验证环：{_hyp.get('n_verified', 0)} 成立 / {_hyp.get('n_rejected', 0)} 被否",
+                    candidates=[{"claim": hypotheses._claim(r.get("hypothesis") or {})}
+                                for r in (_hyp.get("verified", []) + _hyp.get("rejected", []))],
+                    chosen={"verified": [hypotheses._claim(r.get("hypothesis") or {})
+                                         for r in _hyp.get("verified", [])]},
+                    rejected=[{"option": hypotheses._claim(r.get("hypothesis") or {}),
+                               "reason": r.get("reason", "")}
+                              for r in _hyp.get("rejected", [])],
+                    gate=None)
+            except Exception as e:  # noqa: BLE001 —— 假设环失败不阻塞主结论（降级）
+                _emit.agent_decision("AttributionAgent", "hypotheses",
+                                     f"假设验证环跳过：{str(e)[:80]}",
+                                     candidates=[], chosen={"verified": []},
+                                     rejected=[], gate=None)
         # ---- 写回会话记忆（最近一次主因建议），供下一轮追问续钻 ----
         if memory is not None:
             sugg = attribution.next_drill_suggestion(out.get("drill") or att)
@@ -1039,6 +1156,32 @@ def _decision(merged: Dict, routing: Dict, llm, cfg: BusinessConfig, hitl_path,
         "channel": "none" if (inconclusive or directed) else ("hitl" if is_abnormal else "none"),
         "hitl_id": hitl_id,
     }
+    # ---- L4 决策轨迹：记下"告警门控判据（z/p/α）+ 候选告警级 + 被否决的级及原因"（纯记录）----
+    _gate = {"significance_required": require_sig, "tested": bool(sig.get("tested")),
+             "z": sig.get("z"), "p_value": sig.get("p_value"),
+             "is_significant": sig.get("is_significant"),
+             "threshold_pct": alert_threshold_pct, "directed_query": directed,
+             "conclusion": alert_level}
+    if inconclusive:
+        _rejected_levels = [{"option": "alert", "reason": "数据不足，本轮不下结论"},
+                            {"option": "normal", "reason": "数据不足，不得声称正常"}]
+    elif directed:
+        _rejected_levels = [{"option": "alert", "reason": "定向查询不评估告警"}]
+    elif noise_suppressed:
+        _rejected_levels = [{"option": "alert",
+                             "reason": f"未通过显著性检验（z={sig.get('z')}, "
+                                       f"p={sig.get('p_value')}）→ 降级为观察项"}]
+    elif is_abnormal:
+        _rejected_levels = [{"option": "watch", "reason": "已通过阈值与显著性检验"}]
+    else:
+        _rejected_levels = [{"option": "alert", "reason": "波动未超过阈值"}]
+    _emit.agent_decision(
+        "DecisionAgent", "gate", f"决策门控 → {alert_level}",
+        candidates=[{"level": x} for x in
+                    ("alert", "watch", "normal", "query", "inconclusive")],
+        chosen={"level": alert_level, "alert": decision["alert"],
+                "channel": decision["channel"]},
+        rejected=_rejected_levels, gate=_gate)
     _emit.agent_step("DecisionAgent", "decide",
                      (f"告警=不适用（数据不足）" if inconclusive
                       else f"告警=不适用（定向查询，已给主因）" if directed

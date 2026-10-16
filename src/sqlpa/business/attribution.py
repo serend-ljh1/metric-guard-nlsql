@@ -807,7 +807,13 @@ def _contribution_scattered(att: Dict, spread_frac: float = 0.6) -> bool:
     top = (att.get("top_contributors") or [])
     if not top:
         return False
-    return abs(top[0].get("pct_of_change", 0.0)) < spread_frac
+    share = top[0].get("pct_of_change")
+    # 比率/均值类指标：占比不适用（analyze 显式置 None）。绝不能 abs(None)——
+    # 否则 decide_drill 会抛错、把整条归因链打断（实测 AOV + 追问 + LLM 即此故障）。
+    # 占比未知 ≠ 占比很小，故不判为"分散"。
+    if share is None:
+        return False
+    return abs(float(share)) < spread_frac
 
 
 def decide_drill(att: Dict, question: str, llm=None) -> Dict:
@@ -868,9 +874,14 @@ def decide_drill(att: Dict, question: str, llm=None) -> Dict:
     if llm is None:
         return rule
 
-    contrib_lines = "\n".join(
-        f"- {c.get('desc')}（占 {abs(c.get('pct_of_change', 0)) * 100:.0f}%）"
-        for c in top[:4]) or "无显著维度拆分。"
+    def _contrib_line(c: Dict) -> str:
+        # 比率/均值类指标的占比不适用（pct_of_change 显式为 None）→ 不写"占 X%"，
+        # 否则 abs(None) 会抛错（实测 AOV + 追问 + LLM 正是崩在这里）。
+        share = c.get("pct_of_change")
+        tail = f"（占 {abs(share) * 100:.0f}%）" if share is not None else "（占比不适用）"
+        return f"- {c.get('desc', '')}" + tail
+
+    contrib_lines = "\n".join(_contrib_line(c) for c in top[:4]) or "无显著维度拆分。"
     suggestion = next_drill_suggestion(att)
     # 策略门控：只有"在问乘法因子"时才允许 factorize（见 is_factor_question 说明）
     factor_rule = ("- factorize: 仅当用户在问订单量/客单价这类**乘法因子**时可选\n"
@@ -1069,7 +1080,10 @@ def notify_anomaly(cfg: BusinessConfig, result: Dict,
     reason_lines = [f"{result['metric_name']} 波动 {result['change']:+.2f} "
                     f"({result['change_pct'] * 100:+.1f}%)，超过阈值需关注"]
     for c in top[:3]:
-        reason_lines.append(f"  - {c['desc']}（占{abs(c['pct_of_change']) * 100:.0f}%）")
+        # 比率/均值类指标的占比不适用（None）→ 不写占比，避免 abs(None) 抛错。
+        share = c.get("pct_of_change")
+        tail = f"（占{abs(share) * 100:.0f}%）" if share is not None else ""
+        reason_lines.append(f"  - {c['desc']}{tail}")
     reason_lines.append(f"当期范围: {result.get('current_spec')}；负责人: {owner}")
 
     from sqlpa.business.hitl import enqueue
