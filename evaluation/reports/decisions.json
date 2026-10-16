@@ -1,7 +1,7 @@
 {
-  "total": 32,
-  "correct": 26,
-  "decision_accuracy": 0.8125,
+  "total": 50,
+  "correct": 40,
+  "decision_accuracy": 0.8,
   "llm_used": false,
   "llm_calls": 0,
   "cases": [
@@ -266,6 +266,146 @@
       "needs_judgment": false
     },
     {
+      "name": "order_count-追问主因品类",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「alimentos」变化-40",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-追问主因州RJ",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-55",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-追问主因州SP",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-6",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-主因品类聚焦",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「alimentos」变化-80",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-两州均势换维",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-30；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-多州分散",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-28；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-多品类分散",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「a」变化-11；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-拆解量价二",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-60；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-乘积因子拆",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「x」变化-58；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-贡献构成",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-52；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-单月取数",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-州对比",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-按月趋势",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-品类排行",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
       "name": "判断-用户否定主因",
       "action": "drill",
       "expert": "switch_dim",
@@ -324,19 +464,65 @@
       "reason": "贡献主因：州「SP」变化-90",
       "gated_from": null,
       "needs_judgment": true
+    },
+    {
+      "name": "判断-否定品类维度",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：品类「alimentos」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-确认是否唯一主因",
+      "action": "switch_dim",
+      "expert": "drill",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-只想看总数",
+      "action": "drill",
+      "expert": "none",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-质疑整体性",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
     }
   ],
-  "rule_accuracy": 0.8125,
+  "rule_accuracy": 0.8,
   "llm_value": 0.0,
-  "judgment_cases": 6,
+  "judgment_cases": 10,
   "judgment_accuracy": null,
   "judgment_llm_calls": 0,
   "expert_labeled_by": "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）",
+  "annotation_protocol": {
+    "labeled_by": "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）",
+    "second_annotator": "unavailable",
+    "agreement": null,
+    "note": "真值为实现者自标；未做独立第二人标注，故本批数字不声称泛化准确率，只作回归与方法论演示。"
+  },
   "action_tally": {
-    "drill": 7,
-    "switch_dim": 8,
-    "factorize": 7,
-    "none": 10
+    "drill": 12,
+    "switch_dim": 13,
+    "factorize": 10,
+    "none": 15
   },
   "exec": {
     "total": 4,

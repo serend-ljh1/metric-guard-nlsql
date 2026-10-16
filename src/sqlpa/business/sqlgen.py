@@ -19,16 +19,28 @@ _SQL_KEYWORDS = {
     "from", "distinct", "case", "when", "then", "else", "end", "where",
 }
 
-# 别名 -> (表名, JOIN 子句, 该别名服务于哪个维度族)
-DIM_JOIN_POOL: Dict[str, Tuple[str, str, str]] = {
-    "c": ("customers", "LEFT JOIN customers c ON o.customer_id=c.customer_id", "state"),
-    "oi": ("order_items", "LEFT JOIN order_items oi ON o.order_id=oi.order_id", "items"),
-    "p": ("products", "LEFT JOIN products p ON oi.product_id=p.product_id", "category"),
-    "r": ("reviews", "LEFT JOIN reviews r ON o.order_id=r.order_id", "review"),
-}
 
-# 注入依赖：要注入 p 必须先在 SQL 里出现 oi（p 的 ON 条件引用 oi.product_id）。
-_JOIN_DEPS: Dict[str, Tuple[str, ...]] = {"p": ("oi",)}
+def relation_pool(cfg) -> Tuple[Dict[str, Tuple[str, str, str]], Dict[str, Tuple[str, ...]]]:
+    """从配置构建 JOIN 池与依赖表：关系建模声明在 `business_config.yaml` 的 `relations` 段。
+
+    返回 `(别名 -> (表名, JOIN 子句, 服务维度族), 别名 -> 依赖别名元组)`。
+    为什么放进配置：语义层的关系（维度表 / 基数 / 依赖）是**每个业务域自己的星型模型**，
+    硬编码在代码里就等于"这套语义层只认 Olist 那一张事实表"。挪进配置后，换域只改 YAML、
+    不改代码；代码只负责**按声明注入**。
+    """
+    pool: Dict[str, Tuple[str, str, str]] = {}
+    deps: Dict[str, Tuple[str, ...]] = {}
+    for spec in (getattr(cfg, "relations", None) or {}).values():
+        alias = str(spec.get("alias") or "").strip().lower()
+        if not alias:
+            continue
+        pool[alias] = (str(spec.get("table") or ""),
+                       str(spec.get("join") or ""),
+                       ",".join(spec.get("serves") or []))
+        dep = [str(d).strip().lower() for d in (spec.get("depends_on") or []) if str(d).strip()]
+        if dep:
+            deps[alias] = tuple(dep)
+    return pool, deps
 
 
 class JoinInjectionError(ValueError):
@@ -158,6 +170,7 @@ def inject_dim_joins(cfg, metric, dim_keys: Sequence[str] = (),
     base_join = (getattr(metric, "join_clause", "") or "").strip()
     present = present_names(from_clause, base_join)
     joins: List[str] = [base_join] if base_join else []
+    pool, deps = relation_pool(cfg)
 
     pending = set(needed_aliases(cfg, dim_keys, filter_types))
     # 已可用（在 from/自带 join 里）的别名直接从待办里去掉；表名命中同理。
@@ -166,12 +179,12 @@ def inject_dim_joins(cfg, metric, dim_keys: Sequence[str] = (),
     while pending:
         changed = False
         for alias in sorted(pending):          # sorted() 取快照，循环内改 pending 是安全的
-            spec = DIM_JOIN_POOL.get(alias)
+            spec = pool.get(alias)
             if not spec:
                 raise JoinInjectionError(
-                    f"无法为维度/过滤注入所需表别名「{alias}」：不在 JOIN 池 "
-                    f"{sorted(DIM_JOIN_POOL)} 中，请补配置或去掉该维度/过滤")
-            missing = [d for d in _JOIN_DEPS.get(alias, ()) if d not in present]
+                    f"无法为维度/过滤注入所需表别名「{alias}」：配置 `relations` 未声明该关系，"
+                    f"请补配置（已声明: {sorted(pool)}）或去掉该维度/过滤")
+            missing = [d for d in deps.get(alias, ()) if d not in present]
             if missing:
                 # 先把依赖排进待办（依赖也要是池里的别名，否则下一轮报错），本轮跳过
                 for d in missing:

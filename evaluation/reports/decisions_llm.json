@@ -1,17 +1,17 @@
 {
-  "total": 32,
-  "correct": 26,
-  "decision_accuracy": 0.8125,
+  "total": 50,
+  "correct": 45,
+  "decision_accuracy": 0.9,
   "llm_used": true,
-  "llm_calls": 0,
+  "llm_calls": 15,
   "cases": [
     {
       "name": "gmv-追问主因州下钻",
-      "action": "none",
+      "action": "drill",
       "expert": "drill",
       "source": "llm",
-      "hit": false,
-      "reason": "用户只是询问订单量下滑主要出在哪个州，当前维度贡献已明确州「SP」变化-90且占90%，属于要答案/对比，不需要继续下钻或换维度。",
+      "hit": true,
+      "reason": "用户继续追问订单量下滑主要出在哪个州，属于州维度归因；当前州维度贡献高度集中在SP（-90，占90%），应沿state=SP继续下钻定位具体来源。",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -21,17 +21,17 @@
       "expert": "drill",
       "source": "llm",
       "hit": true,
-      "reason": "用户明确追问州 SP 为什么下跌，且 SP 贡献占 88%，应沿 state=SP 继续下钻找更细维度原因。",
+      "reason": "用户明确追问州 SP 为何下跌，且该州贡献占主导，应沿当前维度值继续下钻定位原因。",
       "gated_from": null,
       "needs_judgment": false
     },
     {
       "name": "aov-客单价主因州",
-      "action": "none",
+      "action": "drill",
       "expert": "drill",
-      "source": "llm",
-      "hit": false,
-      "reason": "用户问的是客单价变化主要来自哪个州，属于对当前州维度贡献的确认/对比；当前已有州 RJ 贡献 80%，不需要继续下钻或换维度。",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-8",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -41,7 +41,7 @@
       "expert": "drill",
       "source": "llm",
       "hit": true,
-      "reason": "用户明确要求继续拆开看，且当前贡献高度集中在品类 alimentos（占76%），应沿该品类继续下钻定位具体拖累项。",
+      "reason": "用户明确要求继续拆品类拖累，且当前品类维度中 alimentos 负贡献最大（-120，占76%），应沿该维度值下钻定位具体拖累项。",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -49,29 +49,29 @@
       "name": "gmv-下钻州内品类",
       "action": "drill",
       "expert": "drill",
-      "source": "rule",
+      "source": "llm",
       "hit": true,
-      "reason": "贡献主因：品类「health」变化-45",
+      "reason": "用户明确要求继续下钻，并指定查看州 SP 内的品类问题，因此下一步应先进入 state=SP 的维度值，再分析该州下的品类贡献。",
       "gated_from": null,
       "needs_judgment": false
     },
     {
       "name": "order_count-主因州",
-      "action": "none",
+      "action": "drill",
       "expert": "drill",
       "source": "llm",
-      "hit": false,
-      "reason": "用户问的是订单量减少具体在哪个州，而当前已有州维度贡献：SP 变化 -12 且占 75%，说明主要减少州已经明确为 SP；用户没有要求继续下钻 SP 内部，因此不需要再拆。",
+      "hit": true,
+      "reason": "用户明确追问订单量减少具体发生在哪个州，且当前州维度中SP的负贡献占比最高，应沿state维度继续下钻SP。",
       "gated_from": null,
       "needs_judgment": false
     },
     {
       "name": "gmv-州贡献分散换维",
-      "action": "drill",
+      "action": "switch_dim",
       "expert": "switch_dim",
-      "source": "llm",
-      "hit": false,
-      "reason": "用户追问具体是哪一州导致下跌，属于继续按州维度定位贡献来源；当前 SP 贡献最大且建议下钻 state=SP，因此选择下钻 SP。",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-30；贡献分散，建议换维度再拆。",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -79,19 +79,19 @@
       "name": "gmv-处处都在跌",
       "action": "switch_dim",
       "expert": "switch_dim",
-      "source": "llm",
+      "source": "rule",
       "hit": true,
-      "reason": "用户问的是整体为什么跌，且当前品类贡献分散（a/b/c 都明显下跌），单钻 category=a 无法解释全局；应换维度重新拆，寻找是否存在更集中的共同驱动因素。",
+      "reason": "贡献主因：品类「a」变化-32；贡献分散，建议换维度再拆。",
       "gated_from": null,
       "needs_judgment": false
     },
     {
       "name": "aov-客单价分散",
-      "action": "drill",
+      "action": "switch_dim",
       "expert": "switch_dim",
-      "source": "llm",
-      "hit": false,
-      "reason": "用户继续追问客单价波动来源，不是要求做订单量×客单价因子分解；当前州维度中 RJ 贡献最大，应沿 state=RJ 下钻查看客单价波动。",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-4；贡献分散，建议换维度再拆。",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -99,9 +99,9 @@
       "name": "gmv-各品类都下滑",
       "action": "switch_dim",
       "expert": "switch_dim",
-      "source": "llm",
+      "source": "rule",
       "hit": true,
-      "reason": "品类 x/y/z 贡献接近且均下滑，说明当前 category 维度贡献分散，无法定位主因；应切换到渠道等维度重新拆解，寻找共同下滑来源。",
+      "reason": "贡献主因：品类「x」变化-25；贡献分散，建议换维度再拆。",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -111,7 +111,7 @@
       "expert": "switch_dim",
       "source": "llm",
       "hit": true,
-      "reason": "用户质疑当前维度拆分是否合适，且品类 a 的贡献也较显著，因此不应继续下钻 state=SP，而应换一个维度重新拆分验证。",
+      "reason": "用户质疑当前维度拆分是否合适，说明不应继续沿 state=SP 下钻，而应换到另一个已有贡献的维度 category 重新拆解，观察品类 a 是否能更好解释波动。",
       "gated_from": null,
       "needs_judgment": false
     },
@@ -266,12 +266,152 @@
       "needs_judgment": false
     },
     {
-      "name": "判断-用户否定主因",
+      "name": "order_count-追问主因品类",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「alimentos」变化-40",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-追问主因州RJ",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-55",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-追问主因州SP",
+      "action": "drill",
+      "expert": "drill",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-6",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-主因品类聚焦",
+      "action": "drill",
+      "expert": "drill",
+      "source": "llm",
+      "hit": true,
+      "reason": "用户明确追问品类 alimentos 为什么下跌，应沿该维度值继续下钻，定位其内部贡献来源。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-两州均势换维",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-30；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-多州分散",
       "action": "switch_dim",
       "expert": "switch_dim",
       "source": "llm",
       "hit": true,
-      "reason": "用户明确表示不再看州维度，要求换角度重新拆解；这不是要某个数或对比，也不是量价因子分解，因此选择 switch_dim，建议换到渠道维度重新看贡献。",
+      "reason": "用户问的是‘全国都在跌’，且州维度贡献较分散（SP/RJ/MG 均约 20%+），说明不是单一州的问题；应切换到更全局的维度寻找共性原因，而不是继续下钻单个州。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-多品类分散",
+      "action": "switch_dim",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「a」变化-11；贡献分散，建议换维度再拆。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-拆解量价二",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「SP」变化-60；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-乘积因子拆",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：品类「x」变化-58；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-贡献构成",
+      "action": "factorize",
+      "expert": "factorize",
+      "source": "rule",
+      "hit": true,
+      "reason": "贡献主因：州「RJ」变化-52；用户在问量价/因子，做乘法分解。",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-单月取数",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "order_count-州对比",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "aov-按月趋势",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "gmv-品类排行",
+      "action": "none",
+      "expert": "none",
+      "source": "rule",
+      "hit": true,
+      "reason": "无追问语气，不做下钻",
+      "gated_from": null,
+      "needs_judgment": false
+    },
+    {
+      "name": "判断-用户否定主因",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
       "gated_from": null,
       "needs_judgment": true
     },
@@ -281,7 +421,7 @@
       "expert": "none",
       "source": "llm",
       "hit": true,
-      "reason": "用户明确说“先别拆了”，当前是在询问波动是否正常，不是要求继续按维度下钻，也不是询问量价/乘法因子，因此选择 none。",
+      "reason": "用户明确表示先不要继续拆解，并询问波动是否正常，属于对波动性质的判断/对比问题，不是继续下钻、换维度或因子分解。",
       "gated_from": null,
       "needs_judgment": true
     },
@@ -291,7 +431,7 @@
       "expert": "drill",
       "source": "llm",
       "hit": false,
-      "reason": "用户是在确认是否只有 SP 这一个州下跌，属于对当前 state 维度贡献的对比/验证，不要求继续下钻 SP，也不要求换维度或做因子分解。",
+      "reason": "用户是在确认是否只有 SP 这一个州在跌，需要横向对比其他州的表现，而不是继续对 SP 下钻，也不是换维度或做因子分解。",
       "gated_from": null,
       "needs_judgment": true
     },
@@ -301,17 +441,17 @@
       "expert": "none",
       "source": "llm",
       "hit": true,
-      "reason": "用户要求先不看 GMV，改看别的指标，但没有指定具体指标、维度或维度值，也不是在继续当前指标波动归因，因此不需要下钻或换维度。",
+      "reason": "用户要求先不看当前GMV，转而查看其他指标，并未要求继续对当前指标做维度下钻或换维度归因，因此不执行drill/switch_dim。",
       "gated_from": null,
       "needs_judgment": true
     },
     {
       "name": "判断-阈值边界仍应换维",
-      "action": "switch_dim",
+      "action": "none",
       "expert": "switch_dim",
       "source": "llm",
-      "hit": true,
-      "reason": "用户质疑只归因SP，需要重新按州维度查看整体贡献，判断是否多州共同下滑，而不是继续下钻单个州。",
+      "hit": false,
+      "reason": "用户是在确认是否整体下滑、是否不应只关注SP，属于对整体趋势的判断/对比，并未要求继续沿某个维度值下钻，也未要求更换维度或做量价因子分解。",
       "gated_from": null,
       "needs_judgment": true
     },
@@ -321,24 +461,70 @@
       "expert": "none",
       "source": "llm",
       "hit": true,
-      "reason": "用户只是要求一句话总结结论，没有继续下钻、换维度或做因子分解的意思。",
+      "reason": "用户要求一句话总结结论，并不是要继续下钻或换维度分析；当前信息已可总结为主要由州 SP 的下降导致。",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-否定品类维度",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：品类「alimentos」变化-90",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-确认是否唯一主因",
+      "action": "drill",
+      "expert": "drill",
+      "source": "llm",
+      "hit": true,
+      "reason": "用户要求核实是否只有SP在拖后腿；当前SP贡献占55%且已有下钻建议，应继续下钻state=SP确认其内部是否为主要拖累来源。",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-只想看总数",
+      "action": "none",
+      "expert": "none",
+      "source": "llm",
+      "hit": true,
+      "reason": "用户明确表示‘不用再拆了’，没有继续下钻或换维度分析的意图。",
+      "gated_from": null,
+      "needs_judgment": true
+    },
+    {
+      "name": "判断-质疑整体性",
+      "action": "drill",
+      "expert": "switch_dim",
+      "source": "rule",
+      "hit": false,
+      "reason": "贡献主因：州「SP」变化-90",
       "gated_from": null,
       "needs_judgment": true
     }
   ],
-  "rule_accuracy": 0.8125,
-  "rule_correct": 26,
-  "llm_value": 0.0,
-  "judgment_cases": 6,
-  "judgment_accuracy": 0.8333,
-  "judgment_llm_calls": 6,
-  "judgment_rule_calls": 0,
+  "rule_accuracy": 0.8,
+  "rule_correct": 40,
+  "llm_value": 0.1,
+  "judgment_cases": 10,
+  "judgment_accuracy": 0.5,
+  "judgment_llm_calls": 7,
+  "judgment_rule_calls": 3,
   "expert_labeled_by": "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）",
+  "annotation_protocol": {
+    "labeled_by": "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）",
+    "second_annotator": "unavailable",
+    "agreement": null,
+    "note": "真值为实现者自标；未做独立第二人标注，故本批数字不声称泛化准确率，只作回归与方法论演示。"
+  },
   "action_tally": {
-    "drill": 7,
-    "switch_dim": 8,
-    "factorize": 7,
-    "none": 10
+    "drill": 12,
+    "switch_dim": 13,
+    "factorize": 10,
+    "none": 15
   },
   "exec": {
     "total": 4,
@@ -363,7 +549,7 @@
       {
         "check": "drill-主因隔离收敛",
         "ok": true,
-        "detail": "path=category=alimentos atti_delta=-200.0 drill_top=州「SP」变化-200.00 (-200.0)"
+        "detail": "path=品类=alimentos atti_delta=-200.0 drill_top=时间「2026-09-01」变化-200.00 (-200.0)"
       }
     ]
   }

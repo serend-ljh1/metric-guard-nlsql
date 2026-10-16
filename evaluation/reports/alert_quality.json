@@ -11,7 +11,6 @@
   "n_calendar_driven_alerts": 9,
   "alert_rate_threshold_only": 0.7778,
   "suppression_rate": 0.5714,
-  "offline_note": "本评测无可信真值标注，报的是**告警量的下降与成因结构**，不是精确假阳性率；真 FP/FN 需独立标注集。",
   "cases": [
     {
       "metric": "gmv",
@@ -877,5 +876,214 @@
       "calendar_explained": -10.813,
       "per_day_change_pct": -0.0351
     }
-  ]
+  ],
+  "labeled": {
+    "method": "注入式构造真值：真异常=整期×0.6/1.4（日均显著变化）；真正常·日历假象=缩放当期使日均与上期持平（总值只剩月长差）；真正常·平稳=缩放当期使总值持平。真值由构造定义，非人工标注。",
+    "n_cases": 14,
+    "n_abnormal": 8,
+    "n_normal": 6,
+    "threshold_only": {
+      "tp": 8,
+      "fp": 4,
+      "tn": 2,
+      "fn": 0,
+      "recall": 1.0,
+      "false_positive_rate": 0.6667,
+      "precision": 0.6667
+    },
+    "gated": {
+      "tp": 8,
+      "fp": 0,
+      "tn": 6,
+      "fn": 0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "precision": 1.0
+    },
+    "cases": [
+      {
+        "metric": "gmv",
+        "prev": "2018-05",
+        "cur": "2018-06",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "整期价格×0.6",
+        "change_pct": -0.4783,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "gmv",
+        "prev": "2018-06",
+        "cur": "2018-07",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "整期价格×0.6",
+        "change_pct": -0.3897,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "gmv",
+        "prev": "2018-07",
+        "cur": "2018-08",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "整期价格×1.4",
+        "change_pct": 0.3535,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0019
+      },
+      {
+        "metric": "gmv",
+        "prev": "2017-08",
+        "cur": "2017-09",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "整期价格×0.6",
+        "change_pct": -0.3439,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "order_count",
+        "prev": "2018-05",
+        "cur": "2018-06",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "当期订单取消 40%",
+        "change_pct": -0.4623,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "order_count",
+        "prev": "2018-06",
+        "cur": "2018-07",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "当期订单取消 40%",
+        "change_pct": -0.3865,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "item_count",
+        "prev": "2018-06",
+        "cur": "2018-07",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "当期订单取消 40%",
+        "change_pct": -0.3898,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "paid_order_count",
+        "prev": "2018-06",
+        "cur": "2018-07",
+        "klass": "abnormal",
+        "truth_abnormal": true,
+        "basis": "当期订单取消 40%",
+        "change_pct": -0.3836,
+        "threshold_alert": true,
+        "gated_alert": true,
+        "significant": true,
+        "p_value": 0.0
+      },
+      {
+        "metric": "gmv",
+        "prev": "2017-02",
+        "cur": "2017-03",
+        "klass": "calendar",
+        "truth_abnormal": false,
+        "basis": "整期价格×0.7363（日均持平，仅月长差）",
+        "change_pct": 0.1071,
+        "threshold_alert": true,
+        "gated_alert": false,
+        "significant": false,
+        "p_value": 1.0
+      },
+      {
+        "metric": "gmv",
+        "prev": "2018-02",
+        "cur": "2018-03",
+        "klass": "calendar",
+        "truth_abnormal": false,
+        "basis": "整期价格×0.9456（日均持平，仅月长差）",
+        "change_pct": 0.1071,
+        "threshold_alert": true,
+        "gated_alert": false,
+        "significant": false,
+        "p_value": 1.0
+      },
+      {
+        "metric": "gmv",
+        "prev": "2017-01",
+        "cur": "2017-02",
+        "klass": "calendar",
+        "truth_abnormal": false,
+        "basis": "整期价格×0.4428（日均持平，仅月长差）",
+        "change_pct": -0.0968,
+        "threshold_alert": true,
+        "gated_alert": false,
+        "significant": false,
+        "p_value": 0.4481
+      },
+      {
+        "metric": "gmv",
+        "prev": "2018-01",
+        "cur": "2018-02",
+        "klass": "calendar",
+        "truth_abnormal": false,
+        "basis": "整期价格×1.0192（日均持平，仅月长差）",
+        "change_pct": -0.0968,
+        "threshold_alert": true,
+        "gated_alert": false,
+        "significant": false,
+        "p_value": 1.0
+      },
+      {
+        "metric": "gmv",
+        "prev": "2018-05",
+        "cur": "2018-06",
+        "klass": "stable",
+        "truth_abnormal": false,
+        "basis": "整期价格×1.1501（总值持平）",
+        "change_pct": 0.0,
+        "threshold_alert": false,
+        "gated_alert": false,
+        "significant": null,
+        "p_value": null
+      },
+      {
+        "metric": "gmv",
+        "prev": "2018-06",
+        "cur": "2018-07",
+        "klass": "stable",
+        "truth_abnormal": false,
+        "basis": "整期价格×0.9832（总值持平）",
+        "change_pct": 0.0,
+        "threshold_alert": false,
+        "gated_alert": false,
+        "significant": null,
+        "p_value": null
+      }
+    ]
+  },
+  "offline_note": "段 A 无可信真值，报的是告警量的下降与成因结构；段 B 用**注入式构造真值**给出真 FP/FN 率（构造分布，非真实流量分布）。"
 }

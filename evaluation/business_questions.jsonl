@@ -64,3 +64,25 @@
 {"q": "各品类的库存周转率", "expect": "out_of_scope", "note": "无库存数据"}
 {"q": "今天天气怎么样", "expect": "out_of_scope", "note": "无关问题"}
 {"q": "帮我把这两张表做个关联分析", "expect": "out_of_scope", "note": "非指标化请求"}
+{"q": "麻烦你按州给我看一下成交额", "expect": "semantic", "metric": "gmv", "dims": ["state"], "note": "口语长尾：礼貌祈使 + 成交额"}
+{"q": "各个类别的销售额分别是多少", "expect": "semantic", "metric": "gmv", "dims": ["category"], "note": "口语长尾：类别别名 + 口语收尾"}
+{"q": "从上个月到现在，订单数量变化大吗", "expect": "semantic", "metric": "order_count", "dims": [], "filters": ["time_range"], "note": "口语长尾：相对时间 + 订单数量"}
+{"q": "帮我按商品类目统计一下运费", "expect": "semantic", "metric": "freight_cost", "dims": ["category"], "note": "口语长尾：类目别名"}
+{"q": "每天平均能收到多少单", "expect": "semantic", "metric": "order_count", "dims": ["dt"], "grain": "day", "note": "口语长尾：多少单 + 每天"}
+{"q": "各个省份的平均星级是多少", "expect": "semantic", "metric": "avg_review", "dims": ["state"], "note": "口语长尾：省份 + 星级"}
+{"q": "能给我看看好评的比例吗", "expect": "semantic", "metric": "positive_review_rate", "dims": [], "note": "口语长尾：好评比例"}
+{"q": "各州的差评率分别是多少", "expect": "semantic", "metric": "negative_review_rate", "dims": ["state"], "note": "口语长尾：差评率"}
+{"q": "在售商品都有哪些品类", "expect": "semantic", "metric": "product_count", "dims": ["category"], "note": "口语长尾：在售商品 + 品类"}
+{"q": "我想对比一下各州的商品件数", "expect": "semantic", "metric": "item_count", "dims": ["state"], "note": "口语长尾：对比诉求"}
+{"q": "这平台上一共有多少卖家", "expect": "semantic", "metric": "seller_count", "dims": [], "note": "口语长尾：多少卖家"}
+{"q": "最近7天客单价跌了吗", "expect": "semantic", "metric": "aov", "dims": [], "filters": ["time_range"], "note": "口语长尾：相对时间 + 客单价"}
+{"q": "为什么这个月成交额跌了", "expect": "semantic", "metric": "gmv", "dims": [], "filters": ["time_range"], "note": "口语长尾：归因式问法"}
+{"q": "哪个州的取消订单数最多", "expect": "semantic", "metric": "canceled_order_count", "dims": ["state"], "note": "口语长尾：argmax 式问法（返回各州明细，不是实体名）"}
+{"q": "分品类看下销量排行", "expect": "semantic", "metric": "item_count", "dims": ["category"], "note": "口语长尾：排行诉求"}
+{"q": "退款率是多少", "expect": "semantic", "metric": "cancellation_rate", "dims": [], "note": "口语长尾：退款别名"}
+{"q": "客单价最近7天有没有下降", "expect": "semantic", "metric": "aov", "dims": [], "note": "长尾·确定性关键词层弱点：'有没有'含否定词被守卫拦下，供 LLM 路径对照回收"}
+{"q": "有没有哪个州的订单数特别少", "expect": "semantic", "metric": "order_count", "dims": ["state"], "note": "长尾·确定性关键词层弱点：'有没有'被否定守卫拦下，供 LLM 路径对照回收"}
+{"q": "订单数是不是下降了", "expect": "semantic", "metric": "order_count", "dims": [], "note": "长尾·确定性关键词层弱点：'是不是'含'不是'被否定守卫拦下，供 LLM 路径对照回收"}
+{"q": "帮我算算买家的生命周期价值", "expect": "out_of_scope", "note": "长尾口径外：LTV 未配置"}
+{"q": "各个品类的复购率是多少", "expect": "out_of_scope", "note": "长尾口径外：复购率未配置"}
+{"q": "这个月的利润是多少", "expect": "out_of_scope", "note": "长尾口径外：无成本数据，利润未配置"}

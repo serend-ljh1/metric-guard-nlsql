@@ -1,5 +1,5 @@
 {
-  "n_cases": 66,
+  "n_cases": 88,
   "db_kind": "full",
   "db": "data/olist/olist.db",
   "engine": "semantic-first (compiler)",
@@ -10,20 +10,24 @@
     "dimensions": 4
   },
   "paths": {
-    "semantic": 56,
+    "semantic": 72,
     "fallback": 0,
-    "reject": 10
+    "reject": 16
   },
   "paths_note": "fallback 恒为 0：自由 SQL 生成（降级）链路已删除，口径外一律走 reject。该字段保留为回归护栏。",
-  "semantic_hit_rate": 0.8485,
-  "out_of_scope_rate": 0.0758,
-  "reject_rate": 0.1515,
+  "semantic_hit_rate": 0.8182,
+  "out_of_scope_rate": 0.0909,
+  "reject_rate": 0.1818,
   "certified_rate": 1.0,
-  "in_scope_ok_rate": 1.0,
-  "metric_accuracy": 1.0,
-  "dims_accuracy": 1.0,
+  "in_scope_ok_rate": 0.96,
+  "metric_accuracy": 0.96,
+  "dims_accuracy": 0.9867,
   "reject_accuracy": 1.0,
   "out_of_scope_detected_rate": 1.0,
+  "llm_path": {
+    "enabled": false,
+    "note": "未运行（未提供 --llm；LLM 路径命中率对照需 API Key）。"
+  },
   "details": [
     {
       "q": "各个品类的GMV",
@@ -38,7 +42,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "每个州的成交总额",
@@ -53,7 +58,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "GMV是多少",
@@ -66,7 +72,8 @@
       "metric": "gmv",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "按月看GMV趋势",
@@ -81,7 +88,8 @@
         "dt"
       ],
       "rows": 24,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "每天的销售额",
@@ -96,7 +104,8 @@
         "dt"
       ],
       "rows": 200,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各品类的销售额排名",
@@ -111,7 +120,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "每个州的GMV占比",
@@ -126,7 +136,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "总营收是多少",
@@ -139,7 +150,8 @@
       "metric": "gross_revenue",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的商品销售额",
@@ -154,7 +166,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "运费总额",
@@ -167,7 +180,8 @@
       "metric": "freight_cost",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各个品类的运费",
@@ -182,7 +196,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "平均运费是多少",
@@ -195,7 +210,8 @@
       "metric": "avg_freight",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "客单价是多少",
@@ -208,7 +224,8 @@
       "metric": "aov",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的客单价",
@@ -223,7 +240,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "运费占比",
@@ -236,7 +254,8 @@
       "metric": "ratio@freight_cost/gmv",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的运费占比",
@@ -251,7 +270,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "件单价",
@@ -264,7 +284,8 @@
       "metric": "ratio@gmv/item_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "订单数",
@@ -277,7 +298,8 @@
       "metric": "order_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的订单数",
@@ -292,7 +314,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各品类的订单数",
@@ -307,7 +330,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "每天的订单数",
@@ -322,7 +346,8 @@
         "dt"
       ],
       "rows": 200,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "已支付订单数",
@@ -335,7 +360,8 @@
       "metric": "paid_order_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "取消订单数",
@@ -348,7 +374,8 @@
       "metric": "canceled_order_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的取消订单数",
@@ -363,7 +390,8 @@
         "state"
       ],
       "rows": 23,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "商品件数",
@@ -376,7 +404,8 @@
       "metric": "item_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各品类的商品件数",
@@ -391,7 +420,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "下单客户数",
@@ -404,7 +434,8 @@
       "metric": "customer_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的客户数",
@@ -419,7 +450,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "独立买家数",
@@ -432,7 +464,8 @@
       "metric": "unique_customer_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "每单件数",
@@ -445,7 +478,8 @@
       "metric": "items_per_order",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "在售商品数",
@@ -458,7 +492,8 @@
       "metric": "product_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各个品类的商品数",
@@ -473,7 +508,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "活跃卖家数",
@@ -486,7 +522,8 @@
       "metric": "seller_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "取消率",
@@ -499,7 +536,8 @@
       "metric": "cancellation_rate",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的取消率",
@@ -514,7 +552,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "按月看取消率趋势",
@@ -529,7 +568,8 @@
         "dt"
       ],
       "rows": 25,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "超时送达率",
@@ -542,7 +582,8 @@
       "metric": "late_delivery_rate",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的超时送达率",
@@ -557,7 +598,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "准时送达率",
@@ -570,7 +612,8 @@
       "metric": "on_time_delivery_rate",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "平均履约天数",
@@ -583,7 +626,8 @@
       "metric": "avg_delivery_days",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的履约天数",
@@ -598,7 +642,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "平均评分",
@@ -611,7 +656,8 @@
       "metric": "avg_review",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的平均评分",
@@ -626,7 +672,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各品类的评分",
@@ -641,7 +688,8 @@
         "category"
       ],
       "rows": 75,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "好评率",
@@ -654,7 +702,8 @@
       "metric": "positive_review_rate",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "差评率",
@@ -667,7 +716,8 @@
       "metric": "negative_review_rate",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "评价数",
@@ -680,7 +730,8 @@
       "metric": "review_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "最近30天的GMV",
@@ -693,7 +744,8 @@
       "metric": "gmv",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "上个月的订单数",
@@ -706,7 +758,8 @@
       "metric": "order_count",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各品类上月的GMV",
@@ -721,7 +774,8 @@
         "category"
       ],
       "rows": 0,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "最近7天的取消率",
@@ -734,7 +788,8 @@
       "metric": "cancellation_rate",
       "dims": [],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各订单状态的订单数",
@@ -749,7 +804,8 @@
         "status"
       ],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各订单状态的取消订单数",
@@ -764,7 +820,8 @@
         "status"
       ],
       "rows": 1,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各州的平均运费",
@@ -779,7 +836,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "各品类的运费占比",
@@ -794,7 +852,8 @@
         "category"
       ],
       "rows": 74,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "取消占比",
@@ -807,7 +866,8 @@
       "metric": "",
       "dims": [],
       "rows": 0,
-      "reject": "占比类指标需要指定分组维度（如：按品类）（系统仅支持口径内指标的自助归因诊断）"
+      "reject": "占比类指标需要指定分组维度（如：按品类）（系统仅支持口径内指标的自助归因诊断）",
+      "hit": true
     },
     {
       "q": "客单价按品类",
@@ -820,7 +880,8 @@
       "metric": "",
       "dims": [],
       "rows": 0,
-      "reject": "客单价 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）"
+      "reject": "客单价 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
+      "hit": true
     },
     {
       "q": "超时送达率按品类",
@@ -833,7 +894,8 @@
       "metric": "",
       "dims": [],
       "rows": 0,
-      "reject": "超时送达率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）"
+      "reject": "超时送达率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
+      "hit": true
     },
     {
       "q": "每单件数按州",
@@ -848,7 +910,8 @@
         "state"
       ],
       "rows": 27,
-      "reject": ""
+      "reject": "",
+      "hit": true
     },
     {
       "q": "每单件数按订单状态",
@@ -861,7 +924,8 @@
       "metric": "",
       "dims": [],
       "rows": 0,
-      "reject": "每单件数 不支持按「订单状态」统计（系统仅支持口径内指标的自助归因诊断）"
+      "reject": "每单件数 不支持按「订单状态」统计（系统仅支持口径内指标的自助归因诊断）",
+      "hit": true
     },
     {
       "q": "平均履约天数按品类",
@@ -874,7 +938,8 @@
       "metric": "",
       "dims": [],
       "rows": 0,
-      "reject": "平均履约天数 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）"
+      "reject": "平均履约天数 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
+      "hit": true
     },
     {
       "q": "每个客服的响应时长是多少",
@@ -888,7 +953,8 @@
       "dims": [],
       "rows": 0,
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
-      "out_of_scope_metric_matched": false
+      "out_of_scope_metric_matched": false,
+      "hit": true
     },
     {
       "q": "每个用户的复购周期是多久",
@@ -902,7 +968,8 @@
       "dims": [],
       "rows": 0,
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
-      "out_of_scope_metric_matched": false
+      "out_of_scope_metric_matched": false,
+      "hit": true
     },
     {
       "q": "各品类的库存周转率",
@@ -916,7 +983,8 @@
       "dims": [],
       "rows": 0,
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
-      "out_of_scope_metric_matched": false
+      "out_of_scope_metric_matched": false,
+      "hit": true
     },
     {
       "q": "今天天气怎么样",
@@ -930,7 +998,8 @@
       "dims": [],
       "rows": 0,
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
-      "out_of_scope_metric_matched": false
+      "out_of_scope_metric_matched": false,
+      "hit": true
     },
     {
       "q": "帮我把这两张表做个关联分析",
@@ -944,7 +1013,339 @@
       "dims": [],
       "rows": 0,
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
-      "out_of_scope_metric_matched": false
+      "out_of_scope_metric_matched": false,
+      "hit": true
+    },
+    {
+      "q": "麻烦你按州给我看一下成交额",
+      "expect": "semantic",
+      "note": "口语长尾：礼貌祈使 + 成交额",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "gmv",
+      "dims": [
+        "state"
+      ],
+      "rows": 27,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "各个类别的销售额分别是多少",
+      "expect": "semantic",
+      "note": "口语长尾：类别别名 + 口语收尾",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "gmv",
+      "dims": [
+        "category"
+      ],
+      "rows": 74,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "从上个月到现在，订单数量变化大吗",
+      "expect": "semantic",
+      "note": "口语长尾：相对时间 + 订单数量",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "order_count",
+      "dims": [],
+      "rows": 1,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "帮我按商品类目统计一下运费",
+      "expect": "semantic",
+      "note": "口语长尾：类目别名",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "freight_cost",
+      "dims": [
+        "category"
+      ],
+      "rows": 74,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "每天平均能收到多少单",
+      "expect": "semantic",
+      "note": "口语长尾：多少单 + 每天",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "order_count",
+      "dims": [
+        "dt"
+      ],
+      "rows": 200,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "各个省份的平均星级是多少",
+      "expect": "semantic",
+      "note": "口语长尾：省份 + 星级",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "avg_review",
+      "dims": [
+        "state"
+      ],
+      "rows": 27,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "能给我看看好评的比例吗",
+      "expect": "semantic",
+      "note": "口语长尾：好评比例",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "positive_review_rate",
+      "dims": [],
+      "rows": 1,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "各州的差评率分别是多少",
+      "expect": "semantic",
+      "note": "口语长尾：差评率",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "negative_review_rate",
+      "dims": [
+        "state"
+      ],
+      "rows": 27,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "在售商品都有哪些品类",
+      "expect": "semantic",
+      "note": "口语长尾：在售商品 + 品类",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "product_count",
+      "dims": [
+        "category"
+      ],
+      "rows": 74,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "我想对比一下各州的商品件数",
+      "expect": "semantic",
+      "note": "口语长尾：对比诉求",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "item_count",
+      "dims": [
+        "state"
+      ],
+      "rows": 27,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "这平台上一共有多少卖家",
+      "expect": "semantic",
+      "note": "口语长尾：多少卖家",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "seller_count",
+      "dims": [],
+      "rows": 1,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "最近7天客单价跌了吗",
+      "expect": "semantic",
+      "note": "口语长尾：相对时间 + 客单价",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "aov",
+      "dims": [],
+      "rows": 1,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "为什么这个月成交额跌了",
+      "expect": "semantic",
+      "note": "口语长尾：归因式问法",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "gmv",
+      "dims": [],
+      "rows": 1,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "哪个州的取消订单数最多",
+      "expect": "semantic",
+      "note": "口语长尾：argmax 式问法（返回各州明细，不是实体名）",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "canceled_order_count",
+      "dims": [
+        "state"
+      ],
+      "rows": 23,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "分品类看下销量排行",
+      "expect": "semantic",
+      "note": "口语长尾：排行诉求",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "item_count",
+      "dims": [
+        "category"
+      ],
+      "rows": 74,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "退款率是多少",
+      "expect": "semantic",
+      "note": "口语长尾：退款别名",
+      "path": "semantic",
+      "matched": true,
+      "ok": true,
+      "certified": true,
+      "metric": "cancellation_rate",
+      "dims": [],
+      "rows": 1,
+      "reject": "",
+      "hit": true
+    },
+    {
+      "q": "客单价最近7天有没有下降",
+      "expect": "semantic",
+      "note": "长尾·确定性关键词层弱点：'有没有'含否定词被守卫拦下，供 LLM 路径对照回收",
+      "path": "reject",
+      "matched": false,
+      "ok": false,
+      "certified": false,
+      "metric": "",
+      "dims": [],
+      "rows": 0,
+      "reject": "该问题包含否定/排除语义，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
+      "hit": false
+    },
+    {
+      "q": "有没有哪个州的订单数特别少",
+      "expect": "semantic",
+      "note": "长尾·确定性关键词层弱点：'有没有'被否定守卫拦下，供 LLM 路径对照回收",
+      "path": "reject",
+      "matched": false,
+      "ok": false,
+      "certified": false,
+      "metric": "",
+      "dims": [],
+      "rows": 0,
+      "reject": "该问题包含否定/排除语义，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
+      "hit": false
+    },
+    {
+      "q": "订单数是不是下降了",
+      "expect": "semantic",
+      "note": "长尾·确定性关键词层弱点：'是不是'含'不是'被否定守卫拦下，供 LLM 路径对照回收",
+      "path": "reject",
+      "matched": false,
+      "ok": false,
+      "certified": false,
+      "metric": "",
+      "dims": [],
+      "rows": 0,
+      "reject": "该问题包含否定/排除语义，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
+      "hit": false
+    },
+    {
+      "q": "帮我算算买家的生命周期价值",
+      "expect": "out_of_scope",
+      "note": "长尾口径外：LTV 未配置",
+      "path": "reject",
+      "matched": false,
+      "ok": false,
+      "certified": false,
+      "metric": "",
+      "dims": [],
+      "rows": 0,
+      "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
+      "out_of_scope_metric_matched": false,
+      "hit": true
+    },
+    {
+      "q": "各个品类的复购率是多少",
+      "expect": "out_of_scope",
+      "note": "长尾口径外：复购率未配置",
+      "path": "reject",
+      "matched": false,
+      "ok": false,
+      "certified": false,
+      "metric": "",
+      "dims": [],
+      "rows": 0,
+      "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
+      "out_of_scope_metric_matched": false,
+      "hit": true
+    },
+    {
+      "q": "这个月的利润是多少",
+      "expect": "out_of_scope",
+      "note": "长尾口径外：无成本数据，利润未配置",
+      "path": "reject",
+      "matched": false,
+      "ok": false,
+      "certified": false,
+      "metric": "",
+      "dims": [],
+      "rows": 0,
+      "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,ca",
+      "out_of_scope_metric_matched": false,
+      "hit": true
     }
   ]
 }

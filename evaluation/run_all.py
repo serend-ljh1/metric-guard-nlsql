@@ -87,6 +87,13 @@ def _print_suite(title: str, mapping: dict) -> None:
 
 
 def _llm_key_present() -> bool:
+    # `.env` 是本仓库配置 Key 的默认位置（见 README 快速开始），因此这里也读一次：
+    # 否则"Key 明明配在 .env 里"仍会被判成未配置，第 8 条线在本机永远跑不起来。
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:  # pragma: no cover - dotenv 不可用时退回纯环境变量
+        pass
     return bool(os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
                 or os.environ.get("OPENAI_API_KEY"))
 
@@ -180,12 +187,19 @@ def main(report_dir: Path, with_llm: bool = False) -> int:
     aq = _load(report_dir, "alert_quality")
     if aq:
         alerts = aq.get("n_threshold_alerts", 0)
+        lb = aq.get("labeled") or {}
+        to_m = lb.get("threshold_only") or {}
+        gd_m = lb.get("gated") or {}
         overall["suites"]["alert_quality"] = {
             "样本组合数": aq.get("n_cases", 0),
             "阈值告警率(旧行为)": aq.get("alert_rate_threshold_only"),
             "统计门控抑制率": aq.get("suppression_rate"),
             "月长假象告警占比": (round(aq.get("n_calendar_driven_alerts", 0) / alerts, 4)
                                  if alerts else None),
+            "构造真值用例数": lb.get("n_cases"),
+            "假阳性率_阈值only": to_m.get("false_positive_rate"),
+            "假阳性率_统计门控": gd_m.get("false_positive_rate"),
+            "召回率_统计门控": gd_m.get("recall"),
         }
         overall["suites"]["alert_quality"]["口径说明"] = aq.get("offline_note", "")
 

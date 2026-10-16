@@ -450,6 +450,10 @@ def main() -> int:
                          "30%/45% 是**弱注入**，用来量系统在'注入段未必占主导'时的 top-k 命中")
     ap.add_argument("--top-segments", type=int, default=10,
                     help="每个(期×维)下按当期 GMV 枚举 Top-N 个靶点段（注入目标，自动枚举）")
+    ap.add_argument("--drill-inject-pcts", nargs="+", type=float, default=[0.90],
+                    help="下钻靶点的注入比（默认 90%）。下钻测的是『能否定位到支配性子主因』，"
+                         "注入必须强到压过州内自然波动；否则真值表里注入品类本就不是第 1，"
+                         "top-1 命中率会**低估引擎**（属基准难度，非引擎缺陷）。")
     ap.add_argument("--dims", nargs="+", default=["state", "category"])
     ap.add_argument("--topk", nargs="+", type=int, default=[1, 2, 3, 5],
                     help="top-k 命中率统计的 k 值集合（按该维 |变化| 排名）")
@@ -510,7 +514,7 @@ def main() -> int:
             cv = _top_category_in_state(real, sv, c0, c1)
             if not cv:
                 continue
-            for p in inject_pcts:
+            for p in args.drill_inject_pcts:
                 drill_targets.append({"state": sv, "category": cv, "inject_pct": p,
                                       "cur_spec": cur_spec, "prev_spec": prev_spec})
         factor_periods.append((cur_spec, prev_spec))
@@ -630,8 +634,22 @@ def main() -> int:
     for k in args.topk:
         drill_topk[k] = _pct(sum(1 for d in drill_details
                                  if (d.get("rank") or ndv) <= k), len(drill_details))
+    # 排序一致性：引擎给注入品类的名次 与 独立真值名次 是否相同。
+    # 这项才直接衡量"引擎排序对不对"；top-1 命中率还混入了"真值的靶点是否本身排第 1"。
+    drill_rank_agreement = _pct(
+        sum(1 for d in drill_details if d.get("engine_rank") == d.get("rank")), len(drill_details))
+    # 支配性子集：只有"注入靶点**确已成为该州内真值第一**(rank==1)"的题，才真正考引擎的定位能力。
+    # 其余题里靶点本就只是第 2/3 大贡献（上月无销售→砍后仍为正 delta，或小州自然波动更大），
+    # 引擎即便完美排序也拿不到 top-1 —— 把它单列出来，才能把"引擎排序对不对"与"构造难度"分开。
+    n_dominant = sum(1 for d in drill_details if d.get("rank") == 1)
+    n_dominant_hit = sum(1 for d in drill_details
+                         if d.get("rank") == 1 and d.get("hit"))
+    drill_hit_when_dominant = _pct(n_dominant_hit, n_dominant)
     print(f"下钻命中率(top-1): {n_dh}/{len(drill_details)} = {drill_hit_rate:.2%}"
-          + "  top-k: " + "  ".join(f"k={k}:{drill_topk[k]:.2%}" for k in args.topk))
+          + "  top-k: " + "  ".join(f"k={k}:{drill_topk[k]:.2%}" for k in args.topk)
+          + f"  排序一致性: {drill_rank_agreement:.2%}")
+    print(f"  其中注入靶点已成为真值第一(可判题) {n_dominant}/{len(drill_details)}，"
+          f"这类题引擎 top-1 命中 {n_dominant_hit}/{n_dominant} = {drill_hit_when_dominant:.2%}")
 
     # ---------- 3) 因子分解（factorize）命中率 ----------
     fz_details, n_fh = [], 0
@@ -698,6 +716,10 @@ def main() -> int:
         },
         "drill": {"total_scenarios": len(drill_details), "hits": n_dh,
                   "hit_rate": drill_hit_rate, "topk_hit_rate": drill_topk,
+                  "inject_pcts": args.drill_inject_pcts,
+                  "rank_agreement_rate": drill_rank_agreement,
+                  "dominant_scenarios": n_dominant,
+                  "hit_rate_when_dominant": drill_hit_when_dominant,
                   "truth_basis": "eval-side independent SQL delta table (within-state)",
                   "engine_selfgraded_hits": sum(1 for d in drill_details if d.get("engine_hit")),
                   "delta_table_match": sum(1 for d in drill_details

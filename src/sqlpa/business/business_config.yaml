@@ -406,7 +406,44 @@ filter_templates:
   status: "o.order_status = {value}"
   time_range: "o.order_purchase_timestamp >= {start} AND o.order_purchase_timestamp < {end}"
 
-# ---------- 5) 派生指标（由 compiler 在编译期展开，不在 LLM 手里）----------
+# ---------- 5) 语义层关系建模（维度表 / JOIN 池 / 基数）----------
+# 维度/过滤所需的表若不在某个指标自带的 join_clause 里，编译器**只按此段声明**注入，
+# 不再在代码里硬编码某套星型模型的别名。换域（事实表/维度表不同）只改本段、不改代码。
+# 字段：
+#   alias        表别名（维度 sql_fragment / 过滤模板里引用的前缀，如 c./p.）
+#   table        真实表名（做"数据来源"展示与去重判断）
+#   join         注入用的 JOIN 子句
+#   serves       该关系服务哪些维度族（文档用途：说明它为什么在这里）
+#   cardinality  基数（事实表:维度表 的关系）——约束"能不能直接聚合"，是口径的一部分
+#   depends_on   注入前必须先出现的别名（如 products 的 ON 引用 order_items）
+relations:
+  - alias: c
+    table: customers
+    join: "LEFT JOIN customers c ON o.customer_id=c.customer_id"
+    serves: [state]
+    cardinality: many_to_one
+    note: 订单 → 客户（一单一个客户，按州统计不会放大）
+  - alias: oi
+    table: order_items
+    join: "LEFT JOIN order_items oi ON o.order_id=oi.order_id"
+    serves: [items]
+    cardinality: one_to_many
+    note: 订单 → 明细（一单多条目；直接 SUM/COUNT 会按条目放大，故须用声明了 additive 的指标口径）
+  - alias: p
+    table: products
+    join: "LEFT JOIN products p ON oi.product_id=p.product_id"
+    serves: [category]
+    cardinality: many_to_one
+    depends_on: [oi]
+    note: 明细 → 商品（多对一；ON 引用 oi，故注入 p 前必须先有 oi）
+  - alias: r
+    table: reviews
+    join: "LEFT JOIN reviews r ON o.order_id=r.order_id"
+    serves: [review]
+    cardinality: one_to_one
+    note: 订单 → 评价（1:1；与 order_items 组合会变 1:多，故评价类聚合必须写成 DISTINCT 形式）
+
+# ---------- 6) 派生指标（由 compiler 在编译期展开，不在 LLM 手里）----------
 # 语法：ratio@分子/分母（要求同源）、share@基础指标（占整体比例）
 derived_metrics:
   - key: freight_rate
@@ -432,7 +469,7 @@ derived_metrics:
     base: canceled_order_count
     owner: 数据组-品质线
 
-# ---------- 6) 角色表列权限 + 敏感字段掩码 ----------
+# ---------- 7) 角色表列权限 + 敏感字段掩码 ----------
 permissions:
   roles:
     analyst:            # 业务员：不能访问敏感字段

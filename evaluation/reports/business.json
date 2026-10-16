@@ -1,6 +1,6 @@
 {
   "db": "data/olist/olist.db",
-  "n_cases": 12,
+  "n_cases": 55,
   "in_scope_hit_rate": 1.0,
   "metric_accuracy": 1.0,
   "dims_accuracy": 1.0,
@@ -12,17 +12,17 @@
   "pii_mask_rate": 1.0,
   "audit_coverage": 1.0,
   "counts": {
-    "in": 8,
-    "in_hit": 8,
-    "reject": 4,
-    "reject_ok": 4,
-    "guard": 5,
-    "guard_ok": 5,
-    "perm": 5,
-    "perm_ok": 5,
-    "mask": 2,
-    "mask_ok": 2,
-    "audited": 12
+    "in": 43,
+    "in_hit": 43,
+    "reject": 12,
+    "reject_ok": 12,
+    "guard": 12,
+    "guard_ok": 12,
+    "perm": 15,
+    "perm_ok": 15,
+    "mask": 10,
+    "mask_ok": 10,
+    "audited": 55
   },
   "details": [
     {
@@ -39,7 +39,7 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 936.3,
+      "latency_ms": 1316.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -58,7 +58,263 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 1197.9,
+      "latency_ms": 1685.2,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个订单状态的GMV",
+      "expect": "in",
+      "note": "gmv 支持 status",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "status"
+      ],
+      "reject": "",
+      "rows": 6,
+      "reject_reasons": [],
+      "latency_ms": 573.1,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "按月查看GMV",
+      "expect": "in",
+      "note": "gmv 支持 dt（时间粒度 month）",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "dt"
+      ],
+      "reject": "",
+      "rows": 24,
+      "reject_reasons": [],
+      "latency_ms": 678.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "2018-08的GMV",
+      "expect": "in",
+      "note": "显式月份字面量过滤",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 334.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "2017-01的GMV按州",
+      "expect": "in",
+      "note": "时间过滤 + 维度组合",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 24,
+      "reject_reasons": [],
+      "latency_ms": 128.6,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "各个品类的销售额",
+      "expect": "in",
+      "note": "「销售额」口径词 → gmv",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 74,
+      "reject_reasons": [],
+      "latency_ms": 1658.9,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的成交额",
+      "expect": "in",
+      "note": "「成交额」口径词 → gmv",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gmv",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1666.8,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "总营收是多少",
+      "expect": "in",
+      "note": "含运费的营收口径",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gross_revenue",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 563.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的总营收",
+      "expect": "in",
+      "note": "gross_revenue 支持 state",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "gross_revenue",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1629.3,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的商品销售额",
+      "expect": "in",
+      "note": "「商品销售额」优先于泛词「销售额」",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "item_sales",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 74,
+      "reject_reasons": [],
+      "latency_ms": 1322.8,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "商品金额是多少",
+      "expect": "in",
+      "note": "「商品金额」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "item_sales",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 571.6,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "运费总额",
+      "expect": "in",
+      "note": "「运费总额」优先于泛词「运费」",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "freight_cost",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 550.4,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的平均运费",
+      "expect": "in",
+      "note": "avg_freight 支持 state",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "avg_freight",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1666.5,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "客单价是多少",
+      "expect": "in",
+      "note": "aov 无维度",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "aov",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 696.6,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的客单价",
+      "expect": "in",
+      "note": "aov 支持 state",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "aov",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1741.9,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -75,7 +331,7 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 521.4,
+      "latency_ms": 713.7,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -94,24 +350,227 @@
       "reject": "",
       "rows": 74,
       "reject_reasons": [],
-      "latency_ms": 1255.4,
+      "latency_ms": 1903.3,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
     },
     {
-      "q": "客单价是多少",
+      "q": "每个州的订单量",
       "expect": "in",
-      "note": "aov 无维度",
+      "note": "「订单量」口径词 + state",
       "matched": true,
       "ok": true,
       "mode": "metric",
-      "metric": "aov",
+      "metric": "order_count",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1600.5,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个订单状态的订单量",
+      "expect": "in",
+      "note": "order_count 支持 status",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "order_count",
+      "dims": [
+        "status"
+      ],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 739.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "2018-07的订单数",
+      "expect": "in",
+      "note": "时间过滤 + 计数口径",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "order_count",
       "dims": [],
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 420.3,
+      "latency_ms": 243.2,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的已支付订单数",
+      "expect": "in",
+      "note": "「已支付订单」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "paid_order_count",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1637.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "取消订单数",
+      "expect": "in",
+      "note": "「取消订单数」长词优先于「订单数」",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "canceled_order_count",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 41.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的商品件数",
+      "expect": "in",
+      "note": "item_count 支持 category",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "item_count",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 74,
+      "reject_reasons": [],
+      "latency_ms": 1278.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "下单客户数",
+      "expect": "in",
+      "note": "「下单客户」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "customer_count",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 722.6,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个订单状态的下单客户数",
+      "expect": "in",
+      "note": "customer_count 支持 status",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "customer_count",
+      "dims": [
+        "status"
+      ],
+      "reject": "",
+      "rows": 7,
+      "reject_reasons": [],
+      "latency_ms": 652.4,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的独立买家数",
+      "expect": "in",
+      "note": "「独立买家」长词优先于「买家数」",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "unique_customer_count",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1050.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的每单件数",
+      "expect": "in",
+      "note": "「每单件数」长词优先于「件数」",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "items_per_order",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 74,
+      "reject_reasons": [],
+      "latency_ms": 1360.3,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "在售商品数",
+      "expect": "in",
+      "note": "「在售商品」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "product_count",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 686.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个订单状态的卖家数",
+      "expect": "in",
+      "note": "seller_count 支持 status",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "seller_count",
+      "dims": [
+        "status"
+      ],
+      "reject": "",
+      "rows": 6,
+      "reject_reasons": [],
+      "latency_ms": 625.5,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -130,7 +589,79 @@
       "reject": "",
       "rows": 27,
       "reject_reasons": [],
-      "latency_ms": 744.5,
+      "latency_ms": 1073.5,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个订单状态的取消率",
+      "expect": "in",
+      "note": "取消率 支持 status",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "cancellation_rate",
+      "dims": [
+        "status"
+      ],
+      "reject": "",
+      "rows": 8,
+      "reject_reasons": [],
+      "latency_ms": 326.1,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的超时送达率",
+      "expect": "in",
+      "note": "late_delivery_rate 支持 state",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "late_delivery_rate",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 1032.1,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "准时送达率",
+      "expect": "in",
+      "note": "「准时」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "on_time_delivery_rate",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 36.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "平均履约天数",
+      "expect": "in",
+      "note": "「履约天数」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "avg_delivery_days",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 44.0,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -147,7 +678,134 @@
       "reject": "",
       "rows": 1,
       "reject_reasons": [],
-      "latency_ms": 88.6,
+      "latency_ms": 143.4,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的平均评分",
+      "expect": "in",
+      "note": "avg_review 支持 category（派生表预聚合口径）",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "avg_review",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 75,
+      "reject_reasons": [],
+      "latency_ms": 735.0,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "好评率",
+      "expect": "in",
+      "note": "「好评率」长词优先于「好评」",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "positive_review_rate",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 1057.9,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个州的差评率",
+      "expect": "in",
+      "note": "「差评率」口径词",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "negative_review_rate",
+      "dims": [
+        "state"
+      ],
+      "reject": "",
+      "rows": 27,
+      "reject_reasons": [],
+      "latency_ms": 2286.9,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的评价数",
+      "expect": "in",
+      "note": "review_count 支持 category",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "review_count",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 75,
+      "reject_reasons": [],
+      "latency_ms": 2569.1,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "运费占比",
+      "expect": "in",
+      "note": "派生指标 ratio：运费成本压力",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "ratio@freight_cost/gmv",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 545.7,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "件单价",
+      "expect": "in",
+      "note": "派生指标 ratio：件单价",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "ratio@gmv/item_count",
+      "dims": [],
+      "reject": "",
+      "rows": 1,
+      "reject_reasons": [],
+      "latency_ms": 536.9,
+      "metric_ok": true,
+      "dims_ok": true,
+      "audited": true
+    },
+    {
+      "q": "每个品类的取消订单占比",
+      "expect": "in",
+      "note": "派生指标 share：取消订单占比（需分组维度）",
+      "matched": true,
+      "ok": true,
+      "mode": "metric",
+      "metric": "share@canceled_order_count",
+      "dims": [
+        "category"
+      ],
+      "reject": "",
+      "rows": 50,
+      "reject_reasons": [],
+      "latency_ms": 161.0,
       "metric_ok": true,
       "dims_ok": true,
       "audited": true
@@ -164,7 +822,7 @@
       "reject": "客单价 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 8.0,
+      "latency_ms": 9.9,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -181,7 +839,126 @@
       "reject": "超时送达率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
+      "latency_ms": 12.1,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "取消率按品类",
+      "expect": "reject",
+      "note": "cancellation_rate 不支持 category",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "取消率 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 10.2,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "平均评分按订单状态",
+      "expect": "reject",
+      "note": "avg_review 不支持 status",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "平均评分 不支持按「订单状态」统计（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 11.3,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "独立买家数按品类",
+      "expect": "reject",
+      "note": "unique_customer_count 不支持 category",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "独立买家数 不支持按「品类」统计（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 9.7,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "每单件数按订单状态",
+      "expect": "reject",
+      "note": "items_per_order 不支持 status",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "每单件数 不支持按「订单状态」统计（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 11.2,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "GMV和订单数分别是多少",
+      "expect": "reject",
+      "note": "并列多指标：一次只编译一个口径",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "本次问题并列了多个指标（gmv、order_count）：语义层一次只编译一个度量口径，以避免返回「只答一半」的结果。请拆成单指标问题分别提问。（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
       "latency_ms": 10.5,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "GMV大于1000",
+      "expect": "reject",
+      "note": "数值比较句式未被表达成过滤条件 → 拒绝",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "该问题包含数值比较条件，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 10.2,
+      "rejected": true,
+      "readable": true,
+      "audited": true
+    },
+    {
+      "q": "不含运费的GMV",
+      "expect": "reject",
+      "note": "否定/排除语义未被表达 → 拒绝",
+      "matched": false,
+      "ok": false,
+      "mode": "metric",
+      "metric": "",
+      "dims": [],
+      "reject": "该问题包含否定/排除语义，但它没有被解析成任何可执行的过滤条件（可能缺对应口径或取值未登记）。为避免返回一个条件被忽略的结果，本次拒绝回答。（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
+      "reject_reasons": [],
+      "latency_ms": 10.4,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -198,7 +975,7 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 9.6,
+      "latency_ms": 11.1,
       "rejected": true,
       "readable": true,
       "audited": true
@@ -215,26 +992,26 @@
       "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
       "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 10.1,
+      "latency_ms": 10.9,
       "rejected": true,
       "readable": true,
       "audited": true
     },
     {
-      "q": "2018-08的GMV",
-      "expect": "in",
-      "note": "时间范围过滤（显式月份字面量）",
-      "matched": true,
-      "ok": true,
+      "q": "公司的市值是多少",
+      "expect": "reject",
+      "note": "配置里没有这类指标",
+      "matched": false,
+      "ok": false,
       "mode": "metric",
-      "metric": "gmv",
+      "metric": "",
       "dims": [],
-      "reject": "",
-      "rows": 1,
+      "reject": "未识别到业务指标(支持: gmv,gross_revenue,item_sales,freight_cost,avg_freight,aov,order_count,paid_order_count,total_order_count,canceled_order_count,item_count,customer_count,unique_customer_count,items_per_order,product_count,seller_count,cancellation_rate,late_delivery_rate,on_time_delivery_rate,avg_delivery_days,avg_review,positive_review_rate,negative_review_rate,review_count)（系统仅支持口径内指标的自助归因诊断）",
+      "rows": 0,
       "reject_reasons": [],
-      "latency_ms": 223.7,
-      "metric_ok": true,
-      "dims_ok": true,
+      "latency_ms": 10.2,
+      "rejected": true,
+      "readable": true,
       "audited": true
     }
   ],
@@ -281,6 +1058,67 @@
         "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
       ],
       "note": "空壳 SQL（公式被删）→ 应拦截"
+    },
+    {
+      "sql": "SELECT SUM(oi.price) * 1.0 AS gmv FROM orders o JOIN order_items oi ON",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
+      ],
+      "note": "口径列被 *1.0 包装 → 应拦截"
+    },
+    {
+      "sql": "SELECT ROUND(SUM(oi.price), 2) AS gmv FROM orders o JOIN order_items o",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
+      ],
+      "note": "口径列被函数包装(ROUND) → 应拦截"
+    },
+    {
+      "sql": "SELECT SUM(oi.price) FROM orders o JOIN order_items oi ON o.order_id=o",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
+      ],
+      "note": "口径列无别名（无法确认是 gmv 列）→ 应拦截"
+    },
+    {
+      "sql": "SELECT SUM(oi.price) AS gmvv FROM orders o JOIN order_items oi ON o.or",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
+      ],
+      "note": "别名写错（非 gmv）→ 应拦截"
+    },
+    {
+      "sql": "SELECT 'SUM(oi.price)' AS gmv, SUM(oi.price)*0.01 AS real_gmv FROM ord",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
+      ],
+      "note": "把公式塞进字符串字面量当口径列 → 应拦截"
+    },
+    {
+      "sql": "SELECT 1 AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.ord",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "生成 SQL 的别名 gmv 的结果列不是配置口径「SUM(oi.price)」（表达式被替换/包装，或只出现在注释、字符串、过滤条件里），已拦截（防口径篡改）"
+      ],
+      "note": "公式只出现在过滤条件里 → 应拦截"
+    },
+    {
+      "sql": "SELECT  SUM( oi.price )  AS gmv FROM orders o JOIN order_items oi ON o",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "合法公式（空白差异，词法等价）→ 应通过"
     }
   ],
   "permission_details": [
@@ -292,7 +1130,7 @@
       "issues": [
         "角色 analyst 无权访问字段 customers.customer_zip_code_prefix"
       ],
-      "note": "非限定敏感列（历史绕过点）"
+      "note": "非限定敏感列"
     },
     {
       "sql": "SELECT c.customer_zip_code_prefix FROM customers c",
@@ -329,6 +1167,92 @@
       "blocked": false,
       "issues": [],
       "note": "admin 全放行"
+    },
+    {
+      "sql": "SELECT * FROM customers",
+      "role": "analyst",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "角色 analyst 不允许通配符投影（SELECT * 无法逐列核对权限，请显式列出所需列）"
+      ],
+      "note": "通配符投影 → 无法逐列核对，拒绝"
+    },
+    {
+      "sql": "SELECT c.* FROM customers c",
+      "role": "analyst",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "角色 analyst 不允许通配符投影（SELECT * 无法逐列核对权限，请显式列出所需列）"
+      ],
+      "note": "限定通配符投影 → 拒绝"
+    },
+    {
+      "sql": "SELECT customer_id, customer_city FROM customers",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "多个允许列组合不应被拦"
+    },
+    {
+      "sql": "SELECT customer_unique_id FROM customers",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "customer_unique_id 在允许列表中"
+    },
+    {
+      "sql": "SELECT c.customer_state FROM customers c",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "州列在允许列表中"
+    },
+    {
+      "sql": "SELECT o.order_id, oi.price FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "orders/order_items 无列限制"
+    },
+    {
+      "sql": "SELECT p.product_category_name FROM products p",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "products 允许"
+    },
+    {
+      "sql": "SELECT r.review_score FROM reviews r",
+      "role": "analyst",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "reviews 允许"
+    },
+    {
+      "sql": "SELECT oi.seller_id FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+      "role": "seller",
+      "should_block": false,
+      "blocked": false,
+      "issues": [],
+      "note": "seller 角色允许 order_items"
+    },
+    {
+      "sql": "SELECT * FROM customers",
+      "role": "seller",
+      "should_block": true,
+      "blocked": true,
+      "issues": [
+        "角色 seller 不允许通配符投影（SELECT * 无法逐列核对权限，请显式列出所需列）"
+      ],
+      "note": "seller 受列限制，通配符拒绝"
     }
   ],
   "mask_details": [
@@ -362,6 +1286,228 @@
     {
       "sql": "SELECT customer_zip_code_prefix AS zip FROM customers",
       "note": "AS 别名",
+      "raw": [
+        [
+          "14409"
+        ],
+        [
+          "09790"
+        ],
+        [
+          "01151"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT c.customer_zip_code_prefix FROM customers c",
+      "note": "限定列名",
+      "raw": [
+        [
+          "14409"
+        ],
+        [
+          "09790"
+        ],
+        [
+          "01151"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix AS customer_city FROM customers",
+      "note": "别名伪装成非敏感名（须按来源掩码）",
+      "raw": [
+        [
+          "14409"
+        ],
+        [
+          "09790"
+        ],
+        [
+          "01151"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT DISTINCT customer_zip_code_prefix FROM customers",
+      "note": "DISTINCT 敏感列",
+      "raw": [
+        [
+          "14409"
+        ],
+        [
+          "09790"
+        ],
+        [
+          "01151"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix, customer_id FROM customers",
+      "note": "敏感列在前 + 普通列",
+      "raw": [
+        [
+          "14409",
+          "06b8999e2fba1a1fbc88172c00ba8bc7"
+        ],
+        [
+          "09790",
+          "18955e83d337fd6b2def6b18a428ac77"
+        ],
+        [
+          "01151",
+          "4e7b3e00288586ebd08712fdd0374a03"
+        ]
+      ],
+      "masked": [
+        [
+          "***",
+          "06b8999e2fba1a1fbc88172c00ba8bc7"
+        ],
+        [
+          "***",
+          "18955e83d337fd6b2def6b18a428ac77"
+        ],
+        [
+          "***",
+          "4e7b3e00288586ebd08712fdd0374a03"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT c.customer_zip_code_prefix AS z FROM customers c WHERE c.customer_state='SP'",
+      "note": "别名 + WHERE 过滤",
+      "raw": [
+        [
+          "14409"
+        ],
+        [
+          "09790"
+        ],
+        [
+          "01151"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix FROM customers LIMIT 5",
+      "note": "带 LIMIT",
+      "raw": [
+        [
+          "14409"
+        ],
+        [
+          "09790"
+        ],
+        [
+          "01151"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT c.customer_zip_code_prefix FROM orders o JOIN customers c ON o.customer_id=c.customer_id",
+      "note": "JOIN 形态",
+      "raw": [
+        [
+          "03149"
+        ],
+        [
+          "47813"
+        ],
+        [
+          "75265"
+        ]
+      ],
+      "masked": [
+        [
+          "***"
+        ],
+        [
+          "***"
+        ],
+        [
+          "***"
+        ]
+      ],
+      "leaked": []
+    },
+    {
+      "sql": "SELECT customer_zip_code_prefix FROM customers WHERE customer_zip_code_prefix IS NOT NULL",
+      "note": "WHERE 引用敏感列",
       "raw": [
         [
           "14409"

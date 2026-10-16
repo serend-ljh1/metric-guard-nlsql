@@ -617,17 +617,21 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
     # 复用 compiler 的过滤渲染，保证与主查询同一套写法
     from .compiler import render_filter
 
+    def _path_where(start: str, end: str) -> List[str]:
+        """当前下钻路径 + 时间窗的 WHERE 片段（拆分查询与路径合计共用，保证同一套写法）。"""
+        wheres = [m.where_core] if m.where_core not in ("", "1=1") else []
+        for seg in (path or []):
+            d, v = seg.get("dim"), seg.get("value")
+            if d in cfg.filter_templates:
+                wheres.append(render_filter(cfg, d, v))
+        wheres.append(f"o.order_purchase_timestamp >= {start} AND "
+                      f"o.order_purchase_timestamp < {end}")
+        return wheres
+
     def _split_for(dim: str):
         """在当前下钻路径的约束下，按 dim 拆当期/上期（返回 (映射, 错误)）。"""
         def _q(start: str, end: str) -> Tuple[Dict, Optional[str]]:
             frag = cfg.dimensions[dim].sql_fragment
-            wheres = [m.where_core] if m.where_core not in ("", "1=1") else []
-            for seg in (path or []):
-                d, v = seg.get("dim"), seg.get("value")
-                if d in cfg.filter_templates:
-                    wheres.append(render_filter(cfg, d, v))
-            wheres.append(f"o.order_purchase_timestamp >= {start} AND "
-                          f"o.order_purchase_timestamp < {end}")
             # 路径过滤条件可能引用需要 JOIN 的表（如按 category 过滤时 WHERE 里有 p.），
             # 因此 JOIN 注入必须同时考虑"当前拆分维度 + 路径里被过滤的维度"，
             # 否则会生成引用了未注入别名（如 p.）的 SQL，被 except 吞掉后错当"没波动"。
@@ -635,10 +639,26 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
                 [dim] + [seg.get("dim") for seg in (path or [])
                          if seg.get("dim") in cfg.dimensions]))
             sql = (f"SELECT {frag} AS d, {m.metric_expr} AS v\n"
-                   f"{metric_source(cfg, m, join_dims)}\nWHERE " + " AND ".join(wheres) +
+                   f"{metric_source(cfg, m, join_dims)}\nWHERE " + " AND ".join(_path_where(start, end)) +
                    f"\nGROUP BY {frag}")
             return _exec_map(db, sql)
         return _q
+
+    def _path_total(start: str, end: str) -> Tuple[float, Optional[str]]:
+        """路径整体（不拆维度）的指标合计，用于算"该段占路径波动多少"。
+
+        为什么必须单独查一次：分段占比的分母是**路径总变化**（如"SP 州整体跌了多少"），
+        不是全局总变化 —— 否则"某品类占 SP 波动 X%"会被写成占全国波动，口径就错了。
+        """
+        join_dims = [seg.get("dim") for seg in (path or [])
+                     if seg.get("dim") in cfg.dimensions]
+        sql = (f"SELECT {m.metric_expr} AS v\n"
+               f"{metric_source(cfg, m, join_dims)}\nWHERE " + " AND ".join(_path_where(start, end)))
+        try:
+            row = db.execute(sql).fetchone()
+            return float(row[0] or 0.0), None
+        except Exception as e:  # noqa: BLE001
+            return 0.0, str(e)
 
     asof = _now()
     cur_win = _resolve_window(current_spec, asof)
@@ -664,6 +684,12 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         out["note"] = "已无可继续拆解的维度"
         return out
 
+    # 路径整体波动：分段占比的分母（口径 = 该下钻路径内的总变化，而非全局）
+    _cur_total, _ = _path_total(c0, c1)
+    _prev_total, _ = _path_total(p0, p1)
+    path_change = round(_cur_total - _prev_total, 4)
+    out["path_change"] = path_change
+
     contributors = []
     dim_errors: Dict[str, str] = {}
     for dim in cand:
@@ -681,10 +707,20 @@ def drill(cfg: BusinessConfig, db: sqlite3.Connection, metric_key: str,
         out["dims"].append(row)
         if delta:
             k, d = max(delta.items(), key=lambda kv: abs(kv[1]))
-            contributors.append({"dim": dim, "dim_name": _dim_name(cfg, dim),
-                                 "key": k, "key_label": _dim_label(cfg, dim, k),
-                                 "delta": d,
-                                 "desc": f"{_dim_name(cfg, dim)}「{_dim_label(cfg, dim, k)}」变化{d:+.2f}"})
+            # 贡献占比 + 守恒自检：与 analyze 同一套判据（可加口径才给"占波动 X%"，否则显式降级）。
+            # 这让下钻结论能区分"定位到的主因"与"真的解释了大部分波动的主因"——
+            # 正是 62.5% top-1 里那 9 条"靶点本就不支配"所对应的表达能力缺口。
+            chk = _additivity_check(path_change, delta)
+            contrib = {"dim": dim, "dim_name": _dim_name(cfg, dim),
+                       "key": k, "key_label": _dim_label(cfg, dim, k),
+                       "delta": d,
+                       "pct_of_change": round(d / path_change, 4) if path_change else 0.0,
+                       "pct_reliable": bool(chk["additive"]),
+                       "desc": f"{_dim_name(cfg, dim)}「{_dim_label(cfg, dim, k)}」变化{d:+.2f}"}
+            if not chk["additive"]:
+                contrib["pct_of_change"] = None
+                contrib["pct_note"] = "该维度分段之和不等于路径总变化，占比不适用"
+            contributors.append(contrib)
     out["top_contributors"] = sorted(contributors, key=lambda x: abs(x["delta"]), reverse=True)
     if dim_errors:
         out["dim_errors"] = dim_errors
@@ -710,6 +746,8 @@ def next_drill_suggestion(result: Dict) -> Optional[Dict]:
         return None
     top = contrib[0]
     return {"dim": top.get("dim", ""), "value": top.get("key", ""), "delta": top.get("delta", 0.0),
+            "pct_of_change": top.get("pct_of_change"),
+            "pct_reliable": top.get("pct_reliable", True),
             "hint": f"可继续下钻：{top.get('dim', '')}={top.get('key', '')}"}
 
 

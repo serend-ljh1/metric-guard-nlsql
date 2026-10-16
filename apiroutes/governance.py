@@ -30,6 +30,30 @@ def _require_admin(x_api_token: Optional[str]) -> Dict[str, str]:
     return ident
 
 
+@router.get("/api/llm-usage")
+def api_llm_usage(days: int = 7, x_api_token: Optional[str] = Header(default=None)) -> Dict:
+    """LLM 成本/延迟面板数据源（仅 admin）：调用数、prompt/completion token、成本、单次调用 p50/p95。
+
+    只有 admin 能看：这是**跨用户的成本数据**，不属于普通分析者；按模型分组可直接回答
+    "哪个模型贵 / 哪个模型慢"。数据来自 append-only 的 `llm_calls` 明细表 —— 审计表只记
+    "每次查询的合计"，算不出单次调用的延迟分位（p95）。
+    """
+    _require_admin(x_api_token)
+    from sqlpa.business import storage
+    return storage.llm_usage_summary(days=max(1, min(int(days), 90)))
+
+
+@router.get("/api/storage-info")
+def api_storage_info(x_api_token: Optional[str] = Header(default=None)) -> Dict:
+    """存储后端部署事实（仅 admin）：后端类型、库路径、journal 模式、busy_timeout。
+
+    如实暴露当前**只支持 SQLite**、多 worker 需共享同一文件；不虚构 Postgres/Redis 能力。
+    """
+    _require_admin(x_api_token)
+    from sqlpa.business import storage
+    return storage.backend_info()
+
+
 
 @router.get("/api/governance/conflicts")
 def api_governance_conflicts(run_llm: bool = False):

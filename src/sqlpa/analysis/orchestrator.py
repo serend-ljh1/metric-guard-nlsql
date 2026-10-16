@@ -463,8 +463,26 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
     """
     if memory is None:
         memory = {}
-    _emit = _Emitter(emit or (lambda p: None))
+    # ---- 编排 trace：**所有**事件先记进内存流水再转给 SSE，事后可审计、可按 id 重放 ----
+    # 此前事件只经 SSE 推给前端，页面一刷新就没了：事后无法复现"当时每个 Agent 说了什么、
+    # 结论是怎么一步步收敛出来的"。现在每次分析都留一条结构化 trace（best-effort 落库）。
+    trace_events: List[Dict] = []
+
+    def _emit_and_record(p: Dict) -> None:
+        trace_events.append(p)
+        if emit:
+            emit(p)
+
+    _emit = _Emitter(_emit_and_record)
     aid = uuid.uuid4().hex[:12]
+
+    def _persist_trace(final: Dict) -> None:
+        """落一条 trace（best-effort）：trace 存储不可用时只丢审计流水，不影响返回。"""
+        try:
+            from sqlpa.business import storage
+            storage.insert_trace(aid, question, trace_events, final, username=username)
+        except Exception:  # noqa: BLE001
+            pass
 
     _emit({"type": "session_start", "analysis_id": aid, "question": question,
            "at": _now()})
@@ -507,14 +525,16 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
                 "candidates": out.get("candidates", []),
                 "observability": obs,
             }
-            if emit:
-                emit({"type": "done", "analysis_id": aid, "payload": final, "at": _now()})
-                emit({"type": "confirm_required", "analysis_id": aid,
-                      "confirm_id": out.get("confirm_id"),
-                      "proposed": out.get("proposed"), "candidates": out.get("candidates"),
-                      "at": _now()})
+            _emit({"type": "done", "analysis_id": aid, "payload": final, "at": _now()})
+            _emit({"type": "confirm_required", "analysis_id": aid,
+                   "confirm_id": out.get("confirm_id"),
+                   "proposed": out.get("proposed"), "candidates": out.get("candidates"),
+                   "at": _now()})
+            _persist_trace(final)
             return final
-        return summarize_final(question, aid, out, _emit)
+        final = summarize_final(question, aid, out, _emit)
+        _persist_trace(final)
+        return final
 
     # 确认记录用掉即置 confirmed（防重放）：走到这里说明按该记录成功执行了
     if confirm_id:
@@ -529,6 +549,7 @@ def run_analysis(question: str, cfg: BusinessConfig, sb, db_path: str, llm,
         "conclusion": state["conclusion"], "decision": state["decision"],
         "observability": obs,
     }, _emit, emit_done=True)
+    _persist_trace(final)
     return final
 
 

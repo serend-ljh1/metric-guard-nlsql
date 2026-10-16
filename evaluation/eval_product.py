@@ -13,15 +13,21 @@
   - 人工介入率：进入 HITL 队列的比例
 
 用法：
-    python evaluation/eval_product.py
+    python evaluation/eval_product.py                 # 离线基线（确定性关键词链路）
+    python evaluation/eval_product.py --llm           # 追加"LLM 路径命中率"对照
 产物：evaluation/reports/product.json（含逐题明细，可复核）
+
+关于 `--llm`：为控制成本，**只对离线未命中的口径内问题**再跑一次 LLM，
+量化"长尾/口语句式在确定性关键词层漏掉的，LLM 路径能回收多少"。LLM 识别出的口径
+会停在**口径确认门**（`need_confirm`，不自动执行），因此这里度量的是"LLM 能否把
+问法识别到正确口径"，不是端到端执行率——这与 service 层的产品行为一致。
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
-from typing import Optional
+from typing import Dict, List, Optional
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +55,19 @@ def _pct(a: int, b: int) -> float:
     return round(a / b, 4) if b else 0.0
 
 
+def _build_llm(model: Optional[str]):
+    """构造真实 LLM（单模型钉死，便于复现；缺 Key / 依赖缺失则抛错由调用方处理）。"""
+    import os
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:  # pragma: no cover
+        pass
+    from sqlpa.llm.openai_compat import OpenAICompatLLM
+    m = model or os.environ.get("LLM_MODEL") or "qwen3.8-max"
+    return m, OpenAICompatLLM(model=m, temperature=0.0, model_pool=[m], max_retries=0)
+
+
 def _require_db(db: Optional[str]) -> tuple[Optional[str], str]:
     """定位业务库：真实全量库 > 仓库自带样本库；都没有则大声跳过（不让 CI 红）。
 
@@ -72,6 +91,9 @@ def main() -> int:
     ap.add_argument("--db", default=None,
                     help="业务库（默认：真实全量库 > 仓库自带样本库）")
     ap.add_argument("--report-dir", default=str(ROOT / "evaluation" / "reports"))
+    ap.add_argument("--llm", action="store_true",
+                    help="追加 LLM 路径对照：仅对离线未命中的口径内问题补跑 LLM")
+    ap.add_argument("--model", default=None, help="LLM 模型（默认取 LLM_MODEL 环境变量）")
     args = ap.parse_args()
 
     db, db_kind = _require_db(args.db)
@@ -130,21 +152,68 @@ def main() -> int:
             n_dims_ok += int(set(row["dims"]) == set(c.get("dims") or []))
             hit = (path == "semantic" and row["ok"])
             n_hit_rate_ok += int(hit)
+            row["hit"] = hit
             flag = "✓" if hit else "✗"
         elif c["expect"] == "reject":
             # 指标命中但维度组合不受支持 → 应明确拒绝，而不是硬生成
             rej = (path != "semantic") and not row["ok"] and bool(row["reject"])
             n_reject_ok += int(rej)
+            row["hit"] = rej
             flag = "✓" if rej else "✗"
         else:  # out_of_scope：语义层无此口径 → 现行策略是**明确拒绝**（不存在降级生成）
             # 离线/在线一致：口径外都走拒绝，因此这里验证"未走语义层且被明确拒绝"
             oos = path != "semantic"
             n_out_of_scope_ok += int(oos)
             row["out_of_scope_metric_matched"] = bool(row["matched"])
+            row["hit"] = oos
             flag = "✓" if oos else "✗"
 
         print(f"{flag} {c['q'][:32]:34s} {path:9s} {row['metric'][:24]:26s} "
               f"{'ok' if row['ok'] else ('拒绝' if row['reject'] else '未通过')}")
+
+    # ---- LLM 路径对照（可选）：只对离线未命中的口径内问题补跑，量化"长尾回收" ----
+    llm_path: Dict = {"enabled": False,
+                      "note": "未运行（未提供 --llm；LLM 路径命中率对照需 API Key）。"}
+    if args.llm:
+        try:
+            model, llm = _build_llm(args.model)
+        except Exception as e:  # noqa: BLE001 - 缺 Key / 依赖缺失都如实标注，不让评测崩
+            llm_path = {"enabled": False,
+                        "note": f"未运行：无法构造 LLM（{type(e).__name__}: {e}）。"}
+        else:
+            targets = [(c, r) for c, r in zip(cases, rows)
+                       if c["expect"] == "semantic" and not r["hit"]]
+            recovered: List[str] = []
+            for c, r in targets:
+                a = answer(c["q"], cfg, sb, args.db, llm=llm, role="analyst", username="eval")
+                # LLM 识别出的口径停在口径确认门（need_confirm，不自动执行）：
+                # 判"识别正确"= 指标与维度都对（这才是 LLM 路径的能力所在）。
+                ident = (bool(a.get("need_confirm"))
+                         and a.get("metric") == c.get("metric")
+                         and set((a.get("proposed") or {}).get("dims") or [])
+                         == set(c.get("dims") or []))
+                r["llm_need_confirm"] = bool(a.get("need_confirm"))
+                r["llm_identified"] = ident
+                r["llm_metric"] = a.get("metric")
+                if ident:
+                    recovered.append(c["q"])
+            baseline = _pct(n_hit_rate_ok, n_expect_semantic)
+            llm_path = {
+                "enabled": True, "model": model,
+                "baseline_in_scope_hit_rate": baseline,
+                "llm_in_scope_hit_rate": _pct(n_hit_rate_ok + len(recovered), n_expect_semantic),
+                "offline_hits": n_hit_rate_ok,
+                "misses_rerun": len(targets),
+                "recovered": len(recovered),
+                "recovered_questions": recovered,
+                "llm_calls": len(targets),
+                "note": ("LLM 仅对离线未命中的口径内问题补跑（成本控制）：LLM 识别出的口径停在"
+                         "口径确认门（need_confirm，不自动执行），故这里度量的是'LLM 能否把长尾问法"
+                         "识别到正确口径'，不是端到端执行率。"),
+            }
+            print(f"\n[LLM 路径对照] 模型={model}  口径内离线命中 {n_hit_rate_ok}/{n_expect_semantic} "
+                  f"→ 回收 {len(recovered)}/{len(targets)} 条未命中 → "
+                  f"LLM 识别口径率 {llm_path['llm_in_scope_hit_rate']:.1%}")
 
     total = len(cases)
     n_out_of_scope = sum(1 for c in cases if c["expect"] == "out_of_scope")
@@ -178,6 +247,7 @@ def main() -> int:
         "dims_accuracy": _pct(n_dims_ok, n_expect_semantic),
         "reject_accuracy": _pct(n_reject_ok, sum(1 for c in cases if c["expect"] == "reject")),
         "out_of_scope_detected_rate": _pct(n_out_of_scope_ok, n_out_of_scope),
+        "llm_path": llm_path,
         "details": rows,
     }
 

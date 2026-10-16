@@ -47,7 +47,9 @@ _BLOCKED_FUNCTIONS = {
     "sleep", "benchmark",                    # MySQL 时间盲注
     "load_file",                             # MySQL 任意文件读
     "pg_sleep",                              # PostgreSQL 时间盲注
-    "pg_read_file", "pg_ls_dir",             # PostgreSQL 任意文件读/目录列举
+    "pg_read_file", "pg_read_binary_file", "pg_stat_file",   # PG 任意文件读/读取二进制文件/stat
+    "pg_ls_dir",                             # PostgreSQL 任意目录列举
+    "lo_import", "lo_export",                # PG 大对象：服务端文件读/写
     "dblink", "dblink_connect",              # PostgreSQL 外联
     "xp_cmdshell",                           # MSSQL 命令执行
 }

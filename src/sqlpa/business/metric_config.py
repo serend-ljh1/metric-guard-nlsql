@@ -82,6 +82,10 @@ class BusinessConfig:
     filter_ops: Dict[str, Dict[str, str]] = field(default_factory=dict)
     # HAVING（对本指标聚合值做后置筛选）的算子白名单，同上。
     metric_ops: Dict[str, str] = field(default_factory=dict)
+    # 语义层关系建模：别名 -> {table, join, serves, cardinality, depends_on}。
+    # 维度/过滤所需的表不在指标自带 JOIN 里时，编译器**只按此配置**注入；
+    # 换域（星型模型不同）只改配置、不改代码。
+    relations: Dict[str, Dict] = field(default_factory=dict)
 
     def derived_key(self, d: Dict) -> str:
         """把派生指标定义转成 compiler 能解析的 key（ratio@a/b 或 share@a）。"""
@@ -168,13 +172,30 @@ def load_config(path: str | Path | None = None, value_provider=None) -> Business
     mk = dict(data.get("matcher_keywords") or {})
     if mk.get("filter_values"):
         mk["filter_values"] = _resolve_filter_values(mk, value_provider)
+    # 关系建模：YAML 里是列表，规范化成"别名 -> 关系定义"的字典（注入按别名索引）。
+    relations: Dict[str, Dict] = {}
+    for r in (data.get("relations") or []):
+        a = str(r.get("alias") or "").strip().lower()
+        if not a:
+            continue
+        relations[a] = {
+            "alias": a,
+            "table": str(r.get("table") or ""),
+            "join": str(r.get("join") or ""),
+            # serves 只作文档（说明该关系服务哪些维度族），注入时不依赖它
+            "serves": list(r.get("serves") or []),
+            "cardinality": str(r.get("cardinality") or ""),
+            "depends_on": [str(x).strip().lower() for x in (r.get("depends_on") or [])],
+            "note": str(r.get("note") or ""),
+        }
     cfg = BusinessConfig(alias=data.get("business_alias", {}),
                          metrics=metrics, dimensions=dims,
                          filter_templates=data.get("filter_templates", {}),
                          permissions=data.get("permissions", {}),
                          matcher_keywords=mk,
                          filter_ops=data.get("filter_ops", {}) or {},
-                         metric_ops=data.get("metric_ops", {}) or {})
+                         metric_ops=data.get("metric_ops", {}) or {},
+                         relations=relations)
     for d in (data.get("derived_metrics") or []):
         k = cfg.derived_key(d)
         if k:

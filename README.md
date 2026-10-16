@@ -80,8 +80,9 @@
 >   语义层表达力覆盖**集合 / 比较 / 区间 / HAVING / 否定反连接**，**算子只出配置白名单**（新表达式一律 fail-closed）。
 >   ⚠️ world_1 属 dev 集，建层时看过题面 → 25.0% 是**开发集覆盖率，不是泛化指标**；覆盖内正确率不受影响。详见
 >   [`evaluation/reports/external_bank_world_1.md`](evaluation/reports/external_bank_world_1.md)。
-> - **外部对抗语料（61 条）**：危险语料拦截 **48/48 = 100%**、库 sha256 与行数**一字未变**，
->   另度量**只读误杀率 1/13 = 7.7%**（保守代价，已固定在测试里）。
+> - **外部对抗语料（99 条）**：危险语料拦截 **76/76 = 100%**（含 Oracle/MSSQL/PostgreSQL/MySQL
+>   跨方言类别与编码/篡改绕过）、库 sha256 与行数**一字未变**，
+>   另度量**只读误杀率 1/23 = 4.3%**（保守代价：字符串字面量里含高危词被关键字黑名单误杀，已固定在测试里）。
 >   详见 [`evaluation/reports/sandbox_external.md`](evaluation/reports/sandbox_external.md)。
 
 ### 分析主角：六 Agent 协作编排（`src/sqlpa/analysis/orchestrator.py`）
@@ -126,9 +127,11 @@
 | **生成区（红线内）** | `QuerySpec` → SQL | 配置 + 编译器 | 5 个 spec × 5 次编译**逐字相同**；毒化 LLM 走到编译器完全无感 |
 | **判断区（允许 LLM）** | 自然语言 → `QuerySpec`（意图识别）、归因拆解、要不要继续下钻、升不升级 | LLM + 关键词/规则兜底 | 主路径唯一 LLM 触点：`_llm_match ← match ← answer`；产物带 `match_method` 可指认 |
 
-> **实测数据（离线，可复现）**：不接 LLM、纯关键词匹配在 66 条业务问题上是 **指标认错 0 条 / 未命中 5 条**，
-> 即意图识别这一层的 LLM 调用对这批问法并非必需。因此"意图识别漂移"是当前**唯一**的口径暴露面，
-> 且其规模可度量——这也正是下一代改进方向（关键词优先、LLM 只补未命中，从而把暴露面压到 5 条以内）。
+> **实测数据（离线，可复现）**：不接 LLM、纯关键词匹配在 **88 条**业务问题上是 **指标认错 0 条**——
+> 口径内 75 条只漏 **3 条**（"有没有 / 是不是"这类否定句式被守卫拦下），另 8 条是语义层确实没有的口径、
+> 5 条是"指标命中但维度组合不受支持"的**正确拒绝**。因此这批问法上，意图识别这一层的 LLM 调用并非必需：
+> 关键词词表是**覆盖率的瓶颈**而非准确性的瓶颈，而它可被度量——`eval_product --llm` 显示 LLM 只补未命中
+> （离线 72/75 → LLM 识别口径 **73/75 = 97.3%**），这也正是下一代改进方向（关键词优先、LLM 仅补未命中）。
 
 - **治理面**：口径冲突检测（四类场景：同名不同式 / 同式不同名 / 版本漂移 / 近义不同式）、口径解释、PII 掩码、表列权限、审计留痕、行级权限（RLS-lite）。
 - **分析闭环**：异常归因按"维度贡献/乘法因子"拆解，支持**逐层下钻**（追问"那 SP 为什么跌"会自动深挖），
@@ -155,9 +158,12 @@
 | ⚙️ 指标中心（API，写操作限 admin） | `metric_store` 提供指标/维度/别名的增删改与校验，已通过 `POST /api/metrics/upsert`、`DELETE /api/metrics/{key}`、`POST /api/metrics/dimensions/upsert`、`DELETE /api/metrics/dimensions/{key}`、`POST /api/metrics/aliases`、`DELETE /api/metrics/aliases/{name}` 暴露；**可视化编辑页面尚未提供** |
 | 🗄️ 数据源管理（API 只读） | `GET /api/datasources` 列出已注册数据源（密码掩码）；**注册/编辑为脚本或配置操作** |
 | 📜 查询历史 / ⭐ 收藏 / 👍 反馈 | 已暴露端点（`GET /api/history`、`GET/POST /api/favorites`、`DELETE /api/favorites/{id}`、`GET/POST /api/feedback`）+ 前端**我的工作台**页签（历史按调用者隔离，收藏可复跑） |
+| 💰 LLM 成本 / 延迟（API + 看板） | `GET /api/llm-usage?days=`（仅 admin）：调用数/失败数/token/成本 + p50/p95/max 延迟 + 按模型分组；每次真实调用明细落 `llm_calls`（append-only），治理看板展示近 7 天 |
+| 🧵 分析 trace（API + 工作台重放） | 每次 `/api/analyze` 的完整 SSE 事件流水落库（`analysis_traces`，append-only）：`GET /api/analyze/traces`（摘要）、`GET /api/analyze/trace/{analysis_id}`（**重放**，不重调 LLM/不重算）；工作台可回放当时每个 Agent 与结论 |
+| 🗃️ 存储后端信息（API，仅 admin） | `GET /api/storage-info`：后端类型 / 库路径 / journal 模式 / busy_timeout；如实声明**目前仅实现 SQLite**（`SQLPA_STORAGE_BACKEND`，配成未实现的后端**立即报错**而非静默降级） |
 | 🔌 REST API | FastAPI：`/api/query` `/api/metrics` `/api/audit` `/api/datasources` `/api/auth/*` `/health`，Swagger 在 `/docs` |
 | 🎯 外部公开基准 | `evaluation/eval_external_bank.py`：第三方问题+gold SQL（Spider dev）判对错；覆盖率/覆盖内正确率/拒答归因三张表 |
-| 🛡️ 外部对抗语料 | `evaluation/eval_sandbox_external.py`：48 条破坏性 + 13 条只读语料，报拦截率/**误杀率**/库不变性 |
+| 🛡️ 外部对抗语料 | `evaluation/eval_sandbox_external.py`：76 条破坏性 + 23 条只读语料（含跨方言），报拦截率/**误杀率**/库不变性 |
 
 > 📂 **目录结构**（含 `apiroutes/` 路由层、`src/sqlpa/` 模块、`tests/`、`evaluation/` 详解）
 > 见 [`docs/architecture.md`](docs/architecture.md)。
@@ -243,7 +249,8 @@ start_web.bat        # 前端 http://localhost:5173
 > ⚠️ **部署边界**：以上脚本与 `docker-compose.yml` 默认**单 worker** 启动。SQLite 已开 **WAL + busy_timeout**
 > （`storage._conn()`，可用 `SQLPA_SQLITE_JOURNAL_MODE` / `SQLPA_SQLITE_BUSY_TIMEOUT_MS` 覆盖），会话记忆与限速计数均已落库：
 > 因此**各 worker 指向同一 `data/app.db`** 时，并发读写可用且状态一致（单进程重启亦可续）。
-> 仍不建议依赖"多机共享同一文件"横向扩容，跨机应改用 Redis 等共享存储。
+> 存储后端由 `SQLPA_STORAGE_BACKEND` 声明（默认 `sqlite`，**目前仅实现 SQLite**；配成未实现的后端会立即报错，
+> `GET /api/storage-info` 可核对实际后端）。仍不建议依赖"多机共享同一文件"横向扩容，跨机应改用 Redis 等共享存储。
 
 ### 方式二：本地（完整）
 
@@ -289,22 +296,29 @@ curl -X POST http://localhost:8000/api/query \
 | # | 评测线 | 关键指标 | 结果 | 产物 |
 |---|---|---|---|---|
 | 1 | 业务语义层（口径 / 治理护栏） | 口径内命中率 · 公式防篡改拦截率 · 权限拦截率 · PII 掩码覆盖率 · 审计覆盖率 | **100% × 5** | `business.json` |
-| 2 | 产品模式（北极星=语义层命中率） | 语义层命中率 · 口径内执行成功率 · 指标/维度识别准确率 · 认证率 | **84.9% (56/66)** · 100% · 100% · 100% · 100% | `product.json` |
-| 3 | 归因决策（离线规则基线） | 决策准确率（判定题数） | **81.2%**（判定题 6） | `decisions.json` |
-| 4 | **归因三维定位（注入式真因）** | analyze 命中率 · top-3 · drill 命中率 · 量价因子分解命中率 | **53.6%** · 92.9% · 33.3% · 100% | `attribution.json` |
-| 5 | 告警质量（阈值 vs 阈值+统计门控） | 阈值告警率 · 被统计门控抑制率 · 月长假象占比 | **77.8%** · 57.1% · 16.1% | `alert_quality.json` |
-| 6 | 沙箱外部对抗语料（61 条） | 危险语料拦截率 · 只读误杀率 · 库不变性 · 过滤值转义合规率 | **100%** · 7.7% · 文件 sha256 与行数**一字未变** · 100% | `sandbox_external.json` |
+| 2 | 产品模式（北极星=语义层命中率） | 语义层命中率 · 口径内执行成功率 · 指标/维度识别准确率 · 认证率 | **81.8% (72/88)** · 96.0% · 96.0% · 98.7% · 100% | `product.json` |
+| 3 | 归因决策（离线规则基线） | 决策准确率（判定题数） | **80.0%**（判定题 10） | `decisions.json` |
+| 4 | **归因三维定位（注入式真因）** | analyze 命中率 · top-3 · drill 命中率 · 量价因子分解命中率 | **53.6%** · 92.9% · **62.5%** · 100% | `attribution.json` |
+| 5 | 告警质量（阈值 vs 阈值+统计门控） | 阈值告警率 · 门控抑制率 · 月长假象占比 · **构造真值假阳性率（阈值-only→门控）** | **77.8%** · 57.1% · 16.1% · **66.7% → 0.0%**（召回 100%） | `alert_quality.json` |
+| 6 | 沙箱外部对抗语料（99 条） | 危险语料拦截率 · 只读误杀率 · 库不变性 · 过滤值转义合规率 | **100%** · 4.3% · 文件 sha256 与行数**一字未变** · 100% | `sandbox_external.json` |
 | 7 | 第三方公开基准（Spider dev `world_1`, N=120） | 覆盖率（开发集口径） · 覆盖内执行正确率 · **敢答且答错** · 拒答率 | **25.0%** · 100% · **0** · 75.0% | `external_bank_world_1.json` |
-| 8 | （可选，需 Key）确定性引擎 vs 纯 LLM | 引擎 top@1 − 纯 LLM top@1 = **llm_value** | 见 `--llm` 实跑 | `attribution_llm_baseline.json` |
+| 8 | （可选，需 Key）确定性引擎 vs 纯 LLM | 引擎 top@1 − 纯 LLM top@1 = **llm_value** | **0.0%**（N=28：引擎 53.6% = 纯 LLM 53.6%，逐题一致 100%） | `attribution_llm_baseline.json` |
 
 **怎么读这张表（避免把数字读成"好看的假数据"）**：
 
 - 第 4 条的 53.6% 是**注入式真因**下的 top-1 定位命中率（reports 里另有全量三档注入的 33.8%）；
-  top-3 到 **92.9%**，说明主因基本在前三名内，只是排序没排到第一；drill 33.3% 是**已知短板**，明写不用 top-5 糊过去。
-- 第 3 条 81.2% 是**离线规则基线**（不接 LLM 时判断题判不出）；接真实 LLM 的值另有 `decisions_llm.json`。
-- 第 5 条**没有可信真值标注**，报的是"告警量的下降与成因结构"，**不是精确假阳性率**。
+  top-3 到 **92.9%**，说明主因基本在前三名内，只是排序没排到第一。drill **62.5%**（top-3 83.3%）：
+  下钻注入用**专用强档 90%**（与 analyze 的 60% 解耦），剩下未到 top-1 的题属**构造难度**——
+  引擎给注入品类的名次与独立真值**逐题一致（24/24）**，且"注入靶点确已成为真值第一"的 15 题引擎**全中(100%)**。
+- 第 3 条 80.0% 是**离线规则基线**（不接 LLM 时判断题判不出）；接真实 LLM 的值另有 `decisions_llm.json`
+  （50 条集实测 **90.0%**，`llm_value = +10.0pt`，判断题 0/10 → 5/10）。
+- 第 5 条分两段：段 A（真实数据、无真值）报"告警量的下降与成因结构"；段 B 用**注入式构造真值**给出
+  真 FP/FN —— **阈值-only 假阳性率 66.7% → 统计门控后 0%、召回仍 100%**（是**构造分布**下的值，不等于真实流量分布）。
 - 第 7 条 25.0% 是**开发集覆盖率**（`world_1` 属 dev 集，建层时看过题面），**不冒充泛化指标**；
   真正与"是否看过题面"无关的是"覆盖内执行正确率 100%"与"敢答且答错 = 0"。
+- 第 8 条是**可选的 LLM 对照**（`run_all.py --llm`，需 Key）：给它与引擎**信息对等**的分段表后，
+  纯 LLM 与确定性引擎**逐题同答案**（单档 60% 口径 N=28，各 53.6%；三档全量口径 74/74）——
+  说明"主因定位 LLM 也能做"，引擎的价值在**可复现 / 零 token / 永不弃权 / 每个数字可追溯**。
 
 ---
 

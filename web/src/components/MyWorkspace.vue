@@ -1,8 +1,11 @@
 <script setup>
-// 我的工作台：查询历史 / 收藏 / 反馈。
+// 我的工作台：查询历史 / 收藏 / 反馈 / 分析 trace（可审计、可重放）。
 // 三张表后端早就有，却一直没有入口 —— "看过什么、存了什么、觉得哪里答错了"在系统里
 // 根本留不下来。这里把它们接上，并让收藏支持"一键复跑"（回填问题到分析台）。
+// 分析 trace 是后加的第四块：每次分析的完整事件流水都落库，此处可按 analysis_id 重放。
 import { ref, onMounted } from 'vue'
+import AgentPanel from './AgentPanel.vue'
+import { reduceAgents, lastError } from '../sse'
 import { authHeaders } from '../auth'
 
 const emit = defineEmits(['reuse'])
@@ -15,6 +18,13 @@ const busy = ref(false)
 const msg = ref('')
 const favTitle = ref('')
 const comment = ref('')
+
+// 分析 trace：列表 + 重放（重放渲染当初的 Agent 流水与结论，不重新调 LLM）
+const traces = ref([])
+const traceBusy = ref(false)
+const replay = ref(null)        // { analysis_id, question, username, events, final }
+const replayAgents = ref([])
+const replayFail = ref('')
 
 async function jget(url) {
   const r = await fetch(url, { headers: authHeaders() })
@@ -36,6 +46,7 @@ async function loadAll() {
     histTotal.value = h.total || 0
     favorites.value = f || []
     feedback.value = fb.items || []
+    await loadTraces()
   } catch (e) {
     msg.value = e.message || String(e)
   } finally {
@@ -77,6 +88,35 @@ async function rate(row, rating) {
 
 function reuse(f) { emit('reuse', f.user_input || f.title) }
 
+/** 拉取最近的分析 trace 摘要（不含事件流水，避免列表响应过大）。 */
+async function loadTraces() {
+  try {
+    const j = await jget('/api/analyze/traces?limit=20')
+    traces.value = j.traces || []
+  } catch (e) {
+    msg.value = e.message || String(e)
+  }
+}
+
+/** 取回某条 trace 的完整事件流水并重放：用与实时流同一套归并逻辑渲染当时的 Agent 过程。 */
+async function openTrace(t) {
+  traceBusy.value = true
+  msg.value = ''
+  try {
+    const j = await jget('/api/analyze/trace/' + encodeURIComponent(t.analysis_id))
+    const evts = j.events || []
+    replay.value = j
+    replayAgents.value = reduceAgents(evts)
+    replayFail.value = lastError(evts)
+  } catch (e) {
+    msg.value = e.message || String(e)
+  } finally {
+    traceBusy.value = false
+  }
+}
+
+function closeReplay() { replay.value = null; replayAgents.value = []; replayFail.value = '' }
+
 onMounted(loadAll)
 </script>
 
@@ -108,6 +148,36 @@ onMounted(loadAll)
           <button class="ghost tiny" title="点赞" @click="rate(h, 1)">👍</button>
           <button class="ghost tiny" title="点踩" @click="rate(h, -1)">👎</button>
         </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>分析 trace<span class="n">（最近 {{ traces.length }} 条 · 可审计 / 可重放）</span></h2>
+      <p v-if="!traces.length" class="empty">暂无 trace 记录。每次分析都会落一条完整事件流水。</p>
+      <div v-for="t in traces" :key="t.id" class="row">
+        <div class="main">
+          <span class="q-text">{{ t.question }}</span>
+          <span class="meta">
+            {{ t.created_at }} · {{ t.username || '匿名' }} ·
+            {{ t.ok ? '成功' : '未完成' }} · <code>{{ t.analysis_id }}</code>
+          </span>
+        </div>
+        <div class="ops">
+          <button class="ghost tiny" :disabled="traceBusy" @click="openTrace(t)">重放</button>
+        </div>
+      </div>
+
+      <!-- 重放：渲染当初的事件流水（Agent 面板 + 结论），不重新调用 LLM -->
+      <div v-if="replay" class="replay">
+        <div class="replay-head">
+          <b>重放 · {{ replay.question }}</b>
+          <button class="ghost tiny" @click="closeReplay()">收起</button>
+        </div>
+        <p v-if="replayFail" class="err">⚠ 当时分析出错：{{ replayFail }}</p>
+        <AgentPanel :agents="replayAgents" :streaming="false" />
+        <p v-if="replay.final && replay.final.conclusion" class="concl">
+          <b>当时结论：</b>{{ replay.final.conclusion }}
+        </p>
       </div>
     </section>
 
@@ -161,4 +231,11 @@ onMounted(loadAll)
 .ghost:hover:not(:disabled) { border-color: var(--brand); color: var(--brand-2); }
 .ghost:disabled { opacity: .6; cursor: not-allowed; }
 .ghost.tiny { padding: 5px 11px; font-size: 12.5px; border-radius: 8px; }
+.replay { margin-top: 14px; padding: 14px; border-radius: 12px;
+          border: 1px dashed var(--border); background: var(--surface-muted); }
+.replay-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+               margin-bottom: 10px; font-size: 14px; }
+.concl { margin: 12px 0 0; font-size: 13.5px; line-height: 1.7; color: var(--text); }
+.err { color: var(--danger); font-size: 13px; margin: 6px 0 0; }
+code { font-family: var(--mono); font-size: 11.5px; color: var(--text-muted); }
 </style>

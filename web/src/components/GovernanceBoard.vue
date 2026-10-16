@@ -15,6 +15,10 @@ const hitl = ref([])
 const escalations = ref({ sla_hours: 0, escalated: [], soon_due: [] })
 const confirmations = ref([])
 const subscriptions = ref([])
+// LLM 成本/延迟（近 7 天）：仅 admin 可见 —— 403 时不再当成"加载失败"，
+// 而是明确显示"仅 admin 可见"，避免普通分析者看到一条吓人的错误。
+const llm = ref(null)
+const llmDenied = ref(false)
 
 async function getJson(url) {
   const r = await fetch(url, { headers: authHeaders() })
@@ -40,6 +44,21 @@ async function sweep() {
   }
 }
 
+async function loadLlm() {
+  // 独立拉取：admin 独占端点，403 单独处理，不污染主 error 提示
+  try {
+    const r = await fetch('/api/llm-usage?days=7', { headers: authHeaders() })
+    if (r.status === 403) { llmDenied.value = true; llm.value = null; return }
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status))
+    llm.value = j
+    llmDenied.value = false
+  } catch {
+    llmDenied.value = false
+    llm.value = null
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -59,6 +78,7 @@ async function load() {
     if (s.status === 'fulfilled') subscriptions.value = s.value || []
     const firstReject = [c, h, es, cf, s].find((x) => x.status === 'rejected')
     if (firstReject) error.value = '部分治理数据获取失败：' + firstReject.reason.message
+    await loadLlm()
   } finally {
     loading.value = false
   }
@@ -147,6 +167,28 @@ onMounted(load)
             <div class="muted">{{ s.owner || '未指派' }} · {{ s.channel }}</div>
           </li>
         </ul>
+      </div>
+
+      <!-- LLM 成本 / 延迟（近 7 天，仅 admin）：把"一次分析花多少钱、多久"变成可读数字 -->
+      <div class="box">
+        <h3>LLM 成本 / 延迟（近 7 天）</h3>
+        <div v-if="llmDenied" class="empty">当前身份无权查看（仅 admin）</div>
+        <div v-else-if="!llm || !llm.calls" class="empty">暂无 LLM 调用记录</div>
+        <template v-else>
+          <div class="muted">
+            调用 {{ llm.calls }} 次（失败 {{ llm.failed_calls }}）· token {{ llm.total_tokens }}
+            （prompt {{ llm.prompt_tokens }} / completion {{ llm.completion_tokens }}）· 成本 {{ llm.cost }}
+          </div>
+          <div class="muted">
+            单次延迟 p50 {{ llm.latency_ms.p50 }}ms · p95 {{ llm.latency_ms.p95 }}ms · max {{ llm.latency_ms.max }}ms
+          </div>
+          <ul class="list">
+            <li v-for="(b, m) in llm.by_model" :key="m">
+              <b>{{ m }}</b> <span class="ty">{{ b.calls }} 次</span>
+              <div class="muted">{{ b.total_tokens }} token · 成本 {{ b.cost }} · p50 {{ b.p50_ms }}ms · p95 {{ b.p95_ms }}ms</div>
+            </li>
+          </ul>
+        </template>
       </div>
     </div>
   </section>

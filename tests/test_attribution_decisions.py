@@ -229,6 +229,45 @@ def test_service_factorize_wired(db, tmpdir_clean, business_months):
     assert a["supervisor"]["reason"]
 
 
+def test_decision_layer_eats_raw_question_like_service(tmpdir_clean, business_months):
+    """对齐性：决策层(`decide_drill`)在 service 与评测里吃到的都是**原始问句**。
+
+    背景（此前记为"已知口径差"）：service.answer 会先把追问改写成语义完整的独立问题
+    供**语义层匹配**（`followup.rewrite`），但传给 `decide_drill` 的仍是用户原话；
+    `evaluation.eval_decisions.decision_accuracy` 同样把用例的 `question` 原文喂给
+    `decide_drill`。本用例把这个输入契约钉死：即便带了会触发改写的 history，
+    决策层拿到的仍是原文——评测与线上一致。
+    """
+    cur, prev, prev_late = (business_months["current"], business_months["previous"],
+                            business_months["previous_late"])
+    p = tmpdir_clean / "svc_raw.db"
+    con = sqlite3.connect(p); con.executescript(f"""
+      CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
+        order_purchase_timestamp TEXT, order_status TEXT);
+      CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
+      CREATE TABLE products(product_id TEXT, product_category_name TEXT);
+      CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
+      INSERT INTO customers VALUES ('c1','SP'),('c2','RJ');
+      INSERT INTO orders VALUES
+        ('o1','c1','{prev}','delivered'),('o2','c1','{prev_late}','delivered'),
+        ('o3','c2','{cur}','delivered');
+      INSERT INTO order_items VALUES ('o1','p1',100),('o2','p1',50),('o3','p2',80);
+      INSERT INTO products VALUES ('p1','alimentos'),('p2','alimentos');
+    """); con.commit(); con.close()
+    sb = SqlSandbox(str(p), ExecConfig(max_rows=2000))
+    seen = {}
+
+    def _spy(att, q, llm=None):
+        seen["q"] = q
+        return {"action": "none", "reason": "spy", "decision_source": "rule"}
+
+    with patch("sqlpa.business.attribution.decide_drill", side_effect=_spy):
+        a = answer("本月GMV", load_config(), sb, str(p), llm=None,
+                   history=[{"question": "上月GMV为什么跌？", "metric": "gmv"}])
+    assert a["ok"] and a["drill_decision"]["action"] == "none"
+    assert seen.get("q") == "本月GMV"      # 决策层吃原始问句，而非改写后的
+
+
 # ---------------- 决策质量评测（① 决策命中） ----------------
 
 class _OracleSeq:
@@ -242,8 +281,8 @@ class _OracleSeq:
 def test_eval_decision_rule_baseline():
     """规则层基线：+ 策略门控后，规则已能给出全部 4 种动作（含 factorize）。
 
-    历史：门控前规则永远选不出 factorize → 19/26（0.73）。加入 `is_factor_question`
-    门控后，7 条量价问法在规则层即被判为 factorize，规则基线升到 26/26。
+    历史：门控前规则永远选不出 factorize → 30/40（0.75）。加入 `is_factor_question`
+    门控后，10 条量价问法在规则层即被判为 factorize，规则基线升到 40/40。
     **这里记录的是"哪些问题根本不需要 LLM"**：决策层花的 LLM 预算只在
     drill / switch_dim / none 这三类判断题上。
     """
@@ -260,9 +299,9 @@ def test_eval_decision_rule_baseline():
 
 
 def test_eval_decision_gate_is_what_earns_factorize():
-    """门控的可度量价值：把门控关掉（还原旧规则），factorize 7 条全错。
+    """门控的可度量价值：把门控关掉（还原旧规则），factorize 10 条全错。
 
-    这条用例把"门控到底值多少"钉成数字：19/26 → 26/26 的差就是它带来的。
+    这条用例把"门控到底值多少"钉成数字：30/40 → 40/40 的差就是它带来的。
     """
     from evaluation.eval_decisions import run, ANNOTATED
     from sqlpa.business import attribution as _att
@@ -274,8 +313,8 @@ def test_eval_decision_gate_is_what_earns_factorize():
         _att.is_factor_question = real
     on = run([{**c} for c in ANNOTATED], llm=None)
     fac = [c for c in off["cases"] if c["expert"] == "factorize"]
-    assert len(fac) == 7 and all(not c["hit"] for c in fac)   # 门控关：量价问题全漏
-    assert off["decision_accuracy"] == pytest.approx(19 / 26, abs=1e-3)
+    assert len(fac) == 10 and all(not c["hit"] for c in fac)   # 门控关：量价问题全漏
+    assert off["decision_accuracy"] == pytest.approx(30 / 40, abs=1e-3)
     assert on["decision_accuracy"] > off["decision_accuracy"]
 
 
@@ -292,7 +331,7 @@ def test_eval_decision_llm_lifts_accuracy():
     consult = [c for c in ANNOTATED
                if not is_factor_question(c["question"]) and _has_followup(c["question"])]
     deterministic = len(ANNOTATED) - len(consult)
-    assert len(consult) == 12 and deterministic == 14   # 7 量价 + 7 非追问 → 确定性
+    assert len(consult) == 19 and deterministic == 21   # 10 量价 + 11 非追问 → 确定性
 
     def _oracle_for(cases):
         replies = {"drill": '{"action":"drill","dim":"state","value":"SP","reason":"r"}',
@@ -328,33 +367,33 @@ def test_eval_decision_llm_lifts_accuracy():
 # ---------------- 判断题 BORDERLINE：让评测有区分度（不再自证） ----------------
 
 def test_eval_borderline_proves_llm_value():
-    """判断题集是区分度标本：规则 26/32 判不出、LLM(oracle) 补位到 100%。
+    """判断题集是区分度标本：规则 40/50 判不出、LLM(oracle) 补位到 100%。
 
-    这直接回应"26/26 是自证的"：加入 6 条规则判不出的边界题后，离线命中率
-    掉到 26/32，说明这套评测**确实有会判错的用例**；而 `llm_value` 为正则证明
+    这直接回应"40/40 是自证的"：加入 10 条规则判不出的边界题后，离线命中率
+    掉到 40/50，说明这套评测**确实有会判错的用例**；而 `llm_value` 为正则证明
     "接 LLM 的判断力"不是摆设——它有可衡量的、正面的题目去挣。
     """
     from evaluation.eval_decisions import run, BORDERLINE, FIELD, ANNOTATED
     from sqlpa.business.attribution import is_factor_question
-    assert len(FIELD) == len(ANNOTATED) + len(BORDERLINE) == 32
+    assert len(FIELD) == len(ANNOTATED) + len(BORDERLINE) == 50
     assert all(c.get("needs_judgment") for c in BORDERLINE)        # 全部标注为判断题
     assert all(not c.get("needs_judgment") for c in ANNOTATED)     # 确定性集不标
 
-    # (1) 不接 LLM：确定性集 26/26 全对，但 6 条判断题规则判不出 → 26/32，评测不再自证
+    # (1) 不接 LLM：确定性集 40/40 全对，但 10 条判断题规则判不出 → 40/50，评测不再自证
     off = run(FIELD, llm=None)
-    assert off["judgment_cases"] == len(BORDERLINE) == 6
-    assert off["decision_accuracy"] == pytest.approx(26 / 32, abs=1e-3)
+    assert off["judgment_cases"] == len(BORDERLINE) == 10
+    assert off["decision_accuracy"] == pytest.approx(40 / 50, abs=1e-3)
 
     # (2) 接 LLM(oracle)：判断题全对 → 全量 100%，llm_value > 0
     def _reply(a): return f'{{"action":"{a}","dim":"state","value":"SP","reason":"r"}}'
     consult = [c for c in ANNOTATED
                if _has_followup(c["question"]) and not is_factor_question(c["question"])]
-    # 调用顺序 = ANNOTATED 的 consult 题(12) 在前，BORDERLINE 题(6) 在后
+    # 调用顺序 = ANNOTATED 的 consult 题(19) 在前，BORDERLINE 题(10) 在后
     texts = [_reply(c["expert_action"]) for c in consult] + [_reply(c["expert_action"]) for c in BORDERLINE]
     oracle = _OracleSeq(texts)
     lifted = run(FIELD, llm=oracle)
-    assert oracle.calls == len(consult) + len(BORDERLINE) == 18
-    assert lifted["judgment_cases"] == 6 and lifted["judgment_accuracy"] == 1.0
+    assert oracle.calls == len(consult) + len(BORDERLINE) == 29
+    assert lifted["judgment_cases"] == 10 and lifted["judgment_accuracy"] == 1.0
     assert lifted["llm_value"] > 0
     assert lifted["decision_accuracy"] == pytest.approx(1.0, abs=1e-3)
 
@@ -375,3 +414,43 @@ def test_eval_exec_accuracy(tmpdir_clean):
     assert by["drill-主因隔离收敛"] is True
     assert e["exec_accuracy"] == 1.0
     assert "exec" in r and "decision_accuracy" in r   # 两个指标分开，不混
+
+
+# ---------------- 下钻贡献占比（分母=路径总变化，非全局） ----------------
+
+def test_drill_exposes_contribution_share(tmpdir_clean, business_months):
+    """drill 的贡献应带占比与守恒可信标记，且分母口径是**该州内的总变化**。
+
+    排序不变（仍按 |delta| 降序，与独立真值表一致）；新增的是"该段解释了路径波动的多少"，
+    用于把"定位到主因"与"主因确实支配"区分开（正是 top-1 62.5% 的诚实补注）。
+    """
+    from sqlpa.business import attribution
+    cur, prev, prev_late = (business_months["current"], business_months["previous"],
+                            business_months["previous_late"])
+    p = tmpdir_clean / "drill_share.db"
+    con = sqlite3.connect(p)
+    con.executescript(f"""
+      CREATE TABLE orders(order_id TEXT PRIMARY KEY, customer_id TEXT,
+        order_purchase_timestamp TEXT, order_status TEXT);
+      CREATE TABLE order_items(order_id TEXT, product_id TEXT, price REAL);
+      CREATE TABLE products(product_id TEXT, product_category_name TEXT);
+      CREATE TABLE customers(customer_id TEXT, customer_state TEXT);
+      INSERT INTO customers VALUES ('c1','SP'),('c2','SP'),('c3','RJ');
+      INSERT INTO orders VALUES
+        ('o1','c1','{prev}','delivered'),('o2','c2','{prev_late}','delivered'),
+        ('o3','c1','{cur}','delivered'),('o4','c2','{cur}','delivered');
+      INSERT INTO order_items VALUES
+        ('o1','p1',100),('o2','p2',50),('o3','p1',40),('o4','p2',45);
+      INSERT INTO products VALUES ('p1','alimentos'),('p2','brinquedos');
+    """)
+    con.commit()
+    # SP 路径内：alimentos 100→40(delta -60)、brinquedos 50→45(delta -5) → 路径总变化 -65
+    r = attribution.drill(CFG, con, "gmv", current_spec="本月", previous_spec="上月",
+                          path=[{"dim": "state", "value": "SP"}], next_dims=["category"])
+    assert r["ok"]
+    assert r["path_change"] == -65.0
+    top = r["top_contributors"][0]
+    assert top["key"] == "alimentos"                 # 仍按 |delta| 排序：排序未变
+    assert top["delta"] == -60.0
+    assert top["pct_reliable"] is True               # 分段之和 == 路径总变化（可加）
+    assert abs(top["pct_of_change"] - (-60.0 / -65.0)) < 1e-3   # -60/-65≈92.3%，非全局占比

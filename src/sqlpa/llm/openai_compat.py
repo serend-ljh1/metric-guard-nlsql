@@ -98,6 +98,8 @@ class OpenAICompatLLM(LLMProvider):
         # ---- 用量/成本统计 ----
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         self.cost = 0.0
+        # 逐次调用延迟（毫秒）：分位（p95）只能靠逐次明细累出来，故单列一份
+        self.latency_ms_log: list = []
         # 计价(每 1M token)可通过 env 配置：LLM_INPUT_PRICE_PER_1M / LLM_OUTPUT_PRICE_PER_1M
         self.price_in = float(os.environ.get("LLM_INPUT_PRICE_PER_1M", "0.14"))    # 默认按 deepseek 大致表价
         self.price_out = float(os.environ.get("LLM_OUTPUT_PRICE_PER_1M", "0.28"))
@@ -112,13 +114,59 @@ class OpenAICompatLLM(LLMProvider):
         self.usage["prompt_tokens"] += int(u.get("prompt_tokens", 0))
         self.usage["completion_tokens"] += int(u.get("completion_tokens", 0))
         self.usage["total_tokens"] += int(u.get("total_tokens", 0))
-        self.cost += (int(u.get("prompt_tokens", 0)) / 1e6 * self.price_in
-                      + int(u.get("completion_tokens", 0)) / 1e6 * self.price_out)
+        self.cost += self._call_cost(u)
+
+    def _call_cost(self, u: Optional[Dict]) -> float:
+        """按 token 与单价估算**单次**调用成本（累计成本与明细行复用同一算式）。"""
+        u = u or {}
+        return (int(u.get("prompt_tokens", 0)) / 1e6 * self.price_in
+                + int(u.get("completion_tokens", 0)) / 1e6 * self.price_out)
+
+    def _record_call(self, model: str, usage: Optional[Dict], latency_ms: float,
+                     ok: bool = True) -> None:
+        """记录一次 LLM 调用的 token 与延迟：进内存分位统计 + **尽力**落库明细。
+
+        落库是 best-effort：可观测性不该把一次业务调用拖垮（存储不可用时只丢明细）。
+        """
+        try:
+            self.latency_ms_log.append(float(latency_ms))
+        except Exception:  # noqa: BLE001
+            pass
+        u = usage or {}
+        rec = {"model": model or "", "prompt_tokens": int(u.get("prompt_tokens", 0) or 0),
+               "completion_tokens": int(u.get("completion_tokens", 0) or 0),
+               "total_tokens": int(u.get("total_tokens", 0) or 0),
+               "cost": round(self._call_cost(u), 6),
+               "latency_ms": round(float(latency_ms), 1), "ok": 1 if ok else 0}
+        try:
+            from sqlpa.business import storage
+            storage.insert_llm_call(rec)
+        except Exception:  # noqa: BLE001
+            pass
 
     def stats(self) -> Dict:
         # 成本保留 6 位：单次请求常在 1e-4 量级，round(…, 4) 会把小额成本抹成 0
         return {"usage": dict(self.usage), "cost": round(self.cost, 6),
-                "last_model": self.last_model()}
+                "last_model": self.last_model(), "latency": self.latency_stats()}
+
+    def latency_stats(self) -> Dict:
+        """本客户端**单次调用**延迟分位（p50/p95/max）。分位只能靠逐次明细累出来。"""
+        vals = sorted(float(x) for x in self.latency_ms_log)
+        n = len(vals)
+        if not n:
+            return {"n": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
+
+        def _q(q: float) -> float:
+            if n == 1:
+                return vals[0]
+            idx = q * (n - 1)
+            lo = int(idx)
+            hi = min(lo + 1, n - 1)
+            frac = idx - lo
+            return vals[lo] * (1 - frac) + vals[hi] * frac
+
+        return {"n": n, "p50_ms": round(_q(0.5), 1), "p95_ms": round(_q(0.95), 1),
+                "max_ms": round(vals[-1], 1)}
 
     def last_model(self) -> str:
         """最近一次实际调用的模型名（用于发现模型池中途切换）。"""
@@ -128,6 +176,7 @@ class OpenAICompatLLM(LLMProvider):
         self.usage = {"prompt_tokens": 0, "completion_tokens": 0,
                       "total_tokens": 0, "calls": 0}
         self.cost = 0.0
+        self.latency_ms_log = []
 
     def _chat(self, messages: list, temperature: float | None = None) -> str:
         """模型池调用：按顺序尝试 model_pool 中的模型。
@@ -138,6 +187,8 @@ class OpenAICompatLLM(LLMProvider):
         """
         url = f"{self.base_url}/chat/completions"
         last_err: Optional[Exception] = None
+        # 整个 _chat 的起点：全部模型都失败时也要记一行失败延迟（超时也是延迟的一部分）
+        t_start = time.perf_counter()
         # 整次调用的总预算：跨所有模型/重试，超过即放弃（避免在 SSE 超时前还挂着）。
         deadline = time.monotonic() + float(self.total_timeout or 0) if self.total_timeout else None
         for model_name in self.model_pool:
@@ -162,15 +213,19 @@ class OpenAICompatLLM(LLMProvider):
                         url, data=body,
                         headers={"Content-Type": "application/json",
                                  "Authorization": f"Bearer {self.api_key}"})
+                    t_call = time.perf_counter()
                     with urllib.request.urlopen(req, timeout=per_call) as r:
                         data = json.loads(r.read().decode("utf-8"))
+                    call_ms = (time.perf_counter() - t_call) * 1000
                     content = data["choices"][0]["message"]["content"]
                     if not content or not content.strip():
                         # 空内容视为失败，切换下一个模型
                         last_err = RuntimeError(f"模型 {model_name} 返回空内容")
                         break
-                    self._acc_usage(data.get("usage"))
+                    usage = data.get("usage")
+                    self._acc_usage(usage)
                     self.last_used_model = model_name
+                    self._record_call(model_name, usage, call_ms, ok=True)
                     return content
                 except Exception as e:  # noqa: BLE001
                     last_err = e
@@ -183,6 +238,8 @@ class OpenAICompatLLM(LLMProvider):
                     break
             # 当前模型结束循环，短暂等待避免连续失败，继续下一个模型
             time.sleep(0.3)
+        # 全模型失败也记一行（ok=0）：超时/连接失败同样是延迟的一部分，不能被"只记成功"抹掉
+        self._record_call("", None, (time.perf_counter() - t_start) * 1000, ok=False)
         raise RuntimeError(f"LLM 调用失败（已尝试模型池 {self.model_pool}）: {last_err}")
 
     def complete(self, prompt: str) -> str:

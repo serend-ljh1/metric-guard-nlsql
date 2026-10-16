@@ -12,7 +12,7 @@ evaluation/eval_decisions.py
      下钻是否把主因在本分支内隔离出来）。这一步与"选没选对"脱钩，杜绝把
      "会选动作"混同成"会算结果"。
 
-本文件把"决策命中"从既有 3 条用例扩到 26 条（每种 action ≥ 6），并全部换成
+本文件把"决策命中"从既有 3 条用例扩到 40 条（每种 action ≥ 9），并全部换成
 **真实 olist 业务语境**的自然追问（州/品类/单量/客单价），而非"那为什么呢"这类人造 case。
 
 用法：
@@ -46,7 +46,10 @@ evaluation/eval_decisions.py
 不是独立于实现者的第三方真人标注。因此这批 `expert_action` 只承担两个不声称泛化的身份：
 (1) **回归测试**（`pytest tests` 里防改坏），(2) **方法论演示**（展示"决策正确性可以这样量化"）。
 它**不是**泛化准确率的证据——系统级准确率只由公共基准 Spider-dev 支撑（其 gold 由数据源外部定义）。
-若后续引入真正的独立标注第二人，可算出标注一致性并回填到报告，届时再升级本字段。判定规则见下：
+**关于"第二人独立标注"**：引入独立第二标注人需要另一个人力标注全部 40+10 条并签署交叉一致性
+（如 Cohen's κ），本项目为单人原型、客观上拿不到该人力，因此**如实标注为"未做"**（
+报告字段 `annotation_protocol.second_annotator = "unavailable"`），不虚构一致性数字；一旦有第二标注人，
+把其标注回填即可用 `annotation_protocol.agreement` 升级本字段。判定规则见下：
 
 对每条用例，`expert_action` 的判定依据（判定只依赖：问题是否追问、`att.top_contributors`
 的集中度、指标是否可乘性分解）：
@@ -58,9 +61,9 @@ evaluation/eval_decisions.py
                     单量 × 客单价的因子分解，而非继续下钻某个维度。
   - **none**       = 非追问（全新问题）或电子无显著维度贡献 → 无需继续拆，收尾。
 
-纯规则地板（无 `is_factor_question` 门控）在 26 条正例上约为 19/26（≈0.73，因为它永远选
-不出 factorize 这类需要领域判断的动作）；加入门控后，7 条量价问法由规则确定性命中。离线全量
-（26 正例 + 6 判断题）命中 **26/32 ≈ 0.81** —— 那 6 条正是规则判不出、只等 LLM 真判断的
+纯规则地板（无 `is_factor_question` 门控）在 40 条正例上约为 30/40（≈0.75，因为它永远选
+不出 factorize 这类需要领域判断的动作）；加入门控后，10 条量价问法由规则确定性命中。离线全量
+（40 正例 + 10 判断题）命中 **40/50 = 0.80** —— 那 10 条正是规则判不出、只等 LLM 真判断的
 区分标本。门控的价值与"哪些问法根本不该花 token"都由 `--llm` 模式的对照报告直接印出来。
 """
 from __future__ import annotations
@@ -85,8 +88,16 @@ except ImportError:  # pragma: no cover - 独立运行兜底
 # 标注协议：真值由谁标、判据见模块 docstring
 EXPERT_LABELED_BY = "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）"
 
+# 标注协议结构化字段（供报告/答辩直接引用；"第二人独立标注"客观不可得，如实标注未做）
+ANNOTATION_PROTOCOL: Dict = {
+    "labeled_by": EXPERT_LABELED_BY,
+    "second_annotator": "unavailable",   # 单人原型：拿不到独立第二标注人的人力
+    "agreement": None,                   # 一旦有第二人标注回填，即可算一致性（如 Cohen's κ）
+    "note": "真值为实现者自标；未做独立第二人标注，故本批数字不声称泛化准确率，只作回归与方法论演示。",
+}
+
 # ----------------------------------------------------------------------
-# 26 条带专家真凶的真实业务追问（每条都来自 olist 分析语境，非人造 case）
+# 40 条带专家真凶的真实业务追问（每条都来自 olist 分析语境，非人造 case）
 #   name          用例名；metric  涉及的指标
 #   question      用户的真实追问（口语）；att.top_contributors  归因后的维度贡献
 #   expert_action 专家真值（判定依据见模块 docstring）
@@ -218,15 +229,80 @@ ANNOTATED: List[Dict] = [
      "question": "上月GMV总额是多少",
      "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-70", "pct_of_change": 0.9}]},
      "expert_action": "none", "note": "口径取数，非追问 → 不拆"},
+
+    # ---- 扩容：继续补真实业务语境的追问/取数（每种 action 保持均衡）----
+    {"name": "order_count-追问主因品类", "metric": "order_count",
+     "question": "那订单数掉主要是哪个品类？",
+     "att": {"top_contributors": [{"dim": "category", "key": "alimentos", "desc": "品类「alimentos」变化-40", "pct_of_change": 0.82}]},
+     "expert_action": "drill", "note": "订单数在品类 alimentos 占 82% → 下钻"},
+    {"name": "gmv-追问主因州RJ", "metric": "gmv",
+     "question": "那这次跌主要是哪个州？",
+     "att": {"top_contributors": [{"dim": "state", "key": "RJ", "desc": "州「RJ」变化-55", "pct_of_change": 0.7}]},
+     "expert_action": "drill", "note": "RJ 占 70% → 下钻单州"},
+    {"name": "aov-追问主因州SP", "metric": "aov",
+     "question": "那客单价的下滑出在哪个州？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-6", "pct_of_change": 0.77}]},
+     "expert_action": "drill", "note": "客单价 SP 占 77% → 下钻"},
+    {"name": "gmv-主因品类聚焦", "metric": "gmv",
+     "question": "为什么品类 alimentos 跌这么多？",
+     "att": {"top_contributors": [{"dim": "category", "key": "alimentos", "desc": "品类「alimentos」变化-80", "pct_of_change": 0.8}]},
+     "expert_action": "drill", "note": "点名主因品类 → 在该品类内下钻"},
+    {"name": "gmv-两州均势换维", "metric": "gmv",
+     "question": "那到底哪一州拖累？",
+     "att": {"top_contributors": [
+         {"dim": "state", "key": "SP", "desc": "州「SP」变化-30", "pct_of_change": 0.34},
+         {"dim": "state", "key": "MG", "desc": "州「MG」变化-28", "pct_of_change": 0.31}]},
+     "expert_action": "switch_dim", "note": "两州各占三成，看州定不出主因 → 换维"},
+    {"name": "gmv-多州分散", "metric": "gmv",
+     "question": "那为什么全国都在跌？",
+     "att": {"top_contributors": [
+         {"dim": "state", "key": "SP", "desc": "州「SP」变化-28", "pct_of_change": 0.28},
+         {"dim": "state", "key": "RJ", "desc": "州「RJ」变化-26", "pct_of_change": 0.26},
+         {"dim": "state", "key": "MG", "desc": "州「MG」变化-24", "pct_of_change": 0.24}]},
+     "expert_action": "switch_dim", "note": "三州均衡下跌，无单一主因 → 换维"},
+    {"name": "order_count-多品类分散", "metric": "order_count",
+     "question": "那订单数为什么各品类都掉了？",
+     "att": {"top_contributors": [
+         {"dim": "category", "key": "a", "desc": "品类「a」变化-11", "pct_of_change": 0.30},
+         {"dim": "category", "key": "b", "desc": "品类「b」变化-10", "pct_of_change": 0.28}]},
+     "expert_action": "switch_dim", "note": "订单数在各品类分散下跌 → 换维"},
+    {"name": "gmv-拆解量价二", "metric": "gmv",
+     "question": "拆解一下，GMV 跌是单量还是客单价？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-60", "pct_of_change": 0.85}]},
+     "expert_action": "factorize", "note": "「拆解」显式提量价 → factorize"},
+    {"name": "gmv-乘积因子拆", "metric": "gmv",
+     "question": "把 GMV 按订单量×客单价乘积因子拆开看。",
+     "att": {"top_contributors": [{"dim": "category", "key": "x", "desc": "品类「x」变化-58", "pct_of_change": 0.8}]},
+     "expert_action": "factorize", "note": "显式「乘积/因子」→ factorize"},
+    {"name": "gmv-贡献构成", "metric": "gmv",
+     "question": "帮我看看单量和客单价对 GMV 的贡献构成。",
+     "att": {"top_contributors": [{"dim": "state", "key": "RJ", "desc": "州「RJ」变化-52", "pct_of_change": 0.75}]},
+     "expert_action": "factorize", "note": "「贡献/构成」→ 因子分解"},
+    {"name": "gmv-单月取数", "metric": "gmv",
+     "question": "看一下 2018-06 的 GMV。",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-70", "pct_of_change": 0.9}]},
+     "expert_action": "none", "note": "单月取数，非追问 → 收尾"},
+    {"name": "order_count-州对比", "metric": "order_count",
+     "question": "各州订单量对比一下。",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-9", "pct_of_change": 0.75}]},
+     "expert_action": "none", "note": "取数对比，非追问 → 不拆"},
+    {"name": "aov-按月趋势", "metric": "aov",
+     "question": "客单价按月趋势。",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-5", "pct_of_change": 0.7}]},
+     "expert_action": "none", "note": "趋势看板，非追问 → 收尾"},
+    {"name": "gmv-品类排行", "metric": "gmv",
+     "question": "品类 GMV 排行榜。",
+     "att": {"top_contributors": [{"dim": "category", "key": "alimentos", "desc": "品类「alimentos」变化-30", "pct_of_change": 0.9}]},
+     "expert_action": "none", "note": "排行榜取数，非追问 → 收尾"},
 ]
 
 
 # ----------------------------------------------------------------------
-# 6 条"真·判断题"（BORDERLINE）—— 命中率的分水岭
+# 10 条"真·判断题"（BORDERLINE）—— 命中率的分水岭
 # ----------------------------------------------------------------------
-# 上面 26 条 ANNOTATED，**规则 + 策略门控能确定性全对**（26/26，0 token）。
+# 上面 40 条 ANNOTATED，**规则 + 策略门控能确定性全对**（40/40，0 token）。
 # 但一个评测如果"永远判得对"，就会退化成规格测试、量不出任何判断力。
-# 这 6 条正是"规则判不出、LLM 判得出"的边界题，用来承载 `llm_value`：
+# 这 10 条正是"规则判不出、LLM 判得出"的边界题，用来承载 `llm_value`：
 #   - 规则只有"主因清晰就下钻 / 分散就换维 / 无追问就收尾"这条机械判据，
 #     遇到"用户否定主因 / 叫停 / 踩在 0.6 阈值边界"就必然错；
 #   - 这类"要不要继续动手、要不要换讲法"的判断力，才是 LLM 该挣的钱。
@@ -257,6 +333,24 @@ BORDERLINE: List[Dict] = [
      "question": "那到底什么结论，一句话总结下呢？",
      "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
      "expert_action": "none", "note": "用户要收尾总结 → 不再拆", "needs_judgment": True},
+
+    # ---- 扩容：更多"规则判不出、LLM 判得出"的边界题 ----
+    {"name": "判断-否定品类维度", "metric": "gmv",
+     "question": "那先别看品类了，换个维度再拆？",
+     "att": {"top_contributors": [{"dim": "category", "key": "alimentos", "desc": "品类「alimentos」变化-90", "pct_of_change": 0.9}]},
+     "expert_action": "switch_dim", "note": "主因清晰但用户否定该维度 → 应换维", "needs_judgment": True},
+    {"name": "判断-确认是否唯一主因", "metric": "gmv",
+     "question": "那确定就它一个在拖后腿吗？再核一下呢。",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.55}]},
+     "expert_action": "drill", "note": "pct 略低于 0.6，但语义是唯一主因 → 仍应下钻", "needs_judgment": True},
+    {"name": "判断-只想看总数", "metric": "gmv",
+     "question": "那这个数就这样吧，不用再拆了。",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.9}]},
+     "expert_action": "none", "note": "用户明确叫停 → 不再动手", "needs_judgment": True},
+    {"name": "判断-质疑整体性", "metric": "gmv",
+     "question": "那感觉是普遍现象，不单是它吧？",
+     "att": {"top_contributors": [{"dim": "state", "key": "SP", "desc": "州「SP」变化-90", "pct_of_change": 0.63}]},
+     "expert_action": "switch_dim", "note": "pct 略高于 0.6，但语义是整体下滑 → 应换维", "needs_judgment": True},
 ]
 
 # 全量评测集 = 确定性集(ANNOTATED) + 判断题(BORDERLINE)
@@ -538,9 +632,11 @@ def run(annotated: Optional[List[Dict]] = None, llm=None,
                 "judgment_cases": sum(1 for c in ann if c.get("needs_judgment")),
                 "judgment_accuracy": None, "judgment_llm_calls": 0,
                 "expert_labeled_by": EXPERT_LABELED_BY,
+                "annotation_protocol": ANNOTATION_PROTOCOL,
                 "action_tally": action_tally(ann), "exec": e}
     d = llm_value(ann, llm)                           # 接 LLM：同时给规则基线与增值
     return {**d, "expert_labeled_by": EXPERT_LABELED_BY,
+            "annotation_protocol": ANNOTATION_PROTOCOL,
             "action_tally": action_tally(ann), "exec": e}
 
 
@@ -615,7 +711,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ImportError:  # pragma: no cover
         pass
 
-    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（专家自标真值：26 确定性 + 6 判断题；用作回归与演示，非泛化准确率证据）")
+    ap = argparse.ArgumentParser(description="归因 Agent 决策质量评测（专家自标真值：40 确定性 + 10 判断题；用作回归与演示，非泛化准确率证据）")
     ap.add_argument("--llm", action="store_true", help="接真实 LLM 参与决策（需要 .env 里的 key）")
     ap.add_argument("--model", default=None, help="指定模型（默认取 .env 的 LLM_MODEL）")
     ap.add_argument("--pool", action="store_true",

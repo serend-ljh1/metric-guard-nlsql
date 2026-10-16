@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 
 from .deps import (AnalyzeIn, ROOT, _bind_asof, _cfg, _db_path, _identify, _llm,
                    _rate_limit, _sandbox, _session_guard)
@@ -104,6 +104,32 @@ def api_analyze_stream(q: AnalyzeIn, x_api_token: Optional[str] = Header(default
                              headers={"Cache-Control": "no-cache",
                                       "Connection": "keep-alive",
                                       "X-Accel-Buffering": "no"})
+
+
+@router.get("/api/analyze/traces")
+def api_analyze_traces(limit: int = 20, x_api_token: Optional[str] = Header(default=None)):
+    """最近的分析 trace 摘要列表（审计入口）。analyst 只看自己的，admin 看全部。"""
+    from sqlpa.business import storage
+    ident = _identify(x_api_token, "analyst")
+    only = None if ident["role"] == "admin" else ident["username"]
+    return {"traces": storage.list_traces(limit=max(1, min(int(limit), 200)), username=only)}
+
+
+@router.get("/api/analyze/trace/{analysis_id}")
+def api_analyze_trace(analysis_id: str, x_api_token: Optional[str] = Header(default=None)):
+    """按 analysis_id 取回**完整事件流水**（结构化），供前端/工具重放当时的多 Agent 过程。
+
+    重放语义：返回的就是当初推给 SSE 的同一串事件 + 最终载荷，前端用同一套渲染器
+    再放一遍即可；因此"过程可看"升级成了"过程可审计、可重放"。
+    """
+    from sqlpa.business import storage
+    ident = _identify(x_api_token, "analyst")
+    t = storage.get_trace(analysis_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="未找到该 analysis_id 的 trace")
+    if ident["role"] != "admin" and (t.get("username") or "") not in ("", ident["username"]):
+        raise HTTPException(status_code=403, detail="只能重放自己的分析 trace")
+    return t
 
 
 @router.get("/api/analyze/chart-template")

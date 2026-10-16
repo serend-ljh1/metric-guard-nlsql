@@ -87,9 +87,15 @@ def _expectations() -> dict:
     else:
         alerts = aq.get("n_threshold_alerts") or 0
         cal = aq.get("n_calendar_driven_alerts") or 0
+        lb = aq.get("labeled") or {}
+        fp_threshold = (lb.get("threshold_only") or {}).get("false_positive_rate") or 0.0
+        gated = lb.get("gated") or {}
+        fp_gated = gated.get("false_positive_rate") or 0.0
+        recall_gated = gated.get("recall") or 0.0
         exp[5] = [aq["alert_rate_threshold_only"] * 100,
                   aq["suppression_rate"] * 100,
-                  (cal / alerts * 100 if alerts else 0.0)]
+                  (cal / alerts * 100 if alerts else 0.0),
+                  fp_threshold * 100, fp_gated * 100, recall_gated * 100]
 
     se = _load("sandbox_external")
     if se is None:

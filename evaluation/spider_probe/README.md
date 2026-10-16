@@ -43,3 +43,15 @@ python evaluation/eval_external_bank.py --spider-root "/path/to/spider" --report
 ```
 
 下载完整数据集的帮助见 `tools/download_data.py`（Spider 的官方分发渠道）。
+
+## 多库扩展（换域成本量化）现状 —— 如实标注
+
+本目录**只内联了 1 个库（`world_1`）**，`eval_external_bank.py` 报告因此只有一个世界的数字。
+"扩到 Spider 多个 dev 库、量化换域成本"需要**完整 Spider 数据集**（仓库外资源，需联网获取）；
+本机在评测时**无外网**（`tools/download_data.py` / `tools/fetch_external_corpus.py` 均无法连通），
+故**未做**多库扩展，**不虚构多库数字**。
+
+已有可复核的"换域成本"证据仅覆盖 `world_1` 这一个域，其形态是：**换域只改 1 个 YAML
+（`config/semantic_world.yaml`）、0 行业务代码**——语义层把"域"外置成配置，新增一个域的
+边际成本是"写一份 YAML"，而不是改编译/执行链路。多库版本需在有网机器上补齐完整数据集后复跑
+`--spider-root`，届时同一脚本会给出跨库的覆盖率/换域成本对照。

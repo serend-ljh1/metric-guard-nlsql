@@ -40,3 +40,7 @@ class LLMProvider(ABC):
         一旦中途切换，"绝对指标"就会变成多个模型的混合结果且无人察觉。
         """
         return ""
+
+    def latency_stats(self) -> Dict:
+        """单次调用延迟分位（p50/p95/max）。默认零值：离线/Mock 后端不产生真实延迟。"""
+        return {"n": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}

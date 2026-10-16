@@ -12,8 +12,8 @@ sqlpa/
 │   ├── deps.py                     #   公共依赖：鉴权(登录会话+静态token)/角色/限速/会话记忆（持久化+并发保护）/配置/沙箱
 │   ├── auth.py                     #   /api/auth/login /api/auth/logout /api/auth/me（登录会话）
 │   ├── query.py                    #   /api/query /api/report /api/metrics
-│   ├── analyze.py                  #   /api/analyze /api/analyze/stream /chart-template /report(文件流)
-│   ├── governance.py               #   /api/governance/conflicts /api/audit /api/metrics/(history|lineage|rollback|upsert|dimensions|aliases 写) /api/datasources
+│   ├── analyze.py                  #   /api/analyze /api/analyze/stream /chart-template /report(文件流) /api/analyze/traces /api/analyze/trace/{id}(重放)
+│   ├── governance.py               #   /api/governance/conflicts /api/audit /api/metrics/(history|lineage|rollback|upsert|dimensions|aliases 写) /api/datasources /api/llm-usage /api/storage-info
 │   ├── hitl.py                     #   /api/hitl*（含 /escalations 与 /sweep） /api/confirmations*
 │   ├── subscriptions.py            #   /api/subscriptions*
 │   └── workspace.py                #   /api/history /api/favorites /api/feedback（个人工作台）
@@ -94,7 +94,7 @@ sqlpa/
 │   ├── eval_attribution.py         # ★ 归因命中率（注入式真因，Ground Truth by Construction）
 │   ├── eval_attribution_llm_baseline.py # ★ 纯 LLM 对照臂（同信息条件，防稻草人）
 │   ├── spider_probe/               # ★ 仓库内 Spider 样本语料（题面+gold SQL+库文件，供离线复现）
-│   ├── sandbox_corpus/sqli_corpus.jsonl # ★ 61 条显式来源对抗语料（48 破坏性 + 13 只读）
+│   ├── sandbox_corpus/sqli_corpus.jsonl # ★ 99 条显式来源对抗语料（76 破坏性 + 23 只读，含跨方言）
 │   └── reports/                    #   评测产物（含 external_bank_world_1.md / sandbox_external.md）
 └── data/                           # olist(真实公开数据，gitignored) / reports / audit
 ```

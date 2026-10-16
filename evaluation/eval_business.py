@@ -42,34 +42,124 @@ from sqlpa.config import ensure_utf8_console, repo_relative  # noqa: E402
 # reasons: 该题考查的点（写在报告里，便于人看）
 CASES = [
     # ---- 口径内：指标 + 维度组合（均取自 business_config.yaml 的 support_dims）----
+    # 规模类·金额
     {"q": "各个品类的GMV", "expect": "in", "metric": "gmv", "dims": ["category"],
      "note": "gmv 支持 category"},
     {"q": "每个州的GMV", "expect": "in", "metric": "gmv", "dims": ["state"],
      "note": "gmv 支持 state"},
+    {"q": "每个订单状态的GMV", "expect": "in", "metric": "gmv", "dims": ["status"],
+     "note": "gmv 支持 status"},
+    {"q": "按月查看GMV", "expect": "in", "metric": "gmv", "dims": ["dt"],
+     "note": "gmv 支持 dt（时间粒度 month）"},
+    {"q": "2018-08的GMV", "expect": "in", "metric": "gmv", "dims": [], "filters": ["time_range"],
+     "note": "显式月份字面量过滤"},
+    {"q": "2017-01的GMV按州", "expect": "in", "metric": "gmv", "dims": ["state"],
+     "filters": ["time_range"], "note": "时间过滤 + 维度组合"},
+    {"q": "各个品类的销售额", "expect": "in", "metric": "gmv", "dims": ["category"],
+     "note": "「销售额」口径词 → gmv"},
+    {"q": "每个州的成交额", "expect": "in", "metric": "gmv", "dims": ["state"],
+     "note": "「成交额」口径词 → gmv"},
+    {"q": "总营收是多少", "expect": "in", "metric": "gross_revenue", "dims": [],
+     "note": "含运费的营收口径"},
+    {"q": "每个州的总营收", "expect": "in", "metric": "gross_revenue", "dims": ["state"],
+     "note": "gross_revenue 支持 state"},
+    {"q": "每个品类的商品销售额", "expect": "in", "metric": "item_sales", "dims": ["category"],
+     "note": "「商品销售额」优先于泛词「销售额」"},
+    {"q": "商品金额是多少", "expect": "in", "metric": "item_sales", "dims": [],
+     "note": "「商品金额」口径词"},
+    {"q": "运费总额", "expect": "in", "metric": "freight_cost", "dims": [],
+     "note": "「运费总额」优先于泛词「运费」"},
+    {"q": "每个州的平均运费", "expect": "in", "metric": "avg_freight", "dims": ["state"],
+     "note": "avg_freight 支持 state"},
+    # 规模类·订单
+    {"q": "客单价是多少", "expect": "in", "metric": "aov", "dims": [],
+     "note": "aov 无维度"},
+    {"q": "每个州的客单价", "expect": "in", "metric": "aov", "dims": ["state"],
+     "note": "aov 支持 state"},
     {"q": "订单数是多少", "expect": "in", "metric": "order_count", "dims": [],
      "note": "order_count 无维度"},
     {"q": "每个品类的订单数", "expect": "in", "metric": "order_count", "dims": ["category"],
      "note": "order_count 支持 category"},
-    {"q": "客单价是多少", "expect": "in", "metric": "aov", "dims": [],
-     "note": "aov 无维度"},
+    {"q": "每个州的订单量", "expect": "in", "metric": "order_count", "dims": ["state"],
+     "note": "「订单量」口径词 + state"},
+    {"q": "每个订单状态的订单量", "expect": "in", "metric": "order_count", "dims": ["status"],
+     "note": "order_count 支持 status"},
+    {"q": "2018-07的订单数", "expect": "in", "metric": "order_count", "dims": [],
+     "filters": ["time_range"], "note": "时间过滤 + 计数口径"},
+    {"q": "每个州的已支付订单数", "expect": "in", "metric": "paid_order_count", "dims": ["state"],
+     "note": "「已支付订单」口径词"},
+    {"q": "取消订单数", "expect": "in", "metric": "canceled_order_count", "dims": [],
+     "note": "「取消订单数」长词优先于「订单数」"},
+    {"q": "每个品类的商品件数", "expect": "in", "metric": "item_count", "dims": ["category"],
+     "note": "item_count 支持 category"},
+    # 客户 / 商品 / 卖家类
+    {"q": "下单客户数", "expect": "in", "metric": "customer_count", "dims": [],
+     "note": "「下单客户」口径词"},
+    {"q": "每个订单状态的下单客户数", "expect": "in", "metric": "customer_count", "dims": ["status"],
+     "note": "customer_count 支持 status"},
+    {"q": "每个州的独立买家数", "expect": "in", "metric": "unique_customer_count", "dims": ["state"],
+     "note": "「独立买家」长词优先于「买家数」"},
+    {"q": "每个品类的每单件数", "expect": "in", "metric": "items_per_order", "dims": ["category"],
+     "note": "「每单件数」长词优先于「件数」"},
+    {"q": "在售商品数", "expect": "in", "metric": "product_count", "dims": [],
+     "note": "「在售商品」口径词"},
+    {"q": "每个订单状态的卖家数", "expect": "in", "metric": "seller_count", "dims": ["status"],
+     "note": "seller_count 支持 status"},
+    # 风险 / 履约 / 满意度类
     {"q": "每个州的取消率", "expect": "in", "metric": "cancellation_rate", "dims": ["state"],
      "note": "取消率 支持 state"},
+    {"q": "每个订单状态的取消率", "expect": "in", "metric": "cancellation_rate", "dims": ["status"],
+     "note": "取消率 支持 status"},
+    {"q": "每个州的超时送达率", "expect": "in", "metric": "late_delivery_rate", "dims": ["state"],
+     "note": "late_delivery_rate 支持 state"},
+    {"q": "准时送达率", "expect": "in", "metric": "on_time_delivery_rate", "dims": [],
+     "note": "「准时」口径词"},
+    {"q": "平均履约天数", "expect": "in", "metric": "avg_delivery_days", "dims": [],
+     "note": "「履约天数」口径词"},
     {"q": "平均评分", "expect": "in", "metric": "avg_review", "dims": [],
      "note": "avg_review 无维度"},
+    {"q": "每个品类的平均评分", "expect": "in", "metric": "avg_review", "dims": ["category"],
+     "note": "avg_review 支持 category（派生表预聚合口径）"},
+    {"q": "好评率", "expect": "in", "metric": "positive_review_rate", "dims": [],
+     "note": "「好评率」长词优先于「好评」"},
+    {"q": "每个州的差评率", "expect": "in", "metric": "negative_review_rate", "dims": ["state"],
+     "note": "「差评率」口径词"},
+    {"q": "每个品类的评价数", "expect": "in", "metric": "review_count", "dims": ["category"],
+     "note": "review_count 支持 category"},
+    # 派生指标（由 compiler 编译期展开）
+    {"q": "运费占比", "expect": "in", "metric": "ratio@freight_cost/gmv", "dims": [],
+     "note": "派生指标 ratio：运费成本压力"},
+    {"q": "件单价", "expect": "in", "metric": "ratio@gmv/item_count", "dims": [],
+     "note": "派生指标 ratio：件单价"},
+    {"q": "每个品类的取消订单占比", "expect": "in", "metric": "share@canceled_order_count",
+     "dims": ["category"], "note": "派生指标 share：取消订单占比（需分组维度）"},
 
     # ---- 口径外：指标-维度组合不受支持（必须拒绝，而不是硬生成）----
     {"q": "客单价按品类", "expect": "reject", "metric": "aov", "dims": ["category"],
      "note": "aov.support_dims 只有 dt/state，不含 category"},
     {"q": "超时送达率按品类", "expect": "reject", "metric": "late_delivery_rate",
      "dims": ["category"], "note": "late_delivery_rate 不支持 category"},
+    {"q": "取消率按品类", "expect": "reject", "metric": "cancellation_rate",
+     "dims": ["category"], "note": "cancellation_rate 不支持 category"},
+    {"q": "平均评分按订单状态", "expect": "reject", "metric": "avg_review",
+     "dims": ["status"], "note": "avg_review 不支持 status"},
+    {"q": "独立买家数按品类", "expect": "reject", "metric": "unique_customer_count",
+     "dims": ["category"], "note": "unique_customer_count 不支持 category"},
+    {"q": "每单件数按订单状态", "expect": "reject", "metric": "items_per_order",
+     "dims": ["status"], "note": "items_per_order 不支持 status"},
+
+    # ---- 口径外：并列多指标 / 未消费的否定·比较句式（必须拒绝，不返回半个/翻转的答案）----
+    {"q": "GMV和订单数分别是多少", "expect": "reject",
+     "note": "并列多指标：一次只编译一个口径"},
+    {"q": "GMV大于1000", "expect": "reject",
+     "note": "数值比较句式未被表达成过滤条件 → 拒绝"},
+    {"q": "不含运费的GMV", "expect": "reject",
+     "note": "否定/排除语义未被表达 → 拒绝"},
 
     # ---- 口径外：无对应指标（必须拒绝并给可读提示）----
     {"q": "每个客服的响应时长是多少", "expect": "reject", "note": "配置里没有这类指标"},
     {"q": "今天天气怎么样", "expect": "reject", "note": "完全无关问题"},
-
-    # ---- 时间过滤（真实 Olist 窗口 2016-09~2018-10，须用窗口内月份）----
-    {"q": "2018-08的GMV", "expect": "in", "metric": "gmv", "dims": [], "filters": ["time_range"],
-     "note": "时间范围过滤（显式月份字面量）"},
+    {"q": "公司的市值是多少", "expect": "reject", "note": "配置里没有这类指标"},
 ]
 
 
@@ -166,7 +256,8 @@ def main() -> int:
     print("\n[7] 公式防篡改（verify_formula，结构绑定）")
     gmv_expr = formula_of(cfg, "gmv")
     # 校验方式已从"表达式子串包含"升级为"结果列结构绑定"：口径列（AS <key>）必须与
-    # 配置表达式逐字等价。因此下面 5 条篡改（含此前拦不住的"改系数"与"诱饵列"）都应被拦。
+    # 配置表达式逐字等价。因此下面 12 条（含此前拦不住的"改系数"与"诱饵列"）中，
+    # 所有篡改形态都应被拦、"原样/空白差异"两条应通过。
     guard_cases = [
         (f"SELECT {gmv_expr} AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
          False, "原样使用配置公式 → 应通过"),
@@ -177,6 +268,21 @@ def main() -> int:
          True, "诱饵列 + 口径列被改 → 应拦截"),
         ("SELECT COUNT(*) AS gmv FROM orders", True, "换成完全不同的口径 → 应拦截"),
         ("SELECT 1 AS gmv FROM orders WHERE 1=0", True, "空壳 SQL（公式被删）→ 应拦截"),
+        ("SELECT SUM(oi.price) * 1.0 AS gmv FROM orders o JOIN order_items oi "
+         "ON o.order_id=oi.order_id", True, "口径列被 *1.0 包装 → 应拦截"),
+        ("SELECT ROUND(SUM(oi.price), 2) AS gmv FROM orders o JOIN order_items oi "
+         "ON o.order_id=oi.order_id", True, "口径列被函数包装(ROUND) → 应拦截"),
+        ("SELECT SUM(oi.price) FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+         True, "口径列无别名（无法确认是 gmv 列）→ 应拦截"),
+        ("SELECT SUM(oi.price) AS gmvv FROM orders o JOIN order_items oi "
+         "ON o.order_id=oi.order_id", True, "别名写错（非 gmv）→ 应拦截"),
+        ("SELECT 'SUM(oi.price)' AS gmv, SUM(oi.price)*0.01 AS real_gmv "
+         "FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+         True, "把公式塞进字符串字面量当口径列 → 应拦截"),
+        ("SELECT 1 AS gmv FROM orders o JOIN order_items oi ON o.order_id=oi.order_id "
+         "WHERE oi.price > 0", True, "公式只出现在过滤条件里 → 应拦截"),
+        ("SELECT  SUM( oi.price )  AS gmv FROM orders o JOIN order_items oi "
+         "ON o.order_id=oi.order_id", False, "合法公式（空白差异，词法等价）→ 应通过"),
     ]
     n_guard = n_guard_ok = 0
     guard_details = []
@@ -205,6 +311,21 @@ def main() -> int:
          "别名改写敏感列"),
         ("SELECT customer_city FROM customers", "analyst", False, "允许列不应被拦"),
         ("SELECT customer_zip_code_prefix FROM customers", "admin", False, "admin 全放行"),
+        ("SELECT * FROM customers", "analyst", True, "通配符投影 → 无法逐列核对，拒绝"),
+        ("SELECT c.* FROM customers c", "analyst", True, "限定通配符投影 → 拒绝"),
+        ("SELECT customer_id, customer_city FROM customers", "analyst", False,
+         "多个允许列组合不应被拦"),
+        ("SELECT customer_unique_id FROM customers", "analyst", False,
+         "customer_unique_id 在允许列表中"),
+        ("SELECT c.customer_state FROM customers c", "analyst", False, "州列在允许列表中"),
+        ("SELECT o.order_id, oi.price FROM orders o JOIN order_items oi "
+         "ON o.order_id=oi.order_id", "analyst", False,
+         "orders/order_items 无列限制"),
+        ("SELECT p.product_category_name FROM products p", "analyst", False, "products 允许"),
+        ("SELECT r.review_score FROM reviews r", "analyst", False, "reviews 允许"),
+        ("SELECT oi.seller_id FROM orders o JOIN order_items oi ON o.order_id=oi.order_id",
+         "seller", False, "seller 角色允许 order_items"),
+        ("SELECT * FROM customers", "seller", True, "seller 受列限制，通配符拒绝"),
     ]
     n_perm = n_perm_ok = 0
     perm_details = []
@@ -226,6 +347,22 @@ def main() -> int:
         ("SELECT customer_zip_code_prefix FROM customers",
          ["customer_zip_code_prefix"], "原列名"),
         ("SELECT customer_zip_code_prefix AS zip FROM customers", ["zip"], "AS 别名"),
+        ("SELECT c.customer_zip_code_prefix FROM customers c",
+         ["customer_zip_code_prefix"], "限定列名"),
+        ("SELECT customer_zip_code_prefix AS customer_city FROM customers",
+         ["customer_city"], "别名伪装成非敏感名（须按来源掩码）"),
+        ("SELECT DISTINCT customer_zip_code_prefix FROM customers",
+         ["customer_zip_code_prefix"], "DISTINCT 敏感列"),
+        ("SELECT customer_zip_code_prefix, customer_id FROM customers",
+         ["customer_zip_code_prefix", "customer_id"], "敏感列在前 + 普通列"),
+        ("SELECT c.customer_zip_code_prefix AS z FROM customers c WHERE c.customer_state='SP'",
+         ["z"], "别名 + WHERE 过滤"),
+        ("SELECT customer_zip_code_prefix FROM customers LIMIT 5",
+         ["customer_zip_code_prefix"], "带 LIMIT"),
+        ("SELECT c.customer_zip_code_prefix FROM orders o JOIN customers c "
+         "ON o.customer_id=c.customer_id", ["customer_zip_code_prefix"], "JOIN 形态"),
+        ("SELECT customer_zip_code_prefix FROM customers WHERE customer_zip_code_prefix IS NOT NULL",
+         ["customer_zip_code_prefix"], "WHERE 引用敏感列"),
     ]
     n_mask = n_mask_ok = 0
     mask_details = []

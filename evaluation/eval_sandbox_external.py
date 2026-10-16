@@ -17,6 +17,13 @@
 不是官方语料文件本身。要换成 sqlmap / PayloadsAllTheThings 的原始语料，在有网机器上跑：
     python tools/fetch_external_corpus.py --source payloadsallthethings
 再用 `--corpus data/external/<file>` 复跑（来源 URL 与 sha256 会记进报告）。
+（本机无外网时该脚本会如实失败；此时仍用自带语料，**不虚构"已跑官方语料"**。）
+
+**跨方言**：语料含 Oracle / MSSQL / PostgreSQL / MySQL 专属危险 payload 及编码/篡改绕过类别。
+执行层当前是只读 SQLite，方言 payload 往往"函数不存在"而执行失败，但**策略层 `_sanitize`
+是方言无关的**——本语料断言的正是策略层拦截（`policy_block`），故"换库不失效"可被证明。
+本次扩充还据此发现并补上了旧负面清单缺口：`pg_read_binary_file` / `lo_import` / `pg_stat_file`
+（旧清单只有 `pg_read_file`，词边界匹配不到带中间词的同族函数）。
 
 跑法：
     python evaluation/eval_sandbox_external.py                    # 用自带语料（离线、可进 CI）
@@ -148,8 +155,15 @@ def main() -> int:
         "corpus": str(corpus_path),
         "corpus_sha256": _file_sha256(corpus_path),
         "corpus_size": len(corpus),
-        "corpus_note": ("按 OWASP WSTG / CWE-89 / sqlmap tamper 类别 / 各库官方危险功能文档"
-                        "构造（非官方语料文件）；可用 tools/fetch_external_corpus.py 换官方语料"),
+        "corpus_note": ("按 OWASP WSTG / CWE-89 / sqlmap tamper 类别 / 各库（Oracle/MSSQL/PG/MySQL）"
+                        "官方危险功能文档构造（非官方语料文件）；含跨方言类别，可用 "
+                        "tools/fetch_external_corpus.py 换官方语料"),
+        "cross_dialect_note": ("跨方言说明：本沙箱的**执行层**当前是只读 SQLite（mode=ro），"
+                               "因此方言专属 payload（如 UTL_HTTP、pg_read_file、xp_cmdshell）在 SQLite 上"
+                               "往往只是'函数不存在'而执行失败；但**策略层 `_sanitize` 是方言无关的**，"
+                               "同一套负面关键字/危险函数清单同样作用于 MySQL/PostgreSQL 连接器"
+                               "（见 sqlpa.sandbox.dialects）。本语料对每个方言 payload 断言的都是"
+                               "**策略层拦截**（policy_block），而非执行层报错——这正是'换库时安全策略不失效'的证据。"),
         "db": repo_relative(db), "db_kind": kind,
         "dangerous_total": len(dangerous), "dangerous_blocked": len(blocked_dangerous),
         "dangerous_block_rate": round(len(blocked_dangerous) / len(dangerous), 4) if dangerous else None,

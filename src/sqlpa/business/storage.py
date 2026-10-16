@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "app.db"
 
@@ -188,6 +189,38 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(username);
+
+-- LLM 调用**明细**（append-only）：每次真实 LLM 调用一行。
+-- 审计表只记"每次查询的合计"，看不到"单次调用有多慢、哪个模型贵"；而延迟分位
+-- （p50/p95）必须靠明细行才能算出来。只追加、不更新，与审计同级的可观测性资产。
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        TEXT NOT NULL,
+    model             TEXT,
+    prompt_tokens     INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens      INTEGER DEFAULT 0,
+    cost              REAL DEFAULT 0,
+    latency_ms        REAL DEFAULT 0,
+    ok                INTEGER DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_time ON llm_calls(created_at);
+
+-- 编排 trace（append-only）：把一次多 Agent 分析的**完整事件流水**结构化落库，
+-- 使"过程可看"升级为"过程可审计、可重放"。此前事件只经 SSE 推给前端，刷新即丢，
+-- 事后无法复现"当时每个 Agent 说了什么"。
+CREATE TABLE IF NOT EXISTS analysis_traces (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_id  TEXT,
+    username     TEXT,
+    question     TEXT,
+    events_json  TEXT NOT NULL,
+    final_json   TEXT,
+    ok           INTEGER,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_traces_aid ON analysis_traces(analysis_id);
+CREATE INDEX IF NOT EXISTS idx_traces_time ON analysis_traces(created_at);
 """
 
 
@@ -212,7 +245,73 @@ def _busy_timeout_ms() -> int:
     return v if v >= 0 else 5000
 
 
+# ---------------- 存储后端（可配置 / 如实标注） ----------------
+# 目前**只有 SQLite 一种实现**（WAL + busy_timeout + 共享同一 DB 文件即多 worker 就绪）。
+# 与其摆一层跑不通的 Postgres/Redis "假抽象"，不如把"当前只支持 SQLite"显式化：
+# 配置成未实现的后端时**立即报错**，而不是静默按 SQLite 跑（静默会掩盖部署错误）。
+_SUPPORTED_BACKENDS: Tuple[str, ...] = ("sqlite",)
+
+
+def resolve_backend(env: Optional[str] = None) -> str:
+    """解析存储后端：`SQLPA_STORAGE_BACKEND`（默认 sqlite）。
+
+    未实现的后端 → 抛 ValueError（fail fast）。多 worker / "多租户"共享存储的正确姿势是
+    **让所有进程指向同一个 SQLite 文件**（WAL + busy_timeout 已就绪），而不是换后端。
+    """
+    v = (env if env is not None else os.environ.get("SQLPA_STORAGE_BACKEND") or "").strip().lower()
+    if not v:
+        return "sqlite"
+    if v not in _SUPPORTED_BACKENDS:
+        raise ValueError(
+            f"SQLPA_STORAGE_BACKEND={v!r} 尚未实现；当前仅支持 {list(_SUPPORTED_BACKENDS)}。"
+            "多 worker 请共享同一 SQLite 文件（WAL 已启用），本仓库不提供 Postgres 实现。")
+    return v
+
+
+def backend_info() -> dict:
+    """当前存储后端**部署事实**（供运维/治理面板核对，不猜测）。"""
+    info = {
+        "backend": resolve_backend(),
+        "supported_backends": list(_SUPPORTED_BACKENDS),
+        "db_path": str(_DB_PATH),
+        "journal_mode_requested": _journal_mode(),
+        "busy_timeout_ms": _busy_timeout_ms(),
+        "multiworker_ready": True,
+        "multiworker_note": "多 worker 需共享同一 SQLite 文件；跨机部署不支持（未实现 Postgres）。",
+    }
+    try:
+        with _conn() as c:
+            info["journal_mode"] = str(c.execute("PRAGMA journal_mode").fetchone()[0]).upper()
+    except sqlite3.Error as e:  # noqa: BLE001 —— 探测失败也要给出可读信息
+        info["journal_mode"] = "unknown"
+        info["error"] = str(e)[:120]
+    info["wal"] = info.get("journal_mode") == "WAL"
+    return info
+
+
+_INIT_LOCK = threading.Lock()
+_INITIALIZED: set = set()
+
+
+def _ensure_schema(conn: sqlite3.Connection, db_key: str) -> None:
+    """建表 + 迁移**每进程每库只做一次**。
+
+    此前**每条连接**都会跑一遍 `executescript(_SCHEMA)` + 11 条 `PRAGMA table_info`：一个
+    请求会开好几条连接（会话/限速/审计/记忆各一），等于每请求重复建表 —— 既是纯浪费，
+    也在并发时反复抢写锁。改为进程内一次性初始化（换个库路径仍会重新初始化）。
+    """
+    if db_key in _INITIALIZED:
+        return
+    with _INIT_LOCK:
+        if db_key in _INITIALIZED:
+            return
+        conn.executescript(_SCHEMA)
+        _migrate(conn)
+        _INITIALIZED.add(db_key)
+
+
 def _conn() -> sqlite3.Connection:
+    resolve_backend()          # fail fast：配置了未实现的后端就不该继续按 SQLite 跑
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(_DB_PATH), timeout=_busy_timeout_ms() / 1000.0)
     conn.row_factory = sqlite3.Row
@@ -226,8 +325,7 @@ def _conn() -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL")
     except sqlite3.Error:
         pass
-    conn.executescript(_SCHEMA)
-    _migrate(conn)
+    _ensure_schema(conn, str(_DB_PATH))
     return conn
 
 
@@ -429,12 +527,52 @@ def session_load(key: str) -> Optional[dict]:
     return v if isinstance(v, dict) else None
 
 
+def _session_max_bytes() -> int:
+    """单条会话记忆的字节上限：`SQLPA_SESSION_MEMORY_MAX_BYTES`（默认 65536）。"""
+    try:
+        v = int(os.environ.get("SQLPA_SESSION_MEMORY_MAX_BYTES") or 65536)
+    except ValueError:
+        v = 65536
+    return v if v > 0 else 65536
+
+
+def _json_size(obj) -> int:
+    return len(json.dumps(obj if obj is not None else {}, ensure_ascii=False))
+
+
+def compact_session_payload(data: Optional[dict], max_bytes: Optional[int] = None) -> dict:
+    """把会话记忆压到字节上限内 —— 长会话不得让 `session_memory` 单行无限膨胀。
+
+    压缩是**确定性**的（不调 LLM），按"先丢最不关键"的顺序：
+      1) 历史类列表（drill_history/history）只留最近 1 条；
+      2) 丢弃辅助字段（att_change_pct / dims）；
+      3) 保底只留续钻最小集（metric / time_spec）；连最小集都超限 → 空记忆。
+    未超限时**原样返回**、不做任何改写（避免无谓变更与版本抖动）。
+    """
+    cap = _session_max_bytes() if max_bytes is None else int(max_bytes)
+    out = dict(data or {})
+    if _json_size(out) <= cap:
+        return out
+    for k in ("drill_history", "history"):
+        if isinstance(out.get(k), list) and len(out[k]) > 1:
+            out[k] = out[k][-1:]
+    if _json_size(out) <= cap:
+        return out
+    for k in ("att_change_pct", "dims"):
+        out.pop(k, None)
+        if _json_size(out) <= cap:
+            return out
+    minimal = {k: out[k] for k in ("metric", "time_spec") if k in out}
+    return minimal if _json_size(minimal) <= cap else {}
+
+
 def session_save(key: str, data: dict, ttl_seconds: float = 3600.0) -> None:
-    """写回会话记忆（并按 TTL 顺带清理老记录，避免这张表无限增长）。"""
+    """写回会话记忆（先压到字节上限，再按 TTL 顺带清理老记录，避免这张表无限增长）。"""
     now = time.time()
+    payload = compact_session_payload(data)
     with _conn() as c:
         c.execute("INSERT OR REPLACE INTO session_memory(key,data_json,updated_at) VALUES(?,?,?)",
-                  (key, json.dumps(data or {}, ensure_ascii=False), now))
+                  (key, json.dumps(payload, ensure_ascii=False), now))
         c.execute("DELETE FROM session_memory WHERE updated_at < ?",
                   (now - max(0.0, float(ttl_seconds)),))
 
@@ -835,3 +973,121 @@ def delete_favorite(fav_id: int, username: str) -> bool:
     with _conn() as c:
         cur = c.execute("DELETE FROM favorites WHERE id=? AND username=?", (fav_id, username))
         return cur.rowcount > 0
+
+
+# ================= LLM 调用明细（成本 / 延迟面板数据源） =================
+def insert_llm_call(rec: dict) -> None:
+    """追加一条 LLM 调用明细（一次调用一行）。"""
+    rec.setdefault("created_at", _now())
+    with _conn() as c:
+        c.execute("""INSERT INTO llm_calls
+            (created_at,model,prompt_tokens,completion_tokens,total_tokens,cost,latency_ms,ok)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (rec["created_at"], rec.get("model", ""),
+             int(rec.get("prompt_tokens", 0) or 0), int(rec.get("completion_tokens", 0) or 0),
+             int(rec.get("total_tokens", 0) or 0), float(rec.get("cost", 0.0) or 0.0),
+             float(rec.get("latency_ms", 0.0) or 0.0), int(rec.get("ok", 1) or 0)))
+
+
+def _percentile(sorted_vals: List[float], q: float) -> float:
+    """线性插值分位（numpy 默认口径）：p95 这类指标必须确定性、可复现。"""
+    if not sorted_vals:
+        return 0.0
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    idx = q * (len(sorted_vals) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = idx - lo
+    return float(sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac)
+
+
+def llm_usage_summary(days: int = 7) -> dict:
+    """近 `days` 天 LLM 成本/延迟汇总：调用数、prompt/completion token、成本、p50/p95。
+
+    单次调用延迟分位是**明细行**才能算出的量；按模型分组便于回答"哪个模型贵/慢"。
+    """
+    since = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(time.time() - max(1, int(days)) * 86400))
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT model,prompt_tokens,completion_tokens,total_tokens,cost,latency_ms,ok "
+            "FROM llm_calls WHERE created_at >= ?", (since,)).fetchall()]
+    lat = sorted(float(r.get("latency_ms") or 0.0) for r in rows)
+    by_model: dict = {}
+    for r in rows:
+        m = r.get("model") or "(unknown)"
+        b = by_model.setdefault(m, {"calls": 0, "total_tokens": 0, "cost": 0.0, "latencies": []})
+        b["calls"] += 1
+        b["total_tokens"] += int(r.get("total_tokens") or 0)
+        b["cost"] += float(r.get("cost") or 0.0)
+        b["latencies"].append(float(r.get("latency_ms") or 0.0))
+    for m, b in by_model.items():
+        lats = sorted(b.pop("latencies"))
+        b["cost"] = round(b["cost"], 6)
+        b["p50_ms"] = round(_percentile(lats, 0.5), 1)
+        b["p95_ms"] = round(_percentile(lats, 0.95), 1)
+    return {
+        "window_days": max(1, int(days)),
+        "calls": len(rows),
+        "failed_calls": sum(1 for r in rows if not int(r.get("ok", 1) or 0)),
+        "prompt_tokens": sum(int(r.get("prompt_tokens") or 0) for r in rows),
+        "completion_tokens": sum(int(r.get("completion_tokens") or 0) for r in rows),
+        "total_tokens": sum(int(r.get("total_tokens") or 0) for r in rows),
+        "cost": round(sum(float(r.get("cost") or 0.0) for r in rows), 6),
+        "latency_ms": {"n": len(lat), "p50": round(_percentile(lat, 0.5), 1),
+                       "p95": round(_percentile(lat, 0.95), 1),
+                       "max": round(lat[-1], 1) if lat else 0.0},
+        "by_model": by_model,
+    }
+
+
+# ================= 编排 trace（可审计 / 可重放） =================
+def insert_trace(analysis_id: str, question: str, events: list, final: Optional[dict] = None,
+                 username: str = "") -> None:
+    """落一条分析 trace：完整事件流水 + 最终载荷（JSON 字符串存 TEXT）。"""
+    ok = None
+    if isinstance(final, dict):
+        ok = int(bool(final.get("ok")))
+    with _conn() as c:
+        c.execute("""INSERT INTO analysis_traces
+            (analysis_id,username,question,events_json,final_json,ok,created_at)
+            VALUES(?,?,?,?,?,?,?)""",
+            (analysis_id, username, question,
+             json.dumps(events, ensure_ascii=False),
+             json.dumps(final, ensure_ascii=False) if final is not None else None,
+             ok, _now()))
+
+
+def _decode_trace(row) -> dict:
+    rec = dict(row)
+    try:
+        rec["events"] = json.loads(rec.pop("events_json") or "[]")
+    except Exception:  # noqa: BLE001
+        rec["events"] = []
+    try:
+        rec["final"] = json.loads(rec.pop("final_json") or "null")
+    except Exception:  # noqa: BLE001
+        rec["final"] = None
+    return rec
+
+
+def get_trace(analysis_id: str) -> Optional[dict]:
+    """按 analysis_id 取**最近一次** trace（含可重放的事件流水）。"""
+    with _conn() as c:
+        row = c.execute("SELECT * FROM analysis_traces WHERE analysis_id=? "
+                        "ORDER BY id DESC LIMIT 1", (analysis_id,)).fetchone()
+    return _decode_trace(row) if row else None
+
+
+def list_traces(limit: int = 20, username: Optional[str] = None) -> list:
+    """最近 N 条 trace 的**摘要**（不含事件流水，避免响应过大）。"""
+    sql = "SELECT id,analysis_id,username,question,ok,created_at FROM analysis_traces"
+    args: list = []
+    if username:
+        sql += " WHERE username=?"
+        args.append(username)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(max(1, int(limit)))
+    with _conn() as c:
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
