@@ -40,19 +40,3 @@ class LLMProvider(ABC):
         一旦中途切换，"绝对指标"就会变成多个模型的混合结果且无人察觉。
         """
         return ""
-
-
-def build_schema_text(schema: Dict) -> str:
-    """把 schema 结构转成分层提示词文本，供 LLM 使用。"""
-    lines = []
-    for t in schema.get("tables", []):
-        cols = []
-        for c in t.get("columns", []):
-            ref = ""
-            if c.get("references_table"):
-                ref = f" -> {c['references_table']}.{c.get('references_col')}"
-            pk = " PK" if c.get("primary_key") else ""
-            cols.append(f"  - {c['name']} {c.get('dtype', 'TEXT')}{pk}{ref}")
-        lines.append(f"表 {t['name']}:")
-        lines.extend(cols)
-    return "\n".join(lines)

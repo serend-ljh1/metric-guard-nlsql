@@ -87,7 +87,7 @@ def main() -> int:
     args = ap.parse_args()
 
     from sqlpa.business.metric_config import load_config
-    from sqlpa.business.metric_guard import build_constraint, formula_of, verify_formula
+    from sqlpa.business.metric_guard import formula_of, verify_formula
     from sqlpa.business.permissions import check_access, mask_result
     from sqlpa.business.service import answer
     from sqlpa.business import storage
@@ -199,7 +199,7 @@ def main() -> int:
     # 解析不到归属表而"通过"，那是在测一个不存在的场景。
     perm_cases = [
         ("SELECT customer_zip_code_prefix FROM customers", "analyst", True,
-         "非限定敏感列（历史绕过点）"),
+         "非限定敏感列"),
         ("SELECT c.customer_zip_code_prefix FROM customers c", "analyst", True, "限定敏感列"),
         ("SELECT customer_zip_code_prefix AS zip FROM customers", "analyst", True,
          "别名改写敏感列"),

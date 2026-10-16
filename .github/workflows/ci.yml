@@ -14,7 +14,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          # 与本地开发环境对齐（本地 .venv 为 Python 3.12），避免 3.11/3.12 行为漂移。
+          # 与本地开发环境对齐（本地 .venv 为 Python 3.12）。
           python-version: "3.12"
           cache: pip
 
@@ -34,7 +34,7 @@ jobs:
         # 单一入口 `run_all.py` 一次跑完全部 7 条离线确定性评测线，并产出总报告 overall.json：
         #   1 business / 2 product / 3 decisions / 4 attribution / 5 alert_quality /
         #   6 sandbox_external / 7 external_bank（Spider dev world_1，用仓库内样本语料）
-        # 全部无需 API Key、可离线复现；此前的逐条 eval 步骤已收敛到这一步，防止各线脚本被改动后漏跑。
+        # 全部无需 API Key、可离线复现。
         # 未加 --llm：确定性引擎 vs 纯 LLM 的对照线需 Key，CI 中不跑（其状态会显式写入总报告）。
         run: python evaluation/run_all.py --report-dir /tmp/eval_reports
 

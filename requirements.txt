@@ -2,8 +2,7 @@
 # 无
 
 # ---- 前端 ----
-# 前端为 Vue3 + ECharts（见 web/，依赖在 web/package.json）——
-# 此处不需要任何 python 前端依赖。（Streamlit / Altair 已随该前端一并移除。）
+# 前端为 Vue3 + ECharts（见 web/，依赖在 web/package.json）——此处不需要任何 python 前端依赖。
 
 # ---- API 后端 ----
 fastapi

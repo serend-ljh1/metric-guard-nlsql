@@ -4,7 +4,7 @@ sqlpa.sandbox.sql_executor
 确定性、只读、加固的 SQLite 沙箱执行器。
 
 设计目标（对齐"确定性代码 vs LLM 推理"解耦原则）：
-  - LLM 只负责生成 SQL 文本；本模块用纯净代码保证"安全 + 可执行 + 可度量"。
+  - LLM 不参与 SQL 生成（SQL 由编译器从配置确定性编译）；本模块用纯净代码保证"安全 + 可执行 + 可度量"。
   - 只读隔离：打开 SQLite 为只读连接，物理上杜绝任何写库。
   - 语句级拦截：拒绝 DDL / 改写 / 高危语句、多语句、危险 PRAGMA / ATTACH。
   - 资源护栏：强制查询超时、结果行数上限、禁止无 LIMIT 的无限扫表。
@@ -17,7 +17,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 
 class SqlSecurityError(Exception):

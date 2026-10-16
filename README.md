@@ -26,11 +26,11 @@
   HITL 闭环（带负责人与 AI 归因草稿）、**报告/CSV 导出**、订阅告警。
 
 > **实现状态（诚实声明）**：语义层优先已落地（`path=semantic`）并在**外部公开基准**上量化覆盖率；
-> `langgraph` 为真实依赖（非回退路径）；**自由 SQL 生成引擎（Writer↔Critic 评审 + 自愈重试）已整体删除**——
-> 它的失败模式（口径漂移、无法审计、错误伪装成合理数字）不可接受，现在口径外一律明确拒绝；
+> `langgraph` 为真实依赖（非回退路径）；本项目**不做自由 SQL 生成**——
+> 其失败模式（口径漂移、无法审计、错误伪装成合理数字）不可接受，因此口径外一律明确拒绝；
 > Chroma 长时记忆 / Checkpoint 未实现。
-> 公式防篡改已从"子串包含"升级为**结果列结构绑定**（改系数/诱饵列/注释藏表达式均被拦截）。
-> 未实现项不在此虚构为已实现。**逐轮修复记录（含回归测试）见 [`docs/changelog.md`](docs/changelog.md)。**
+> 公式防篡改采用**结果列结构绑定**（改系数/诱饵列/注释藏表达式均被拦截）。
+> 未实现项不在此虚构为已实现。
 
 ---
 
@@ -77,13 +77,11 @@
 > - **Spider dev `world_1`（第三方问题 + 第三方 gold SQL，N=120）**：覆盖率 **30/120 = 25.0%**
 >   （语义层目标形态"单聚合"上 **28/48 = 58.3%**）、**覆盖内执行正确率 30/30 = 100%**、**敢答且答错 0 条**。
 >   换域只改 1 个 YAML（`config/semantic_world.yaml`）、**0 行业务代码**。
->   两轮评测各改动了系统：① 修掉 3 条真实错答（拼写差异导致过滤静默丢失、"shortest"最值漏网、
->   "above the average"条件被忽略）；② 扩展 `QuerySpec` 表达力（集合/比较/区间/HAVING/否定反连接，
->   **算子走配置白名单**）把覆盖率从 **17.5% 抬到 25.0%**（目标形态 43.8% → 58.3%），**错答仍为 0**。
+>   语义层表达力覆盖**集合 / 比较 / 区间 / HAVING / 否定反连接**，**算子只出配置白名单**（新表达式一律 fail-closed）。
 >   ⚠️ world_1 属 dev 集，建层时看过题面 → 25.0% 是**开发集覆盖率，不是泛化指标**；覆盖内正确率不受影响。详见
 >   [`evaluation/reports/external_bank_world_1.md`](evaluation/reports/external_bank_world_1.md)。
 > - **外部对抗语料（61 条）**：危险语料拦截 **48/48 = 100%**、库 sha256 与行数**一字未变**，
->   并首次度量**只读误杀率 1/13 = 7.7%**；该过程修掉 3 个真实漏洞（含"函数黑名单因大小写不匹配从未生效"）。
+>   另度量**只读误杀率 1/13 = 7.7%**（保守代价，已固定在测试里）。
 >   详见 [`evaluation/reports/sandbox_external.md`](evaluation/reports/sandbox_external.md)。
 
 ### 分析主角：六 Agent 协作编排（`src/sqlpa/analysis/orchestrator.py`）
@@ -160,12 +158,6 @@
 | 🔌 REST API | FastAPI：`/api/query` `/api/metrics` `/api/audit` `/api/datasources` `/api/auth/*` `/health`，Swagger 在 `/docs` |
 | 🎯 外部公开基准 | `evaluation/eval_external_bank.py`：第三方问题+gold SQL（Spider dev）判对错；覆盖率/覆盖内正确率/拒答归因三张表 |
 | 🛡️ 外部对抗语料 | `evaluation/eval_sandbox_external.py`：48 条破坏性 + 13 条只读语料，报拦截率/**误杀率**/库不变性 |
-
-> ⚠️ **与历史版本的差异**：早期 README 曾列出「登录认证 / 查询历史 / 收藏夹 / 指标中心 / 数据源管理」等
-> Streamlit 页面。随 `app.py`（Streamlit 前端）下线，前端改为 Vue3，现有**分析演示 / 治理复核看板 / 我的工作台**三个页签：
-> 其中**登录认证**（`/api/auth/*`）、**查询历史 / 收藏 / 反馈**（`/api/history`、`/api/favorites`、`/api/feedback`）、
-> **指标中心写接口**（`/api/metrics/*`，仅 admin）均已实现。**仅"指标中心可视化编辑页面"与"数据源注册/编辑界面"仍未提供**
-> （前者可走 API，后者为脚本/配置操作）。文档不再描述不存在的界面。
 
 > 📂 **目录结构**（含 `apiroutes/` 路由层、`src/sqlpa/` 模块、`tests/`、`evaluation/` 详解）
 > 见 [`docs/architecture.md`](docs/architecture.md)。
@@ -350,6 +342,4 @@ pytest tests -q --cov=src/sqlpa --cov=apiroutes   # 全量离线测试 + 覆盖�
 |---|---|
 | [`docs/evaluation.md`](docs/evaluation.md) | 评测方法学、7 条评测线口径说明与复现、产品指标、决策质量、EX/EM 口径 |
 | [`docs/architecture.md`](docs/architecture.md) | 目录结构、业务产品模式、安全底座状态机、数据源接入、演示场景、不做清单 |
-| [`docs/changelog.md`](docs/changelog.md) | 逐轮修复记录（含回归测试） |
 | [`docs/limitations.md`](docs/limitations.md) | 诚实说明：局限、边界与未实现项 |
-| [`docs/面试准备.md`](docs/面试准备.md) / [`docs/项目过程问题与解决.md`](docs/项目过程问题与解决.md) | 面试问答与问题排查记录 |

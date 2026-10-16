@@ -56,7 +56,7 @@ from apiroutes import query as _r_query
 from apiroutes import subscriptions as _r_subscriptions
 from apiroutes import workspace as _r_workspace
 
-app = FastAPI(title="多智能体 Text-to-SQL 智能取数 API", version="1.0.0")
+app = FastAPI(title="多 Agent 协作数据分析 API", version="1.0.0")
 # CORS：默认只放行本地演示来源（Vite dev 5173 / 容器 web 8080），生产用
 # SQLPA_CORS_ORIGINS="https://a.com,https://b.com" 覆盖。此前硬编码 allow_origins=["*"]，
 # 等于任何站点都能从浏览器直接打到取数/归因端点（配合 allow_credentials 还有凭据风险）。

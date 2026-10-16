@@ -1,7 +1,8 @@
 ﻿"""
 tools/download_data.py
 ======================
-下载/校验 Text-to-SQL 公开基准（Spider / BIRD），并确保目录结构能被 run_eval.py 读取。
+下载/校验 Text-to-SQL 公开基准（Spider / BIRD），并确保目录结构能被
+`evaluation/eval_external_bank.py --spider-root` 读取。
 
 ⚠️ 诚实说明（重要）：
   - 本仓库/这台机器 **无法直接访问 raw.githubusercontent 与 huggingface.co**（网络受限），
@@ -27,8 +28,7 @@ from pathlib import Path
 
 UA = {"User-Agent": "Mozilla/5.0"}
 
-# run_eval 期望的结构
-EXPECTED_DB = ("database", "database/")          # sqlite 库目录
+# 外部基准评测（eval_external_bank.py）期望的结构
 EXPECTED_JSON = ("dev.json", "test.json")        # 评测 split
 
 
@@ -61,7 +61,7 @@ def extract(zp: Path, out: Path) -> None:
 
 
 def verify_dir(root: Path, dataset: str) -> None:
-    print(f"\n== 校验 {dataset} 结构（run_eval 读取所需）==")
+    print(f"\n== 校验 {dataset} 结构（eval_external_bank.py 读取所需）==")
     db_root = root / "database"
     if db_root.exists():
         n_db = sum(1 for _ in db_root.glob("*"))
@@ -77,8 +77,8 @@ def verify_dir(root: Path, dataset: str) -> None:
         print(f"  [!!] 缺少评测 json（如 dev.json/test.json）；"
               f"Spider 的 dev/test 需单独下载放入 {root}")
 
-    print("\n  run_eval 将用: "
-          f"python run_eval.py --dataset {dataset} --db-root {root} --split dev [--ablation --limit 50]")
+    print("\n  外部基准评测将用: "
+          f"python evaluation/eval_external_bank.py --spider-root {root} --db_id <库名>")
 
 
 def main() -> int:

@@ -17,9 +17,9 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 _logger = logging.getLogger("sqlpa.audit")
 
@@ -125,10 +125,3 @@ def tail_audit(n: int = 50, path: str | Path | None = None) -> list:
         except json.JSONDecodeError:
             continue
     return out[-max(1, int(n)):]
-
-
-def dump_audit(path: str | Path | None = None) -> list:
-    p = Path(path or _DEFAULT_LOG)
-    if not p.exists():
-        return []
-    return [json.loads(line) for line in open(p, encoding="utf-8") if line.strip()]

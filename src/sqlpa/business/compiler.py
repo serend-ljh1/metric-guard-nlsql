@@ -124,7 +124,7 @@ def _resolve_filter_op(cfg: BusinessConfig, ftype: str, value) -> Tuple[str, str
     """
     ops = (getattr(cfg, "filter_ops", None) or {}).get(ftype) or {}
     if not ops:
-        # 未声明算子白名单 → 退回历史语义：只允许等值。
+        # 未声明算子白名单 → 退回保守语义：只允许等值。
         # （不是"默认放行常用算子"：放行 != 会静默改变语义，而 `{op}` 模板也不存在。）
         ops = {"eq": "="}
     if isinstance(value, dict):
@@ -272,11 +272,6 @@ def parse_derived(metric_key: str) -> Optional[Dict]:
     if metric_key.startswith("share@"):
         return {"kind": "share", "base": metric_key[len("share@"):].strip()}
     return None
-
-
-def _tables_of(m: Metric) -> List[str]:
-    """（保留给外部调用的兼容别名）见 sqlgen.tables_of。"""
-    return tables_of(m)
 
 
 def _check_support(m: Metric, dim_keys: Sequence[str], filter_types: Sequence[str],

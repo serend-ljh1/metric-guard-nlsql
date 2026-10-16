@@ -145,13 +145,6 @@ def delete_datasource(ds_id: str) -> bool:
     return True
 
 
-def to_sandbox_spec(ds: Dict, sqlite_path) -> Dict:
-    """把数据源记录转成 make_sandbox 的规格。"""
-    if ds.get("kind") == "sqlite":
-        return {"kind": "sqlite", "path": str(sqlite_path)}
-    return {k: v for k, v in ds.items() if k not in ("id", "name", "builtin")}
-
-
 def display(ds: Dict) -> str:
     """界面展示用（密码掩码）。"""
     if ds.get("kind") == "sqlite":

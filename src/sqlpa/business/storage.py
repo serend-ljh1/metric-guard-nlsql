@@ -14,7 +14,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 _DB_PATH = Path(__file__).resolve().parents[3] / "data" / "app.db"
 
@@ -414,12 +414,6 @@ def delete_session(token: Optional[str]) -> bool:
         return c.execute("DELETE FROM sessions WHERE token=?", (token,)).rowcount > 0
 
 
-def purge_sessions() -> int:
-    """清理过期会话，返回删除条数。"""
-    with _conn() as c:
-        return c.execute("DELETE FROM sessions WHERE expires_at < ?", (time.time(),)).rowcount
-
-
 # ================= 会话记忆 / 限速（持久化） =================
 # 这两者此前都是**纯进程内**状态：重启即丢，多 worker 各持一份（下钻记忆分裂、限速形同虚设）。
 # 落到 SQLite 后：单 worker 重启可续、多 worker 共享同一 DB 文件时限速与记忆都一致。
@@ -443,11 +437,6 @@ def session_save(key: str, data: dict, ttl_seconds: float = 3600.0) -> None:
                   (key, json.dumps(data or {}, ensure_ascii=False), now))
         c.execute("DELETE FROM session_memory WHERE updated_at < ?",
                   (now - max(0.0, float(ttl_seconds)),))
-
-
-def session_delete(key: str) -> bool:
-    with _conn() as c:
-        return c.execute("DELETE FROM session_memory WHERE key=?", (key,)).rowcount > 0
 
 
 def rate_load(key: str) -> List[float]:
@@ -712,10 +701,6 @@ def list_hitl(status: str = "pending", limit: int = 50) -> list:
         except Exception:  # noqa: BLE001
             r["dims"] = []
     return rows
-
-
-def decide_hitl(record_id: str, status: str, decided_by: str = "") -> bool:
-    return hitl_set_status(record_id, status, actor=decided_by)
 
 
 def _hitl_rows_with_dims(rows) -> list:

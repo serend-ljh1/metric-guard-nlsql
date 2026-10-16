@@ -35,10 +35,6 @@ def _extract_schema(sb, db_path) -> Dict:
     return extract_from_sqlite(db_path).to_dict()
 
 
-def _dialect_hint(sb) -> str:
-    return getattr(getattr(sb, "connector", None), "prompt_hint", "") or ""
-
-
 def _infer_drill_path(question: str, history: List[Dict], extra: Dict) -> List[Dict]:
     """判断本次是否在"追问上一轮的主因"，并据此构造下钻路径。
 
@@ -172,9 +168,8 @@ def answer(question: str, cfg, sb, db_path, llm, role: str = "analyst",
                 "supervisor": sup}
 
     # ================= 口径内 → 语义层确定性编译（**主路径**）=================
-    # 架构说明（本轮反转）：命中语义层时，SQL 由 compiler.py 从配置**确定性编译**，
+    # 架构说明：命中语义层时，SQL 由 compiler.py 从配置**确定性编译**，
     # LLM 完全不在 SQL 生成路径上 —— 可审计、零口径漂移、零 token、毫秒级。
-    # 修复前：即便命中语义层也要让 LLM 生成 SQL（只是加个公式约束），既慢又可能被改坏。
     from sqlpa.business.compiler import compile_spec, QuerySpec, CompileError
     schema = _extract_schema(sb, db_path)
     db_id = schema.get("db_id", "olist")

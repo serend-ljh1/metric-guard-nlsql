@@ -6,9 +6,6 @@
 """
 from __future__ import annotations
 
-import json
-
-import pytest
 from fastapi.testclient import TestClient
 
 from sqlpa.analysis.orchestrator import _llm_usage_snapshot, _observability, run_analysis

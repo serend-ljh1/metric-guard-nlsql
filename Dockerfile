@@ -6,7 +6,6 @@
 # 说明：前端是 Vue3 + Vite（web/），由 web/Dockerfile 单独构建成 Nginx 镜像
 # （compose 里的 web 服务，对外 8080，并把 /api 反代到本服务）。
 # 本镜像只跑 API；开发期若要前端热更新，可在 web/ 下本地 `npm run dev`（5173 代理 8000）。
-# 历史上这里曾用 Streamlit（app.py），该前端已下线。
 FROM python:3.11-slim
 
 WORKDIR /app

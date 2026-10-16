@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent

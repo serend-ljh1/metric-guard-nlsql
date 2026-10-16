@@ -128,11 +128,6 @@ def data_asof() -> datetime.date:
     return _DATA_ASOF["date"] or datetime.date.today()
 
 
-def data_asof_source() -> str:
-    """基准日来源（写进报告/审计，让"这个相对时间落在哪一段"可复核）。"""
-    return str(_DATA_ASOF["source"] or "")
-
-
 def resolve_data_asof(db_path: str | Path, *,
                       table: str = "orders",
                       column: str = "order_purchase_timestamp") -> Optional[datetime.date]:

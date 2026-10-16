@@ -1,8 +1,6 @@
 """凭据加固回归：口令哈希用随机盐 PBKDF2、不再预置弱口令账号、数据源密钥不入源码。"""
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from sqlpa.business import storage

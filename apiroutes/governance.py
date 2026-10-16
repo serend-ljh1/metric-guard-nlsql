@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 
-from .deps import (AliasIn, DimensionIn, MetricIn, _bind_asof, _cfg, _db_path,
+from .deps import (AliasIn, DimensionIn, MetricIn, _cfg,
                    _identify, _llm, _resolve_role)
 
 router = APIRouter()

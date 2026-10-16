@@ -82,9 +82,8 @@ except ImportError:  # pragma: no cover - 独立运行兜底
     from sqlpa.business.attribution import decide_drill, drill, factorize
     from sqlpa.business.metric_config import load_config
 
-# 标注协议三要素：真值由谁标、判据见模块 docstring、动作全集
+# 标注协议：真值由谁标、判据见模块 docstring
 EXPERT_LABELED_BY = "实现者依据模块内判定规则自标（非独立第三方；用作回归测试与方法论演示，不作泛化准确率证据）"
-ACTIONS = ("drill", "switch_dim", "factorize", "none")
 
 # ----------------------------------------------------------------------
 # 26 条带专家真凶的真实业务追问（每条都来自 olist 分析语境，非人造 case）

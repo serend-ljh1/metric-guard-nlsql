@@ -20,7 +20,6 @@ from __future__ import annotations
 import csv
 import datetime
 import json
-import re
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -29,10 +28,6 @@ from .metric_config import BusinessConfig
 
 
 # ---------------------------------------------------------------- 导出
-
-def _safe_name(s: str) -> str:
-    return re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", str(s))[:60] or "report"
-
 
 def export_csv(path: str | Path, columns: Sequence[str], rows: Sequence[Sequence]) -> str:
     """导出结果为 CSV（UTF-8 BOM，Excel 打开不乱码）。"""

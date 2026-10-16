@@ -6,17 +6,15 @@
 - **当前唯一的 LLM 触点**是"意图识别"（自然语言 → QuerySpec）与"结论/归因讲解"。
   RouterAgent 与 MetricMatcher 是**同一次语义匹配的两次上报**，Executor/Decision 是确定性函数——
   所谓"六 Agent"是**编排**上的六个阶段，不是六个独立智能体，README 不把它当作"多智能体更强"的证据。
-- **归因做了守恒自检，但没有统计显著性检验**：单期环比仍是主要形态（已补日历口径提示：日均波动 + 天数可解释比例），
-  阈值 5% 是经验值，未在真实波动分布上标定，因此**假阳性率未被度量**——这是下一步最该补的评测。
+- **归因做了守恒自检，并有统计门控（Welch z 检验）抑制假阳性**：单期环比仍是主要形态（已补日历口径提示：日均波动 + 天数可解释比例），
+  阈值 5% 与门控 α 均为经验值、未在真实波动分布上标定，因此**假阳性率仍未被精确度量**——这是下一步最该补的评测。
 - **比率/均值类指标不做"占波动 X%"**：分段 delta 之和在该类指标上数学不成立（AOV 按州可差到 80%），
   系统会自动降级为分段对照并说明原因。要给出真正的贡献度需要 rate/mix 分解（已实现 rate/mix 量价分解，见测试）。
 - **评价类指标的口径已显式化**：Olist 的 `reviews` 表有 802 个重复 `review_id`（100,000 行 / 99,173 个唯一），
   因此"评价数/好评率"采用**去重口径**（`COUNT(DISTINCT review_id)`）并在配置 `desc` 里写明；
   `avg_review` 不支持 `category` 维度（1:多 JOIN 下 AVG 无法去重，需编译器支持子查询聚合）——现已用订单粒度预聚合派生表解决。
 - **数据层**：依赖真实 Olist `data/olist/olist.db`；`data/` 下产物（审计 JSONL、HITL、报告、订阅）均为运行期生成、不进版本库。
-- **长时记忆 / Checkpoint 未实现**。`config/settings.yaml` 中未被代码读取的历史键已删除
-  （`pipeline.max_repair_round`、`route_llm_fallback`、`eval.dataset` 等），
-  `security.allow_multi_statement` 也已移除——实测该开关无意义（SQLite `execute` 与 pymysql 默认都不支持多语句）。
+- **长时记忆 / Checkpoint 未实现**。`config/settings.yaml` 只保留被代码真实读取的键——需要某能力时请先实现再接配置。
 - **外部库（MySQL/PostgreSQL）**：已实现语句级安全校验、会话级只读（MySQL 显式关闭 autocommit + 只读事务；
   PG 连接参数 `default_transaction_read_only=on`）与查询级超时（`MAX_EXECUTION_TIME` / `statement_timeout`），
   并有单测锁住语句序列；但**真实库连通性仍需在装有驱动与目标库的环境验证**。
@@ -35,7 +33,7 @@
   需要账号请显式设置 `SQLPA_BOOTSTRAP_ADMIN_USER/PASSWORD`，否则不创建任何默认账号（`create_user()` 可建）。
 - **登录会话**：`POST /api/auth/login` 校验口令后签发 **随机 token**（`sessions` 表，含归属人与到期时间，默认 12h，
   `SQLPA_LOGIN_TTL` 可调），`POST /api/auth/logout` 立即撤销，`GET /api/auth/me` 返回当前身份。
-  作用是让**审计与治理动作记到具体的人**（此前静态 token 只能记到"某个 token"），并用 per-username 的登录限速挡撞库。
+  作用是让**审计与治理动作记到具体的人**，并用 per-username 的登录限速挡撞库。
   仍未实现：口令复杂度策略、失败锁定、找回口令、多设备会话管理、MFA —— 生产应接入企业 SSO/IdP。
 - **API 鉴权**：`/api/query`、`/api/analyze*`、`/api/audit`、`/api/datasources` 的角色**只认凭据、不认请求体**。
   凭据有两个来源，优先级从高到低：**登录会话**（`sessions` 表）→ 静态 `SQLPA_API_TOKENS="tokenA:admin,tokenB:analyst"`；

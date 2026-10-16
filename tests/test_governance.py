@@ -1,9 +1,4 @@
 """治理 Agent 与异常归因拆解 Agent 的测试。"""
-import os
-
-import pytest
-import yaml
-
 from sqlpa.business.metric_config import BusinessConfig, Metric, Dimension, load_config
 from sqlpa.business import governance
 from sqlpa.business.attribution import analyze

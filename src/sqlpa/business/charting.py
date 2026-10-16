@@ -1,7 +1,7 @@
 """
 sqlpa.business.charting
 =======================
-结果自动可视化：根据「列名 + 数据类型 + 行数」确定性推荐图表类型并生成 Altair 图。
+结果自动可视化：根据「列名 + 数据类型 + 行数」确定性推荐图表类型。
 
 规则（纯代码启发式，与 LLM 无关）：
   - 1 个维度 + 1 个数值列        → 柱状图（维度是日期则折线图）
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import datetime
 import re
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Sequence
 
 _DATE_HINT = re.compile(r"(date|time|dt|day|month|year|timestamp|_at$)", re.I)
 
